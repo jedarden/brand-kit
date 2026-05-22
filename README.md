@@ -6,8 +6,8 @@ consistent wherever it appears.
 
 | | Source | Style |
 |---|---|---|
-| **Logo** | `source/logo.png` | Flat cartoon avatar — red polo, used for all **profile pictures** |
-| **Hero** | `source/hero.png` | Photoreal triple-monitor desk scene — red polo, used for all **banners / covers** |
+| **Logo** | `source/logo.svg` | **Vector** cartoon avatar — red polo, scales infinitely; used for all **profile pictures**. (`source/logo.png` is the original raster it was traced from.) |
+| **Hero** | `source/hero.png` | Photoreal triple-monitor desk scene — red polo, used for all **banners / covers**. Raster only — photoreal imagery can't meaningfully vectorize. |
 
 > The logo (flat illustration) and the hero (photoreal render) are intentionally
 > kept as separate assets rather than composited together — mixing the two styles
@@ -42,8 +42,9 @@ exact required pixel dimensions.
 
 ### Logo masters (`logo/`)
 
-`logo-original.png` (640²) plus `logo-256/512/1024.png` and the source JPG.
-Use these when a platform isn't listed above or you need a custom size.
+`logo.svg` (vector — scale to any size) plus pre-rendered `logo-256/512/1024.png`
+and `logo-original.png` (the 640² raster). Use the SVG when a platform isn't
+listed above or you need a custom/large size; it never pixelates.
 
 ## Palette
 
@@ -57,15 +58,20 @@ Use these when a platform isn't listed above or you need a custom size.
 
 ## Regenerating
 
-All derived assets are produced from the two sources in `source/`:
+All derived assets are produced from the sources in `source/`:
 
 ```bash
-python3 tools/build_assets.py   # requires Pillow
+python3 tools/trace_logo.py     # raster logo.png -> vector logo.svg (needs vtracer)
+python3 tools/build_assets.py   # sources -> every platform asset (needs Pillow; resvg for crisp vector logo)
 ```
 
-Edit `source/logo.png` or `source/hero.png` (or the size tables in the script),
-re-run, and commit. `source/hero-alt.png` is an alternate desk composition kept
-for reference.
+`build_assets.py` renders each logo asset straight from `source/logo.svg` at its
+exact target size (via `resvg`), so profile pictures and favicons are crisp at
+any resolution. If `resvg` is unavailable it falls back to resizing the raster.
+
+Tooling (one-time): `cargo install vtracer resvg`. Edit `source/logo.svg`/`hero.png`
+(or the size tables in the script), re-run, and commit. `source/hero-alt.png` is
+an alternate desk composition kept for reference.
 
 ## Usage & rights
 

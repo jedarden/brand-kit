@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
-"""Regenerate every platform asset in the brand kit from the two canonical sources.
+"""Regenerate every platform asset in the brand kit from the canonical sources.
 
 Sources:
-  source/logo.png  -- flat cartoon avatar (red polo), used for all profile pictures
-  source/hero.png  -- photoreal desk scene (red polo), used for all banners/covers
+  source/logo.svg  -- vector cartoon avatar (red polo); rendered crisply at each
+                      target size. Falls back to source/logo.png if resvg is absent.
+  source/hero.png  -- photoreal desk scene (red polo), used for all banners/covers.
+
+Profile pictures + favicons come from the logo; banners/covers from the hero.
+
+Requires Pillow, and (for crisp vector logo output) the `resvg` binary
+(cargo install resvg). Regenerate the SVG itself with tools/trace_logo.py.
 
 Run:  python3 tools/build_assets.py
 """
-from PIL import Image
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "source"
-LOGO = Image.open(SRC / "logo.png").convert("RGB")
+LOGO_SVG = SRC / "logo.svg"
+LOGO_PNG = SRC / "logo.png"
 HERO = Image.open(SRC / "hero.png").convert("RGB")
-
-# Brand background (sampled from the logo's cream field) -- used to pad where needed.
-CREAM = (242, 232, 213)
+HAVE_RESVG = shutil.which("resvg") is not None and LOGO_SVG.exists()
 
 
 def save(img, relpath):
@@ -26,9 +34,17 @@ def save(img, relpath):
     print(f"  {relpath}: {img.size[0]}x{img.size[1]}")
 
 
-def square(img, size):
-    """Square profile asset from the (already square) logo."""
-    return img.resize((size, size), Image.LANCZOS)
+def logo_at(size):
+    """Render the vector logo crisply at size x size (raster fallback)."""
+    if HAVE_RESVG:
+        with tempfile.NamedTemporaryFile(suffix=".png") as tf:
+            subprocess.run(
+                ["resvg", "--width", str(size), "--height", str(size),
+                 str(LOGO_SVG), tf.name],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return Image.open(tf.name).convert("RGB")
+    return Image.open(LOGO_PNG).convert("RGB").resize((size, size), Image.LANCZOS)
 
 
 def cover(img, tw, th, fy=0.45, fx=0.5):
@@ -89,24 +105,28 @@ FAVICON_SIZES = {
 
 
 def main():
+    print(f"logo source: {'vector (resvg)' if HAVE_RESVG else 'raster fallback'}")
+
     print("avatars:")
     for path, size in AVATARS.items():
-        save(square(LOGO, size), path)
+        save(logo_at(size), path)
 
     print("logo masters:")
     for path, size in LOGO_SIZES.items():
-        save(square(LOGO, size), path)
-    save(LOGO, "logo/logo-original.png")
+        save(logo_at(size), path)
+    if LOGO_SVG.exists():
+        shutil.copy(LOGO_SVG, ROOT / "logo/logo.svg")
+        print("  logo/logo.svg: vector")
+    save(Image.open(LOGO_PNG).convert("RGB"), "logo/logo-original.png")
 
     print("favicons:")
     for path, size in FAVICON_SIZES.items():
-        save(square(LOGO, size), path)
-    # multi-resolution .ico
+        save(logo_at(size), path)
     ico = ROOT / "favicon/favicon.ico"
-    LOGO.resize((256, 256), Image.LANCZOS).save(
+    logo_at(256).save(
         ico, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     )
-    print(f"  favicon/favicon.ico: multi-res")
+    print("  favicon/favicon.ico: multi-res")
 
     print("banners:")
     for path, (w, h, fy) in BANNERS.items():
