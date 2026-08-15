@@ -70,8 +70,12 @@ exact target size (via `resvg`), so profile pictures and favicons are crisp at
 any resolution. If `resvg` is unavailable it falls back to resizing the raster.
 
 Tooling (one-time): `cargo install vtracer resvg`. Edit `source/logo.svg`/`hero.png`
-(or the size tables in the script), re-run, and commit. `source/hero-alt.png` is
-an alternate desk composition kept for reference.
+(or the size tables in the script), re-run, and commit.
+
+An alternate desk composition (`source/hero-alt.png`) was removed from the repo —
+nothing consumed it, so it was 2 MB of dead weight per clone. If the hero ever
+needs replacing, recover it from git history:
+`git show dc5beac:source/hero-alt.png > source/hero-alt.png`.
 
 **Optional optimization:** For further PNG size reduction without visible quality loss,
 install [oxipng](https://github.com/shssoichiro/oxipng) (`cargo install oxipng`) and
