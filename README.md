@@ -73,6 +73,16 @@ Tooling (one-time): `cargo install vtracer resvg`. Edit `source/logo.svg`/`hero.
 (or the size tables in the script), re-run, and commit. `source/hero-alt.png` is
 an alternate desk composition kept for reference.
 
+**Optional optimization:** For further PNG size reduction without visible quality loss,
+install [oxipng](https://github.com/shssoichiro/oxipng) (`cargo install oxipng`) and
+run it over the generated assets:
+
+```bash
+find . -name "*.png" -exec oxipng -o4 {} \;
+```
+
+This typically reduces banner sizes by 30–50% with no perceptible quality loss.
+
 ## Usage & rights
 
 These are the personal brand assets of Jed Arden. The repository is public so the

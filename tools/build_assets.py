@@ -30,7 +30,7 @@ HAVE_RESVG = shutil.which("resvg") is not None and LOGO_SVG.exists()
 def save(img, relpath):
     out = ROOT / relpath
     out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out)
+    img.save(out, optimize=True)
     print(f"  {relpath}: {img.size[0]}x{img.size[1]}")
 
 
