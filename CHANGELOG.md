@@ -2,6 +2,13 @@
 
 All notable changes to the brand kit are documented in this file.
 
+## [Unreleased]
+
+### Removed
+- `source/hero-alt.png` — alternate desk composition, never consumed by
+  `tools/build_assets.py`; recoverable from git history
+  (`git show dc5beac:source/hero-alt.png`) if the hero ever needs replacing
+
 ## [v1.0.0] - 2026-08-15
 
 ### Added
