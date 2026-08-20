@@ -22,9 +22,11 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "source"
 LOGO_SVG = SRC / "logo.svg"
+LOGO_TRANSPARENT_SVG = SRC / "logo-transparent.svg"
 LOGO_PNG = SRC / "logo.png"
 HERO = Image.open(SRC / "hero.png").convert("RGB")
 HAVE_RESVG = shutil.which("resvg") is not None and LOGO_SVG.exists()
+HAVE_TRANSPARENT_SVG = LOGO_TRANSPARENT_SVG.exists()
 
 
 def save(img, relpath):
@@ -45,6 +47,21 @@ def logo_at(size):
             )
             return Image.open(tf.name).convert("RGB")
     return Image.open(LOGO_PNG).convert("RGB").resize((size, size), Image.LANCZOS)
+
+
+def logo_at_transparent(size):
+    """Render the transparent logo (no background) at size x size."""
+    if HAVE_RESVG and HAVE_TRANSPARENT_SVG:
+        with tempfile.NamedTemporaryFile(suffix=".png") as tf:
+            subprocess.run(
+                ["resvg", "--width", str(size), "--height", str(size),
+                 str(LOGO_TRANSPARENT_SVG), tf.name],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            # Keep RGBA mode for transparency
+            return Image.open(tf.name).convert("RGBA")
+    # Fallback: no transparent version available
+    return None
 
 
 def cover(img, tw, th, fy=0.45, fx=0.5):
@@ -118,6 +135,18 @@ def main():
         shutil.copy(LOGO_SVG, ROOT / "logo/logo.svg")
         print("  logo/logo.svg: vector")
     save(Image.open(LOGO_PNG).convert("RGB"), "logo/logo-original.png")
+
+    print("logo masters (transparent):")
+    if HAVE_TRANSPARENT_SVG:
+        for path, size in LOGO_SIZES.items():
+            transparent_img = logo_at_transparent(size)
+            if transparent_img:
+                # Save with -transparent suffix
+                base_path = path.replace(".png", "-transparent.png")
+                save(transparent_img, base_path)
+        if LOGO_TRANSPARENT_SVG.exists():
+            shutil.copy(LOGO_TRANSPARENT_SVG, ROOT / "logo/logo-transparent.svg")
+            print("  logo/logo-transparent.svg: vector (no background)")
 
     print("favicons:")
     for path, size in FAVICON_SIZES.items():

@@ -46,6 +46,11 @@ exact required pixel dimensions.
 and `logo-original.png` (the 640² raster). Use the SVG when a platform isn't
 listed above or you need a custom/large size; it never pixelates.
 
+**Transparent variants** (`logo-*-transparent.png` and `logo-transparent.svg`) are
+included for overlay use on colored backgrounds, dark surfaces, or print layouts
+where the Canvas Cream background should not be baked in. These have full alpha
+channels and can be composited onto any surface.
+
 ## Palette
 
 | Name | Hex | Use |
