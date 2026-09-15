@@ -28,7 +28,9 @@ consumer refresh just re-dates the drift.
 
 Prereqs: a **clean** brand-kit checkout at the tag (`git switch --detach vX.Y.Z`),
 the jedarden.com checkout (default `~/jedarden.com`, else `--site <path>`),
-Pillow, and network access for the live checks.
+Pillow (the README's pinned `.venv/bin/python` is fine — the compare runs on
+tolerance, so build flavor doesn't matter here), and network access for the
+live checks.
 
 1. **Refresh the jedarden.com copies:**
    ```bash
@@ -90,15 +92,19 @@ Pillow, and network access for the live checks.
 - **Live GitHub avatar** — perceptual, tolerance ≤ 8.0, because GitHub
   re-encodes on serve (see step 4).
 
-## Known state at last run (2026-09-15, `--check` at v1.0.0)
+## Known state at last run (2026-09-15, `--check` on main, post-toolchain-pin)
 
 - GitHub avatar **PASS** — live copy still matches `avatars/github-460.png`
   (mean diff 3.29; previous verification 2026-07-20).
-- `og.jpg` / `brand-hero.jpg` **PASS** (in tolerance).
+- `og.jpg` / `brand-hero.jpg` **PASS** (in tolerance); live
+  `jedarden.com/brand/og.jpg` matches the checkout copy exactly (mean diff 0.00).
 - `public/brand/logo.svg` **PASS** (byte-identical).
-- `public/brand/logo-512.png` **STALE** — the site's copy predates the v1.0.0
-  oxipng optimization (22363 vs 8889 bytes; pixels identical). Closes on the
-  next `--apply` + jedarden.com commit.
+- `public/brand/logo-512.png` **STALE** — the site's 2026-05-22 copy is
+  pixel-identical (verified 2026-09-15: RGBA diff extrema all zero) but now
+  two byte-generations behind this repo's file: 8889 bytes after the v1.0.0
+  oxipng pass, 21836 after the 2026-09-15 pinned-toolchain regen dropped
+  oxipng; the site still holds the original 22363. Closes on the next
+  `--apply` + jedarden.com commit.
 
 ## Non-goals
 
