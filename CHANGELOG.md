@@ -4,6 +4,13 @@ All notable changes to the brand kit are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Post-tag consumer-update workflow (ADR-2): `docs/notes/post-tag-consumer-update.md`
+  checklist + `tools/consumer_sync.py`, which refreshes `jedarden.com/public/brand/`
+  from a release tag (regenerating the hand-recompressed `og.jpg` /
+  `src/assets/brand-hero.jpg` JPEGs from `source/hero.png`) and re-verifies the
+  live GitHub profile avatar against `avatars/github-460.png`
+
 ### Removed
 - `source/hero-alt.png` — alternate desk composition, never consumed by
   `tools/build_assets.py`; recoverable from git history

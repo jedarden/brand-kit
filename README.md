@@ -92,6 +92,22 @@ find . -name "*.png" -exec oxipng -o4 {} \;
 
 This typically reduces banner sizes by 30–50% with no perceptible quality loss.
 
+## Downstream consumers (post-tag sync)
+
+Copies of these assets live outside this repo — `jedarden.com/public/brand/`
+(logo copies + recompressed hero JPEGs) and the GitHub profile avatar. CI here
+can't see them go stale, so after cutting a release tag, run the consumer
+sync:
+
+```bash
+python3 tools/consumer_sync.py --check    # what's stale? (also re-verifies the live GitHub avatar)
+python3 tools/consumer_sync.py --apply    # refresh the jedarden.com copies from this checkout
+```
+
+The full checklist — including the manual commit/push in `jedarden.com`, the
+GitHub avatar re-upload (no API for it), and what "in sync" means per asset —
+is in **`docs/notes/post-tag-consumer-update.md`** (ADR-2).
+
 ## Usage & rights
 
 These are the personal brand assets of Jed Arden. The repository is public so the

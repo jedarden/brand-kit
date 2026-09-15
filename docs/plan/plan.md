@@ -66,6 +66,10 @@ given commit is internally consistent (source and derived output agree); the
 tag gives consumers something *stable* to point at and a reason to notice
 when a new one exists.
 
+> **Follow-through:** the consumer half of this contract — what to do after a
+> tag so downstream copies actually catch up — is ADR-2
+> (`docs/notes/post-tag-consumer-update.md` + `tools/consumer_sync.py`).
+
 ### Alternatives Considered
 
 - **Status quo (manual regen, manual copy-paste downstream).** Rejected —
@@ -110,3 +114,85 @@ when a new one exists.
   since it requires changes in other repos): actually migrating
   `jedarden.com` and any future consumer from ad hoc copy-paste to consuming
   a pinned brand-kit tag.
+
+## ADR-2: 2026-09-15 — Post-tag consumer-update workflow: a checklist and script, not automation
+
+### Context
+
+ADR-1 added the CI regen-check and release tags, but left its own stated
+problem open on the consumer side: nothing — automated or checklist — tells a
+consumer its copy is stale once a new tag exists. The confirmed consumers as
+of this ADR: `jedarden.com` holds four files (two byte-copies of the logo
+masters under `public/brand/`, plus two hand-recompressed JPEG derivatives of
+`source/hero.png`: the `/brand` OG card and the page hero at
+`src/assets/brand-hero.jpg`), and the `github.com/jedarden` profile avatar is
+a manual upload of `avatars/github-460.png` whose last verification
+(2026-07-20) was recorded in prose and would have been silently out of date
+forever. The first check run found real drift already: the site's
+`logo-512.png` predates the v1.0.0 oxipng pass — pixel-identical but no longer
+byte-identical, invisible to any eyeball check and unfixable by CI, which by
+construction only sees this repo.
+
+### Decision
+
+Close the loop with a **documented checklist plus a helper script**, both in
+this repo: `docs/notes/post-tag-consumer-update.md` and
+`tools/consumer_sync.py`. After every release tag that changes `source/` or
+derived output, the runner: (1) `--apply`s the refresh — byte-copies the logo
+masters into the jedarden.com checkout and regenerates both hero JPEGs from
+`source/hero.png` at the exact crop/quality the live files were verified to
+use (open-graph crop, quality 88); (2) commits and pushes in jedarden.com with
+a `sync to brand-kit @vX.Y.Z` message, which is the provenance record the
+hand-copy process never had; (3) `--check`s — comparing site copies and
+fetching the live og.jpg and the live GitHub avatar (perceptual compare, since
+GitHub recompresses on serve) — which must be all-PASS after the Pages deploy;
+(4) uploads the avatar by hand if the check says it drifted; (5) records the
+verification in `CHANGELOG.md`.
+
+Two sync semantics, deliberately: **byte-identical** for the logo copies
+(pixels matching isn't the bar — provably-from-the-tag is, and byte equality
+is what caught the oxipng drift), and **tolerance-based pixel compare** for
+JPEG derivatives and the recompressed live avatar, where byte equality is
+unachievable by nature.
+
+The script verifies and refreshes files only; it never commits outside this
+repo, and the avatar has no upload API at all. Those two steps stay manual on
+purpose.
+
+### Alternatives Considered
+
+- **Automate the whole loop (CI job that pushes to jedarden.com after each
+  tag).** Rejected — cross-repo push access from CI, a deploy trigger for a
+  site from an asset repo's pipeline, and a failure surface far heavier than a
+  once-or-twice-a-year checklist. The bottleneck is remembering the checklist
+  exists, and the checklist now lives one `grep` from ADR-1.
+- **Extend the CI regen-check to fetch consumers and verify them.** Rejected —
+  CI should stay hermetic and repo-internal; consumer state is a
+  post-release operational concern, and making the regen-check fail because a
+  third-party site drifted couples two repos' health.
+- **Subscribe consumers via tags only (document "watch releases").** Rejected
+  as the whole mechanism — GitHub watch notifications don't reach a checklist
+  level of reliability for a repo with a release every few months, and they do
+  nothing for the avatar, which is set outside any repo.
+- **Do nothing until a second consumer appears.** Rejected — the drift is not
+  hypothetical (found, in the very first `--check` run) and the fix is one
+  script plus one page of documentation.
+
+### Consequences
+
+- Consumer drift is now detectable in one command
+  (`python3 tools/consumer_sync.py --check`) and fixable in two (`--apply`,
+  then the printed commit/push commands), instead of by memory.
+- The workflow still depends on a human (or agent) remembering to run it
+  after a tag — it's a checklist, not an enforcer. Accepted: release cadence
+  here is a handful per year, and the checklist is referenced from README,
+  ADR-1's decision text, and the CHANGELOG entry so it can't be forgotten for
+  lack of a pointer.
+- The JPEG regeneration recipe (crop params, quality 88) is now encoded in the
+  script instead of in the muscle memory that produced the originals.
+- Avatar verification acquires a recorded trail in `CHANGELOG.md` rather than
+  a one-off prose note in plan.md.
+- Scope boundary maintained: this repo ships the checklist and script; actually
+  running them mutates `jedarden.com`, which remains outside brand-kit beads
+  per ADR-1's scope note.
+
