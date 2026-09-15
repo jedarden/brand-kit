@@ -11,6 +11,13 @@ All notable changes to the brand kit are documented in this file.
   `src/assets/brand-hero.jpg` JPEGs from `source/hero.png`) and re-verifies the
   live GitHub profile avatar against `avatars/github-460.png`
 
+### Verified
+- 2026-09-15 — first executed consumer sync (ADR-2 workflow): refreshed
+  `jedarden.com/public/brand/logo-512.png` (byte-stale since 2026-05-22,
+  pixel-identical throughout; jedarden.com commit `0a956e9`) and re-verified
+  live — all-PASS, GitHub profile avatar still matches
+  `avatars/github-460.png` (mean diff 3.29; previously verified 2026-07-20)
+
 ### Removed
 - `source/hero-alt.png` — alternate desk composition, never consumed by
   `tools/build_assets.py`; recoverable from git history

@@ -92,19 +92,18 @@ live checks.
 - **Live GitHub avatar** — perceptual, tolerance ≤ 8.0, because GitHub
   re-encodes on serve (see step 4).
 
-## Known state at last run (2026-09-15, `--check` on main, post-toolchain-pin)
+## Known state at last run (2026-09-15, all-PASS after the first executed sync)
 
-- GitHub avatar **PASS** — live copy still matches `avatars/github-460.png`
+- The workflow's own first finding — the site's `logo-512.png` byte-stale
+  since 2026-05-22 (pixel-identical throughout: RGBA diff extrema all zero;
+  two repo-side byte-generations: v1.0.0 oxipng pass → 8889 bytes,
+  pinned-toolchain regen → 21836) — was closed the same day: `--apply`
+  refreshed it and jedarden.com commit `0a956e9` pushed the sync (Cloudflare
+  Pages deploys on push).
+- `--check` after the sync is all-PASS, exit 0: logo.svg / logo-512.png
+  byte-identical, `og.jpg` / `brand-hero.jpg` in tolerance, live
+  `jedarden.com/brand/og.jpg` exact (mean diff 0.00), GitHub avatar PASS
   (mean diff 3.29; previous verification 2026-07-20).
-- `og.jpg` / `brand-hero.jpg` **PASS** (in tolerance); live
-  `jedarden.com/brand/og.jpg` matches the checkout copy exactly (mean diff 0.00).
-- `public/brand/logo.svg` **PASS** (byte-identical).
-- `public/brand/logo-512.png` **STALE** — the site's 2026-05-22 copy is
-  pixel-identical (verified 2026-09-15: RGBA diff extrema all zero) but now
-  two byte-generations behind this repo's file: 8889 bytes after the v1.0.0
-  oxipng pass, 21836 after the 2026-09-15 pinned-toolchain regen dropped
-  oxipng; the site still holds the original 22363. Closes on the next
-  `--apply` + jedarden.com commit.
 
 ## Non-goals
 
