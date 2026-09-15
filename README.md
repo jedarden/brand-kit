@@ -67,30 +67,42 @@ All derived assets are produced from the sources in `source/`:
 
 ```bash
 python3 tools/trace_logo.py     # raster logo.png -> vector logo.svg (needs vtracer)
-python3 tools/build_assets.py   # sources -> every platform asset (needs Pillow; resvg for crisp vector logo)
+python3 tools/build_assets.py   # sources -> every platform asset (needs the pinned toolchain, see below)
 ```
 
 `build_assets.py` renders each logo asset straight from `source/logo.svg` at its
 exact target size (via `resvg`), so profile pictures and favicons are crisp at
-any resolution. If `resvg` is unavailable it falls back to resizing the raster.
+any resolution. There is **no raster fallback**: output bytes depend on the
+exact tool versions, so the script aborts if `resvg` (or a source file) is
+missing rather than silently producing bytes the CI regen-diff would reject.
 
-Tooling (one-time): `cargo install vtracer resvg`. Edit `source/logo.svg`/`hero.png`
-(or the size tables in the script), re-run, and commit.
+Toolchain versions are pinned — regenerating with different ones produces
+different bytes and will fail CI. The exact pins (resvg, vtracer, and the
+**PyPI wheel** build of Pillow — a distro Pillow of the same version number
+emits different bytes) and the one-time setup live in
+[docs/notes/asset-toolchain.md](docs/notes/asset-toolchain.md):
+
+```bash
+cargo install resvg@0.47.0 vtracer@0.6.5
+python3 -m venv .venv && .venv/bin/pip install Pillow==12.1.1
+.venv/bin/python tools/build_assets.py
+```
+
+Edit `source/logo.svg`/`hero.png` (or the size tables in the script), re-run,
+and commit.
 
 An alternate desk composition (`source/hero-alt.png`) was removed from the repo —
 nothing consumed it, so it was 2 MB of dead weight per clone. If the hero ever
 needs replacing, recover it from git history:
 `git show dc5beac:source/hero-alt.png > source/hero-alt.png`.
 
-**Optional optimization:** For further PNG size reduction without visible quality loss,
-install [oxipng](https://github.com/shssoichiro/oxipng) (`cargo install oxipng`) and
-run it over the generated assets:
-
-```bash
-find . -name "*.png" -exec oxipng -o4 {} \;
-```
-
-This typically reduces banner sizes by 30–50% with no perceptible quality loss.
+**Not compatible with CI: post-processing with oxipng.** Running
+[oxipng](https://github.com/shssoichiro/oxipng) over the generated assets would
+shrink banners by 30–50%, but the committed bytes would then differ from what
+`build_assets.py` produces — the regen-diff would fail on every push. Size
+optimization happens inside the script (`optimize=True` on every save); if you
+want a stronger compressor, it has to become part of the pinned, CI-replicated
+pipeline instead of a manual after-step.
 
 ## Downstream consumers (post-tag sync)
 

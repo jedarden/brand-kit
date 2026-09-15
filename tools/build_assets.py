@@ -3,13 +3,17 @@
 
 Sources:
   source/logo.svg  -- vector cartoon avatar (red polo); rendered crisply at each
-                      target size. Falls back to source/logo.png if resvg is absent.
+                      target size via resvg.
   source/hero.png  -- photoreal desk scene (red polo), used for all banners/covers.
 
 Profile pictures + favicons come from the logo; banners/covers from the hero.
 
-Requires Pillow, and (for crisp vector logo output) the `resvg` binary
-(cargo install resvg). Regenerate the SVG itself with tools/trace_logo.py.
+Requires the PINNED toolchain recorded in docs/notes/asset-toolchain.md:
+the `resvg` binary plus Pillow. There is deliberately no raster fallback —
+output bytes depend on the exact tool versions (and for Pillow, the wheel
+build), so a missing tool aborts the build instead of silently producing
+bytes the CI regen-diff would reject. Regenerate the SVG itself with
+tools/trace_logo.py.
 
 Run:  python3 tools/build_assets.py
 """
@@ -25,8 +29,22 @@ LOGO_SVG = SRC / "logo.svg"
 LOGO_TRANSPARENT_SVG = SRC / "logo-transparent.svg"
 LOGO_PNG = SRC / "logo.png"
 HERO = Image.open(SRC / "hero.png").convert("RGB")
-HAVE_RESVG = shutil.which("resvg") is not None and LOGO_SVG.exists()
-HAVE_TRANSPARENT_SVG = LOGO_TRANSPARENT_SVG.exists()
+
+RESVG = shutil.which("resvg")
+if RESVG is None:
+    raise SystemExit(
+        "error: resvg not found on PATH. There is no raster fallback: resizing\n"
+        "source/logo.png would silently produce different bytes than the vector\n"
+        "renders committed in this repo and fail the CI regen-diff. Install the\n"
+        "pinned toolchain (see docs/notes/asset-toolchain.md) and re-run."
+    )
+for required in (LOGO_SVG, LOGO_TRANSPARENT_SVG, SRC / "hero.png", LOGO_PNG):
+    if not required.exists():
+        raise SystemExit(
+            f"error: required source {required.name} not found in {SRC}. All\n"
+            "sources must be present — there is no fallback path (see\n"
+            "docs/notes/asset-toolchain.md)."
+        )
 
 
 def save(img, relpath):
@@ -37,31 +55,26 @@ def save(img, relpath):
 
 
 def logo_at(size):
-    """Render the vector logo crisply at size x size (raster fallback)."""
-    if HAVE_RESVG:
-        with tempfile.NamedTemporaryFile(suffix=".png") as tf:
-            subprocess.run(
-                ["resvg", "--width", str(size), "--height", str(size),
-                 str(LOGO_SVG), tf.name],
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            return Image.open(tf.name).convert("RGB")
-    return Image.open(LOGO_PNG).convert("RGB").resize((size, size), Image.LANCZOS)
+    """Render the vector logo crisply at size x size."""
+    with tempfile.NamedTemporaryFile(suffix=".png") as tf:
+        subprocess.run(
+            [RESVG, "--width", str(size), "--height", str(size),
+             str(LOGO_SVG), tf.name],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return Image.open(tf.name).convert("RGB")
 
 
 def logo_at_transparent(size):
     """Render the transparent logo (no background) at size x size."""
-    if HAVE_RESVG and HAVE_TRANSPARENT_SVG:
-        with tempfile.NamedTemporaryFile(suffix=".png") as tf:
-            subprocess.run(
-                ["resvg", "--width", str(size), "--height", str(size),
-                 str(LOGO_TRANSPARENT_SVG), tf.name],
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            # Keep RGBA mode for transparency
-            return Image.open(tf.name).convert("RGBA")
-    # Fallback: no transparent version available
-    return None
+    with tempfile.NamedTemporaryFile(suffix=".png") as tf:
+        subprocess.run(
+            [RESVG, "--width", str(size), "--height", str(size),
+             str(LOGO_TRANSPARENT_SVG), tf.name],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        # Keep RGBA mode for transparency
+        return Image.open(tf.name).convert("RGBA")
 
 
 def cover(img, tw, th, fy=0.45, fx=0.5):
@@ -122,7 +135,12 @@ FAVICON_SIZES = {
 
 
 def main():
-    print(f"logo source: {'vector (resvg)' if HAVE_RESVG else 'raster fallback'}")
+    resvg_version = subprocess.run(
+        [RESVG, "--version"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    print(f"toolchain: resvg {resvg_version}, Pillow {Image.__version__}"
+          f" (pinned per docs/notes/asset-toolchain.md)")
+    print("logo source: vector (resvg)")
 
     print("avatars:")
     for path, size in AVATARS.items():
@@ -131,22 +149,18 @@ def main():
     print("logo masters:")
     for path, size in LOGO_SIZES.items():
         save(logo_at(size), path)
-    if LOGO_SVG.exists():
-        shutil.copy(LOGO_SVG, ROOT / "logo/logo.svg")
-        print("  logo/logo.svg: vector")
+    shutil.copy(LOGO_SVG, ROOT / "logo/logo.svg")
+    print("  logo/logo.svg: vector")
     save(Image.open(LOGO_PNG).convert("RGB"), "logo/logo-original.png")
 
     print("logo masters (transparent):")
-    if HAVE_TRANSPARENT_SVG:
-        for path, size in LOGO_SIZES.items():
-            transparent_img = logo_at_transparent(size)
-            if transparent_img:
-                # Save with -transparent suffix
-                base_path = path.replace(".png", "-transparent.png")
-                save(transparent_img, base_path)
-        if LOGO_TRANSPARENT_SVG.exists():
-            shutil.copy(LOGO_TRANSPARENT_SVG, ROOT / "logo/logo-transparent.svg")
-            print("  logo/logo-transparent.svg: vector (no background)")
+    for path, size in LOGO_SIZES.items():
+        transparent_img = logo_at_transparent(size)
+        # Save with -transparent suffix
+        base_path = path.replace(".png", "-transparent.png")
+        save(transparent_img, base_path)
+    shutil.copy(LOGO_TRANSPARENT_SVG, ROOT / "logo/logo-transparent.svg")
+    print("  logo/logo-transparent.svg: vector (no background)")
 
     print("favicons:")
     for path, size in FAVICON_SIZES.items():

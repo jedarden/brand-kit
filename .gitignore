@@ -3,3 +3,6 @@
 
 # NEEDLE dispatch bookkeeping: HEAD SHA at worker dispatch time, local-only.
 /.needle-predispatch-sha
+
+# Python bytecode from running tools/*.py
+__pycache__/
