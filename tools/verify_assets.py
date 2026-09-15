@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
-"""Verify that committed PNG assets match the dimensions documented in README.md.
+"""Verify that committed assets match every testable claim README.md makes.
 
-This script catches drift between documented dimensions and actual shipped files.
+Four classes of README-vs-repo drift are checked:
+  1. Shipped PNG dimensions vs the README per-platform table.
+  2. Presence of every repo path README names (plus absence of the file
+     it documents as removed).
+  3. favicon.ico is multi-resolution 16-256 and every contained frame
+     decodes.
+  4. The transparent variants have full alpha channels, and the
+     transparent SVG master has its background removed relative to the
+     opaque one.
+
 Run: python3 tools/verify_assets.py
-Exits 1 on any mismatch, 0 if all dimensions match.
+Exits 1 on any mismatch, 0 if all checks pass.
 """
+import re
+import struct
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +66,53 @@ EXPECTED_DIMENSIONS = {
     "logo/logo-original.png": (640, 640),
 }
 
+# Every repo path README.md names that EXPECTED_DIMENSIONS does not
+# already open (a PNG listed there reports MISSING when absent). The
+# avatars, banners, sized favicons and logo masters are therefore covered
+# by the dimension table above; these are the rest. README's pointers to
+# jedarden.com/public/brand/ are external — consumer_sync.py owns those.
+EXPECTED_PRESENT = [
+    # Sources (README table)
+    "source/logo.svg",
+    "source/logo.png",
+    "source/hero.png",
+
+    # Transparent variants (README: "Transparent variants")
+    "logo/logo-256-transparent.png",
+    "logo/logo-512-transparent.png",
+    "logo/logo-1024-transparent.png",
+    "logo/logo-transparent.svg",
+
+    # Tools and docs README tells the reader to run / read
+    "tools/trace_logo.py",
+    "tools/build_assets.py",
+    "tools/consumer_sync.py",
+    "docs/notes/post-tag-consumer-update.md",
+]
+
+# README documents this file as deliberately removed ("2 MB of dead weight
+# per clone"), with git-history recovery instructions should the hero ever
+# need replacing. Its presence would contradict the README.
+EXPECTED_ABSENT = [
+    "source/hero-alt.png",
+]
+
+# Transparent PNG renders (README: "have full alpha channels") and the SVG
+# masters compared for the removed background (README: transparent exists so
+# "the Canvas Cream background should not be baked in").
+TRANSPARENT_PNGS = [
+    "logo/logo-256-transparent.png",
+    "logo/logo-512-transparent.png",
+    "logo/logo-1024-transparent.png",
+]
+OPAQUE_MASTER_SVG = "logo/logo.svg"
+TRANSPARENT_MASTER_SVG = "logo/logo-transparent.svg"
+FILL_RE = re.compile(r'fill="(#[0-9A-Fa-f]{3,8})"')
+
+# README: favicon.ico is "multi-res 16–256"
+ICO_RELPATH = "favicon/favicon.ico"
+ICO_MIN_SIZE, ICO_MAX_SIZE = 16, 256
+
 
 def verify_dimensions():
     """Check all PNG dimensions against expected values.
@@ -87,29 +147,217 @@ def verify_dimensions():
     return results, all_match
 
 
-def main():
-    print("Verifying PNG dimensions against README.md documentation...\n")
+def verify_presence():
+    """Every README-named path exists; documented-removed paths don't.
 
-    results, all_match = verify_dimensions()
+    Returns:
+        list of tuples: (path, claim, actual, status_message)
+    """
+    rows = []
+    all_match = True
 
-    # Print results in columns
-    print(f"{'File':<50} {'Expected':>12} {'Actual':>12} {'Status':<20}")
-    print("-" * 94)
+    for relpath in EXPECTED_PRESENT:
+        if (ROOT / relpath).exists():
+            rows.append((relpath, "exists", "found", "✓"))
+        else:
+            rows.append((relpath, "exists", "MISSING", "README names this path"))
+            all_match = False
 
-    for relpath, expected, actual, status in results:
-        print(f"{relpath:<50} {expected:>12} {actual:>12} {status:<20}")
+    for relpath in EXPECTED_ABSENT:
+        if (ROOT / relpath).exists():
+            rows.append((relpath, "absent (documented removed)", "found", "✗ re-added"))
+            all_match = False
+        else:
+            rows.append((relpath, "absent (documented removed)", "not found", "✓"))
 
+    return rows, all_match
+
+
+def ico_contained_sizes(path):
+    """Resolutions actually stored inside an .ico container.
+
+    Parsed from the ICONDIR/ICONDIRENTRY structures by hand rather than
+    asked of Pillow: the plugin will also serve sizes it merely
+    synthesized by resizing the largest frame, which would let a
+    single-resolution ico pass as multi-res. A width/height byte of 0
+    encodes 256.
+    """
+    blob = path.read_bytes()
+    reserved, ico_type, count = struct.unpack("<HHH", blob[:6])
+    if reserved != 0 or ico_type != 1 or count == 0:
+        raise ValueError(f"not a valid .ico container (type={ico_type}, entries={count})")
+    if len(blob) < 6 + 16 * count:
+        raise ValueError("truncated .ico directory")
+    return [
+        (entry[0] or 256, entry[1] or 256)
+        for entry in (blob[6 + 16 * i:22 + 16 * i] for i in range(count))
+    ]
+
+
+def verify_favicon_ico():
+    """README: favicon.ico is "multi-res 16–256".
+
+    Confirms the container holds more than one resolution, that 16 and 256
+    are the endpoints with nothing outside that range, and that every
+    contained frame decodes through Pillow.
+
+    Returns:
+        list of tuples: (path, expected, actual, status_message)
+    """
+    claim = f"multi-res {ICO_MIN_SIZE}-{ICO_MAX_SIZE}"
+    path = ROOT / ICO_RELPATH
+    if not path.exists():
+        return [(ICO_RELPATH, claim, "MISSING", "file not found")], False
+
+    rows = []
+    all_match = True
+    try:
+        sizes = ico_contained_sizes(path)
+        rows.append((
+            f"{ICO_RELPATH} resolutions", claim,
+            f"{len(sizes)}: {', '.join(f'{w}×{h}' for w, h in sizes)}",
+            "✓" if len(sizes) > 1 else "✗ single-resolution",
+        ))
+        all_match &= len(sizes) > 1
+
+        smallest, largest = min(sizes), max(sizes)
+        endpoints_ok = (
+            smallest == (ICO_MIN_SIZE, ICO_MIN_SIZE)
+            and largest == (ICO_MAX_SIZE, ICO_MAX_SIZE)
+        )
+        rows.append((
+            f"{ICO_RELPATH} endpoints", f"{ICO_MIN_SIZE} bottom, {ICO_MAX_SIZE} top",
+            f"min {smallest[0]}, max {largest[0]}",
+            "✓" if endpoints_ok else "✗ MISMATCH",
+        ))
+        all_match &= endpoints_ok
+
+        in_range = all(
+            ICO_MIN_SIZE <= w <= ICO_MAX_SIZE and ICO_MIN_SIZE <= h <= ICO_MAX_SIZE
+            for w, h in sizes
+        )
+        rows.append((
+            f"{ICO_RELPATH} range", f"all within {ICO_MIN_SIZE}-{ICO_MAX_SIZE}",
+            "in range" if in_range else f"{[s for s in sizes if not (ICO_MIN_SIZE <= s[0] <= ICO_MAX_SIZE)]}",
+            "✓" if in_range else "✗ out of range",
+        ))
+        all_match &= in_range
+
+        with Image.open(path) as ico:
+            for w, h in sizes:
+                try:
+                    ico.size = (w, h)
+                    ico.load()
+                    rows.append((f"{ICO_RELPATH} frame", f"{w}×{h} decodes",
+                                 f"{ico.size[0]}×{ico.size[1]}", "✓"))
+                except Exception as e:
+                    rows.append((f"{ICO_RELPATH} frame", f"{w}×{h} decodes", "ERROR", str(e)))
+                    all_match = False
+    except Exception as e:
+        rows.append((ICO_RELPATH, claim, "ERROR", str(e)))
+        all_match = False
+
+    return rows, all_match
+
+
+def verify_transparency():
+    """README: the transparent variants "have full alpha channels".
+
+    Each PNG render must carry an alpha channel that actually spans fully
+    transparent (background removed) and fully opaque (artwork intact)
+    pixels — a transparent-labelled file that is uniformly opaque has
+    silently lost the property the README promises. The transparent SVG
+    master must be well-formed and must have dropped at least one fill
+    colour relative to the opaque master: proof the background is not
+    baked in.
+
+    Returns:
+        list of tuples: (path, expected, actual, status_message)
+    """
+    rows = []
+    all_match = True
+
+    for relpath in TRANSPARENT_PNGS:
+        path = ROOT / relpath
+        if not path.exists():
+            rows.append((relpath, "full alpha channel", "MISSING", "file not found"))
+            all_match = False
+            continue
+        try:
+            with Image.open(path) as img:
+                mode = img.mode
+                has_alpha = mode in ("RGBA", "LA") or (mode == "P" and "transparency" in img.info)
+                if not has_alpha:
+                    rows.append((relpath, "full alpha channel", f"mode {mode}", "✗ no alpha band"))
+                    all_match = False
+                    continue
+                lo, hi = img.convert("RGBA").getchannel("A").getextrema()
+                if lo < 255 and hi == 255:
+                    rows.append((relpath, "full alpha channel", f"mode {mode}, alpha {lo}-{hi}", "✓"))
+                else:
+                    problem = "fully opaque" if lo == 255 else "never fully opaque"
+                    rows.append((relpath, "full alpha channel",
+                                 f"mode {mode}, alpha {lo}-{hi}", f"✗ {problem}"))
+                    all_match = False
+        except Exception as e:
+            rows.append((relpath, "full alpha channel", "ERROR", str(e)))
+            all_match = False
+
+    try:
+        opaque_text = (ROOT / OPAQUE_MASTER_SVG).read_text()
+        transparent_text = (ROOT / TRANSPARENT_MASTER_SVG).read_text()
+        ET.fromstring(opaque_text)
+        ET.fromstring(transparent_text)
+        rows.append((TRANSPARENT_MASTER_SVG, "well-formed SVG (both masters)", "parsed", "✓"))
+
+        removed = set(FILL_RE.findall(opaque_text)) - set(FILL_RE.findall(transparent_text))
+        if removed:
+            rows.append((TRANSPARENT_MASTER_SVG, "background fill removed vs logo.svg",
+                         f"absent: {', '.join(sorted(removed))}", "✓"))
+        else:
+            rows.append((TRANSPARENT_MASTER_SVG, "background fill removed vs logo.svg",
+                         "same fill palette as opaque master", "✗ background baked in"))
+            all_match = False
+    except Exception as e:
+        rows.append((TRANSPARENT_MASTER_SVG, "well-formed SVG; background removed", "ERROR", str(e)))
+        all_match = False
+
+    return rows, all_match
+
+
+def print_rows(rows):
+    print(f"{'File':<50} {'Expected':>26} {'Actual':<36} {'Status':<20}")
+    print("-" * 134)
+    for relpath, expected, actual, status in rows:
+        print(f"{relpath:<50} {expected:>26} {actual:<36} {status:<20}")
     print()
 
+
+def main():
+    print("Verifying assets against every testable README.md claim...\n")
+
+    sections = [
+        ("PNG dimensions vs README table", verify_dimensions()),
+        ("README-named files present", verify_presence()),
+        ("favicon.ico container", verify_favicon_ico()),
+        ("Transparent variants", verify_transparency()),
+    ]
+
+    all_match = True
+    for title, (rows, ok) in sections:
+        print(f"== {title} ==")
+        print_rows(rows)
+        all_match &= ok
+
     if all_match:
-        print("✓ All dimensions match documentation")
+        print("✓ All README claims verified")
         return 0
     else:
-        print("✗ DIMENSION MISMATCHES FOUND")
+        print("✗ VERIFICATION FAILURES FOUND")
         print("\nTo fix:")
-        print("1. Update README.md to match actual dimensions, OR")
+        print("1. Update README.md to match the actual assets, OR")
         print("2. Run: python3 tools/build_assets.py to regenerate assets")
-        print("3. Commit the corrected assets")
+        print("3. Commit the corrected assets/docs")
         return 1
 
 
