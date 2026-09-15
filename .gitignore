@@ -1,2 +1,5 @@
 # NEEDLE execution traces are local diagnostics.
 **/.beads/traces/
+
+# NEEDLE dispatch bookkeeping: HEAD SHA at worker dispatch time, local-only.
+/.needle-predispatch-sha
