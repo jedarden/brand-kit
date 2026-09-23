@@ -1,17 +1,20 @@
 # Post-tag consumer-update workflow
 
-ADR-1 (see `docs/plan/plan.md`) made CI-verified regeneration + versioned tags
-the distribution contract, but its own context admits the loop is open on the
-consumer side: *"there is no mechanism — automated or even a checklist — that
-tells `jedarden.com` (or any future consumer) that its copy is now stale."*
-CI proves this repo's committed assets match their sources at a given tag; it
-cannot reach into someone else's repo or a platform profile and refresh what
-they copied last May.
+ADR-1 (see `docs/plan/plan.md`) made CI-verified regeneration + published
+Forgejo releases the distribution contract, but its own context admits the
+consumer loop is open: *"there is no mechanism — automated or even a checklist
+— that tells `jedarden.com` (or any future consumer) that its copy is now
+stale."* CI proves this repo's committed assets match their sources at a given
+tag; it cannot reach into someone else's repo or a platform profile and refresh
+what they copied last May.
 
-This document is that checklist; `tools/consumer_sync.py` is the script.
-Run the workflow **after every release tag that changes `source/` or the
-derived output** — i.e. every tag a consumer could pin to. A tag without the
-consumer refresh just re-dates the drift.
+This document is that checklist; `tools/consumer_sync.py` is the script. Run
+the workflow **after every published Forgejo Release that changes `source/` or
+the derived output** and after the server-side GitHub push mirror has caught
+up. A Git tag by itself is not a release: the canonical release record is the
+published entry in Forgejo's **Releases** tab. Starting after only the tag
+push, or omitting the consumer refresh, leaves the distribution contract
+incomplete or merely re-dates the drift.
 
 ## Consumer inventory (verified 2026-09-15)
 
@@ -26,11 +29,29 @@ consumer refresh just re-dates the drift.
 
 ## The workflow
 
-Prereqs: a **clean** brand-kit checkout at the tag (`git switch --detach vX.Y.Z`),
-the jedarden.com checkout (default `~/jedarden.com`, else `--site <path>`),
-Pillow (the README's pinned `.venv/bin/python` is fine — the compare runs on
-tolerance, so build flavor doesn't matter here), and network access for the
-live checks.
+Prereqs: a published `vX.Y.Z` entry in Forgejo's **Releases** tab; a **clean**
+brand-kit checkout; the jedarden.com checkout (default `~/jedarden.com`, else
+`--site <path>`); Pillow (the README's pinned `.venv/bin/python` is fine — the
+compare runs on tolerance, so build flavor doesn't matter here); and network
+access for the live checks.
+
+In this workspace, `origin` is canonical Forgejo and `github` is the read-only
+push mirror. Fetch the release tag from Forgejo, require both remotes to
+advertise the same peeled commit, then check out the tag. Every command must
+exit 0 before continuing:
+
+```bash
+VERSION=vX.Y.Z
+git fetch origin "refs/tags/$VERSION:refs/tags/$VERSION"
+test "$(git rev-parse "$VERSION^{commit}")" = \
+  "$(git ls-remote --exit-code origin "refs/tags/$VERSION^{}" | cut -f1)"
+test "$(git rev-parse "$VERSION^{commit}")" = \
+  "$(git ls-remote --exit-code github "refs/tags/$VERSION^{}" | cut -f1)"
+git switch --detach "$VERSION"
+```
+
+The GitHub check verifies the mirrored Git ref only. Do not expect or create a
+GitHub Release object; Forgejo is the sole release record.
 
 1. **Refresh the jedarden.com copies:**
    ```bash
@@ -42,12 +63,16 @@ live checks.
 
 2. **Commit and push in jedarden.com** (the script prints the exact commands):
    ```bash
-   cd ~/jedarden.com && git status                 # review — should be exactly the 2-4 brand files
-   git add public/brand src/assets
-   git commit -m 'chore(brand): sync to brand-kit @vX.Y.Z'
-   git push                                        # Cloudflare Pages deploys on push
+   (
+     cd ~/jedarden.com
+     git status                 # review — should be exactly the 2-4 brand files
+     git add public/brand src/assets
+     git commit -m 'chore(brand): sync to brand-kit @vX.Y.Z'
+     git push                    # Cloudflare Pages deploys on push
+   )
    ```
-   The `@vX.Y.Z` in the commit message is the provenance record the hand-copy
+   The subshell leaves the brand-kit checkout as the current directory. The
+   `@vX.Y.Z` in the commit message is the provenance record the hand-copy
    process never had.
 
 3. **Re-verify after the deploy lands:**

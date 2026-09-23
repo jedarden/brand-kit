@@ -56,19 +56,54 @@ existing as a single source of truth.
    and fails the run if the regenerated files differ from what's committed.
    This turns "did you remember to re-run the build script" from a trust-based
    README instruction into an enforced invariant.
-2. Once that check is green, start tagging releases (`git tag vX.Y.Z` +
-   GitHub Release) on commits that change `source/` or the derived output.
-   Consumers get a stable, citable reference ("brand-kit @ v1.0.0") instead of
-   "whatever main was on the day I copied it."
+2. Once that check is green, publish releases on Forgejo for commits that
+   change `source/` or the derived output. A release is complete only when an
+   annotated `vX.Y.Z` tag has been pushed to the canonical Forgejo remote and a
+   Forgejo Release has been published from that existing tag. Consumers get a
+   stable, citable reference ("brand-kit @ v1.0.0") instead of "whatever main
+   was on the day I copied it."
 
 Both parts are needed together: the CI check guarantees the *content* at any
 given commit is internally consistent (source and derived output agree); the
-tag gives consumers something *stable* to point at and a reason to notice
-when a new one exists.
+tag plus the release record gives consumers something *stable* to point at and
+a reason to notice when a new one exists.
+
+### Release procedure
+
+`origin` is the canonical Forgejo repository at
+`https://git.ardenone.com/jedarden/brand-kit.git`; `github` is its read-only,
+server-side push mirror. After the regen check is green on the exact release
+commit, create and push the annotated tag:
+
+```bash
+git tag -a vX.Y.Z -m "brand-kit vX.Y.Z"
+git push origin refs/tags/vX.Y.Z
+```
+
+Then open the repository's **Releases** tab on Forgejo, choose **New
+Release**, select the existing `vX.Y.Z` tag, use that tag as the title, paste
+the corresponding `CHANGELOG.md` section as the release notes, and publish it.
+A pushed Git ref is not a Forgejo Release object, so this explicit publication
+step is required. Do not run `gh release create` or push to `github`: the
+server-side mirror propagates the tag, but release objects are not mirrored and
+Forgejo remains the canonical release record.
+
+After the mirror catches up, both remotes must advertise the peeled tag before
+consumers start the ADR-2 workflow:
+
+```bash
+git ls-remote --exit-code origin "refs/tags/vX.Y.Z^{}"
+git ls-remote --exit-code github "refs/tags/vX.Y.Z^{}"
+```
+
+Both commands must exit 0, and the release must appear in Forgejo's
+**Releases** tab. The mirrored GitHub tag is a read-only distribution path, not
+a second release record.
 
 > **Follow-through:** the consumer half of this contract — what to do after a
-> tag so downstream copies actually catch up — is ADR-2
-> (`docs/notes/post-tag-consumer-update.md` + `tools/consumer_sync.py`).
+> Forgejo Release is published so downstream copies actually catch up — is
+> ADR-2 (`docs/notes/post-tag-consumer-update.md` +
+> `tools/consumer_sync.py`).
 
 ### Alternatives Considered
 
@@ -84,6 +119,10 @@ when a new one exists.
   X bio, LinkedIn banner, etc., which are set outside any build system
   regardless of how the files are packaged. Not worth standing up and
   maintaining a registry for ~30 static files that change rarely.
+- **Create GitHub Releases through `gh release create`.** Rejected — GitHub is
+  a read-only push mirror in this workspace, and a server-side Git push mirrors
+  refs rather than release objects. Canonical releases therefore live only on
+  Forgejo; their tags reach GitHub through the existing mirror.
 - **CDN hotlink (e.g. jsDelivr against a GitHub tag) directly from consumer
   HTML, no local copy at all.** Deferred, not adopted as the primary
   mechanism — it would fully solve drift, but it adds an external runtime
@@ -102,6 +141,9 @@ when a new one exists.
   CI before it lands, instead of silently diverging.
 - Consuming repos get an explicit version to pin to and a changelog to check,
   instead of an unrecorded copy-paste timestamp.
+- Forgejo owns the release record while GitHub remains a read-only distribution
+  mirror. Release publication adds one explicit web-UI step because a Git push
+  cannot create a Forgejo Release object.
 - Adds a CI dependency: an Argo WorkflowTemplate (in
   `jedarden/declarative-config`, `k8s/iad-ci/argo-workflows/`, per this
   workspace's convention) needs `resvg` + Pillow available in the build
@@ -119,12 +161,12 @@ when a new one exists.
 
 ### Context
 
-ADR-1 added the CI regen-check and release tags, but left its own stated
+ADR-1 added the CI regen-check and versioned releases, but left its own stated
 problem open on the consumer side: nothing — automated or checklist — tells a
-consumer its copy is stale once a new tag exists. The confirmed consumers as
-of this ADR: `jedarden.com` holds four files (two byte-copies of the logo
-masters under `public/brand/`, plus two hand-recompressed JPEG derivatives of
-`source/hero.png`: the `/brand` OG card and the page hero at
+consumer its copy is stale once a new Forgejo Release exists. The confirmed
+consumers as of this ADR: `jedarden.com` holds four files (two byte-copies of
+the logo masters under `public/brand/`, plus two hand-recompressed JPEG
+derivatives of `source/hero.png`: the `/brand` OG card and the page hero at
 `src/assets/brand-hero.jpg`), and the `github.com/jedarden` profile avatar is
 a manual upload of `avatars/github-460.png` whose last verification
 (2026-07-20) was recorded in prose and would have been silently out of date
@@ -137,15 +179,16 @@ construction only sees this repo.
 
 Close the loop with a **documented checklist plus a helper script**, both in
 this repo: `docs/notes/post-tag-consumer-update.md` and
-`tools/consumer_sync.py`. After every release tag that changes `source/` or
-derived output, the runner: (1) `--apply`s the refresh — byte-copies the logo
-masters into the jedarden.com checkout and regenerates both hero JPEGs from
-`source/hero.png` at the exact crop/quality the live files were verified to
-use (open-graph crop, quality 88); (2) commits and pushes in jedarden.com with
-a `sync to brand-kit @vX.Y.Z` message, which is the provenance record the
-hand-copy process never had; (3) `--check`s — comparing site copies and
-fetching the live og.jpg and the live GitHub avatar (perceptual compare, since
-GitHub recompresses on serve) — which must be all-PASS after the Pages deploy;
+`tools/consumer_sync.py`. After every published Forgejo Release that changes
+`source/` or derived output, the runner: (1) `--apply`s the refresh —
+byte-copies the logo masters into the jedarden.com checkout and regenerates both
+hero JPEGs from `source/hero.png` at the exact crop/quality the live files were
+verified to use (open-graph crop, quality 88); (2) commits and pushes in
+jedarden.com with a `sync to brand-kit @vX.Y.Z` message, which is the provenance
+record the hand-copy process never had; (3) `--check`s — comparing site copies
+and fetching the live og.jpg and the live GitHub avatar (perceptual compare,
+since GitHub recompresses on serve) — which must be all-PASS after the Pages
+deploy;
 (4) uploads the avatar by hand if the check says it drifted; (5) records the
 verification in `CHANGELOG.md`.
 
@@ -162,16 +205,16 @@ purpose.
 ### Alternatives Considered
 
 - **Automate the whole loop (CI job that pushes to jedarden.com after each
-  tag).** Rejected — cross-repo push access from CI, a deploy trigger for a
-  site from an asset repo's pipeline, and a failure surface far heavier than a
-  once-or-twice-a-year checklist. The bottleneck is remembering the checklist
-  exists, and the checklist now lives one `grep` from ADR-1.
+  published release).** Rejected — cross-repo push access from CI, a deploy
+  trigger for a site from an asset repo's pipeline, and a failure surface far
+  heavier than a once-or-twice-a-year checklist. The bottleneck is remembering
+  the checklist exists, and the checklist now lives one `grep` from ADR-1.
 - **Extend the CI regen-check to fetch consumers and verify them.** Rejected —
   CI should stay hermetic and repo-internal; consumer state is a
   post-release operational concern, and making the regen-check fail because a
   third-party site drifted couples two repos' health.
 - **Subscribe consumers via tags only (document "watch releases").** Rejected
-  as the whole mechanism — GitHub watch notifications don't reach a checklist
+  as the whole mechanism — Forgejo watch notifications don't reach a checklist
   level of reliability for a repo with a release every few months, and they do
   nothing for the avatar, which is set outside any repo.
 - **Do nothing until a second consumer appears.** Rejected — the drift is not
@@ -184,10 +227,10 @@ purpose.
   (`python3 tools/consumer_sync.py --check`) and fixable in two (`--apply`,
   then the printed commit/push commands), instead of by memory.
 - The workflow still depends on a human (or agent) remembering to run it
-  after a tag — it's a checklist, not an enforcer. Accepted: release cadence
-  here is a handful per year, and the checklist is referenced from README,
-  ADR-1's decision text, and the CHANGELOG entry so it can't be forgotten for
-  lack of a pointer.
+  after a published Forgejo Release — it's a checklist, not an enforcer.
+  Accepted: release cadence here is a handful per year, and the checklist is
+  referenced from README, ADR-1's decision text, and the CHANGELOG entry so it
+  can't be forgotten for lack of a pointer.
 - The JPEG regeneration recipe (crop params, quality 88) is now encoded in the
   script instead of in the muscle memory that produced the originals.
 - Avatar verification acquires a recorded trail in `CHANGELOG.md` rather than

@@ -112,8 +112,8 @@ pipeline instead of a manual after-step.
 
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`
 (logo copies + recompressed hero JPEGs) and the GitHub profile avatar. CI here
-can't see them go stale, so after cutting a release tag, run the consumer
-sync:
+can't see them go stale, so after publishing a Forgejo Release and waiting for
+its tag to propagate through the GitHub mirror, run the consumer sync:
 
 ```bash
 python3 tools/consumer_sync.py --check    # what's stale? (also re-verifies the live GitHub avatar)

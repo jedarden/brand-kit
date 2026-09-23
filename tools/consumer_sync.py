@@ -2,8 +2,9 @@
 """Refresh and verify the downstream consumers of the brand kit (ADR-1 follow-through).
 
 CI proves that this repo's committed assets match their sources. It cannot tell
-a *consumer* that its copy went stale the moment a new tag is cut — that loop is
-closed here, by running this script after each release tag (see
+a *consumer* that its copy went stale when a new Forgejo Release is published —
+that loop is closed here by running this script after each published release and
+after its tag propagates through the GitHub mirror (see
 docs/notes/post-tag-consumer-update.md for the full checklist).
 
 Consumers handled:
