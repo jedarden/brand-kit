@@ -63,12 +63,26 @@ channels and can be composited onto any surface.
 
 ## Regenerating
 
-All derived assets are produced from the sources in `source/`:
+All derived assets are produced from the sources in `source/`. First complete
+the one-time pinned toolchain setup documented in
+[docs/notes/asset-toolchain.md](docs/notes/asset-toolchain.md):
 
 ```bash
-python3 tools/trace_logo.py     # raster logo.png -> vector logo.svg (needs vtracer)
-python3 tools/build_assets.py   # sources -> every platform asset (needs the pinned toolchain, see below)
+cargo install resvg@0.47.0 vtracer@0.6.5
+python3 -m venv .venv
+.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1
 ```
+
+Then run the applicable generator:
+
+```bash
+.venv/bin/python tools/trace_logo.py     # only when source/logo.png changes
+.venv/bin/python tools/build_assets.py   # sources -> every platform asset
+```
+
+Both commands deliberately use the venv interpreter so Pillow comes from the
+pinned PyPI wheel rather than the system Python. `trace_logo.py` invokes the
+cargo-installed vtracer 0.6.5 CLI; it does not use a PyPI `vtracer` package.
 
 `build_assets.py` renders each logo asset straight from `source/logo.svg` at its
 exact target size (via `resvg`), so profile pictures and favicons are crisp at
@@ -76,20 +90,10 @@ any resolution. There is **no raster fallback**: output bytes depend on the
 exact tool versions, so the script aborts if `resvg` (or a source file) is
 missing rather than silently producing bytes the CI regen-diff would reject.
 
-Toolchain versions are pinned — regenerating with different ones produces
-different bytes and will fail CI. The exact pins (resvg, vtracer, and the
-**PyPI wheel** build of Pillow — a distro Pillow of the same version number
-emits different bytes) and the one-time setup live in
-[docs/notes/asset-toolchain.md](docs/notes/asset-toolchain.md):
-
-```bash
-cargo install resvg@0.47.0 vtracer@0.6.5
-python3 -m venv .venv && .venv/bin/pip install Pillow==12.1.1
-.venv/bin/python tools/build_assets.py
-```
-
-Edit `source/logo.svg`/`hero.png` (or the size tables in the script), re-run,
-and commit.
+The exact pins, full regeneration recipe, and provenance are canonical in
+[docs/notes/asset-toolchain.md](docs/notes/asset-toolchain.md). Edit
+`source/logo.svg`/`hero.png` (or the size tables in the script), re-run, and
+commit.
 
 An alternate desk composition (`source/hero-alt.png`) was removed from the repo —
 nothing consumed it, so it was 2 MB of dead weight per clone. If the hero ever

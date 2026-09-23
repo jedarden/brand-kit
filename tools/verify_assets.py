@@ -11,7 +11,7 @@ Four classes of README-vs-repo drift are checked:
      transparent SVG master has its background removed relative to the
      opaque one.
 
-Run: python3 tools/verify_assets.py
+Run: .venv/bin/python tools/verify_assets.py
 Exits 1 on any mismatch, 0 if all checks pass.
 """
 import re
@@ -356,7 +356,7 @@ def main():
         print("✗ VERIFICATION FAILURES FOUND")
         print("\nTo fix:")
         print("1. Update README.md to match the actual assets, OR")
-        print("2. Run: python3 tools/build_assets.py to regenerate assets")
+        print("2. Run: .venv/bin/python tools/build_assets.py to regenerate assets")
         print("3. Commit the corrected assets/docs")
         return 1
 

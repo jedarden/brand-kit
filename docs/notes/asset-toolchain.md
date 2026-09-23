@@ -12,10 +12,22 @@ commit whose assets came from a different toolchain is a broken commit.
 | Tool | Pin | Notes |
 |---|---|---|
 | resvg | `0.47.0` | Renders `source/logo.svg` at each target size. `cargo install resvg@0.47.0` |
-| vtracer | `0.6.5` | Traces `source/logo.png` → `source/logo.svg` (only needed when the raster logo changes). `cargo install vtracer@0.6.5` |
-| Pillow | `12.1.1` — **PyPI wheel build** | Encodes every PNG. Install with pip from PyPI: `pip install Pillow==12.1.1` |
+| vtracer | `0.6.5` Cargo CLI | `tools/trace_logo.py` invokes the binary from `cargo install vtracer@0.6.5`; it does not use the PyPI `vtracer` package |
+| Pillow | `12.1.1` — **PyPI wheel build** | Encodes every PNG. Install only the wheel from PyPI with `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1` |
 | Python | `>=3.10` (built with 3.13; CI image uses 3.11) | Not byte-sensitive — the PNG encoder/resampler are C-level — but if this ever stops holding, the regen-diff catches it |
 | rustc/cargo | 1.97.1 at time of pinning | Build toolchain only; does not affect rendered bytes. Not pinned — a resvg rebuild from the same crate version renders identically |
+
+## How `trace_logo.py` obtains vtracer
+
+`tools/trace_logo.py` is a Python entry point, but it does not import a Python
+binding or use the similarly named package from PyPI. It launches the `vtracer`
+executable found on `PATH`; the canonical pin is therefore the Cargo crate/CLI
+installed by `cargo install vtracer@0.6.5`. Do not substitute a pip-installed
+`vtracer` package: that package and build are not covered by this pin.
+
+Both Python entry points use Pillow, so both must run with the venv interpreter.
+The vtracer command is needed only when `source/logo.png` changes; resvg is
+needed whenever the derived assets are regenerated.
 
 ## The Pillow build flavor is part of the pin
 
@@ -24,23 +36,34 @@ produces different bytes.** Verified 2026-09-15: regenerating from identical
 sources with NixOS-system Pillow 12.1.1 vs the PyPI `12.1.1` wheel differed in
 **32 of 37** asset files (the encoder's zlib differs between builds).
 
-Consequence: always regenerate with a pip-installed Pillow in a venv, **not**
-a distro/system Pillow, even at the pinned version number.
+Consequence: always regenerate with the PyPI wheel installed in `.venv`, **not**
+a distro/system Pillow, even at the pinned version number. The setup command
+below uses `--only-binary=:all:` so pip fails instead of silently building an
+unpinned source distribution.
 
 ## Regenerating
 
+Run the one-time setup (or repeat it after a pin bump):
+
 ```bash
-cargo install resvg@0.47.0 vtracer@0.6.5   # one-time (or when the pin is bumped)
+cargo install resvg@0.47.0 vtracer@0.6.5
 python3 -m venv .venv
-.venv/bin/pip install Pillow==12.1.1
-.venv/bin/python tools/build_assets.py
-git diff --exit-code                        # must be empty; if not, commit the new bytes
+.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1
 ```
 
-`tools/build_assets.py` aborts if `resvg` or a source file is missing — there
-is no raster-resize fallback. Fallback output is not byte-identical to the
-vector renders, so silently degrading would make every environment produce
-different bytes for the same commit.
+Then regenerate. Run `trace_logo.py` only when the raster logo changes:
+
+```bash
+.venv/bin/python tools/trace_logo.py
+.venv/bin/python tools/build_assets.py
+git diff --exit-code
+```
+
+The diff must be empty for an already-generated tree; otherwise review and
+commit the changed asset bytes. `tools/build_assets.py` aborts if `resvg` or a
+source file is missing — there is no raster-resize fallback. Fallback output is
+not byte-identical to the vector renders, so silently degrading would make
+every environment produce different bytes for the same commit.
 
 ## Bumping a pin
 

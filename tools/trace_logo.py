@@ -6,8 +6,10 @@ The logo is flat cartoon line-art (~4 colors), so we:
      and anti-aliasing fringes collapse into clean regions), then
   2. Trace the flat image to colored SVG paths with vtracer.
 
-Requires the `vtracer` binary (cargo install vtracer).
-Run:  python3 tools/trace_logo.py
+Requires the Pillow 12.1.1 PyPI wheel in `.venv` and the vtracer 0.6.5
+CLI installed with `cargo install vtracer@0.6.5`; the PyPI `vtracer`
+package is not used.
+Run:  .venv/bin/python tools/trace_logo.py
 """
 import subprocess
 import tempfile

@@ -9,13 +9,13 @@ Sources:
 Profile pictures + favicons come from the logo; banners/covers from the hero.
 
 Requires the PINNED toolchain recorded in docs/notes/asset-toolchain.md:
-the `resvg` binary plus Pillow. There is deliberately no raster fallback —
-output bytes depend on the exact tool versions (and for Pillow, the wheel
-build), so a missing tool aborts the build instead of silently producing
-bytes the CI regen-diff would reject. Regenerate the SVG itself with
-tools/trace_logo.py.
+resvg 0.47.0 on PATH and the Pillow 12.1.1 PyPI wheel in `.venv`. There is
+deliberately no raster fallback — output bytes depend on the exact tool versions
+(and for Pillow, the wheel build), so a missing tool aborts the build instead of
+silently producing bytes the CI regen-diff would reject. Regenerate the SVG
+itself with the pinned vtracer 0.6.5 CLI via `.venv/bin/python tools/trace_logo.py`.
 
-Run:  python3 tools/build_assets.py
+Run:  .venv/bin/python tools/build_assets.py
 """
 import shutil
 import subprocess
