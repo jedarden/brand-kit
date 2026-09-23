@@ -17,6 +17,7 @@ itself with the pinned vtracer 0.6.5 CLI via `.venv/bin/python tools/trace_logo.
 
 Run:  .venv/bin/python tools/build_assets.py
 """
+import json
 import shutil
 import subprocess
 import tempfile
@@ -24,6 +25,13 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
+PALETTE = {
+    "Polo Red": "#DC3127",
+    "Ink": "#0A0A08",
+    "Canvas Cream": "#EFDECC",
+    "Skin Tan": "#F5B079",
+    "Control-Room Black": "#070506",
+}
 SRC = ROOT / "source"
 LOGO_SVG = SRC / "logo.svg"
 LOGO_TRANSPARENT_SVG = SRC / "logo-transparent.svg"
@@ -52,6 +60,12 @@ def save(img, relpath):
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, optimize=True)
     print(f"  {relpath}: {img.size[0]}x{img.size[1]}")
+
+
+def save_palette():
+    out = ROOT / "palette.json"
+    out.write_text(json.dumps(PALETTE, indent=2) + "\n", encoding="utf-8")
+    print(f"  palette.json: {len(PALETTE)} colors")
 
 
 def logo_at(size):
@@ -141,6 +155,9 @@ def main():
     print(f"toolchain: resvg {resvg_version}, Pillow {Image.__version__}"
           f" (pinned per docs/notes/asset-toolchain.md)")
     print("logo source: vector (resvg)")
+
+    print("palette:")
+    save_palette()
 
     print("avatars:")
     for path, size in AVATARS.items():

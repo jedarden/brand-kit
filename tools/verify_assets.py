@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify that committed assets match every testable claim README.md makes.
 
-Four classes of README-vs-repo drift are checked:
+Five classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
   2. Presence of every repo path README names (plus absence of the file
      it documents as removed).
@@ -10,10 +10,12 @@ Four classes of README-vs-repo drift are checked:
   4. The transparent variants have full alpha channels, and the
      transparent SVG master has its background removed relative to the
      opaque one.
+  5. The names and hexes in palette.json match the README palette table.
 
 Run: .venv/bin/python tools/verify_assets.py
 Exits 1 on any mismatch, 0 if all checks pass.
 """
+import json
 import re
 import struct
 import xml.etree.ElementTree as ET
@@ -22,6 +24,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
+PALETTE_RELPATH = "palette.json"
 
 # Expected dimensions mirror the README.md table
 # Format: {path: (expected_width, expected_height)}
@@ -145,6 +148,54 @@ def verify_dimensions():
             all_match = False
 
     return results, all_match
+
+
+def read_readme_palette():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    start = text.find("## Palette")
+    if start == -1:
+        return {}
+    end = text.find("\n## ", start + len("## Palette"))
+    section = text[start:] if end == -1 else text[start:end]
+    palette = {}
+    for line in section.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        name, value = cells[0], cells[1]
+        if re.fullmatch(r"`#[0-9A-Fa-f]{6}`", value):
+            palette[name] = value[1:-1]
+    return palette
+
+
+def verify_palette():
+    claim = "names and hexes match README palette table"
+    path = ROOT / PALETTE_RELPATH
+    if not path.exists():
+        return [(PALETTE_RELPATH, claim, "MISSING", "file not found")], False
+
+    try:
+        actual = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return [(PALETTE_RELPATH, claim, "ERROR", str(e))], False
+
+    try:
+        expected = read_readme_palette()
+    except OSError as e:
+        return [(PALETTE_RELPATH, claim, "README ERROR", str(e))], False
+
+    if not isinstance(actual, dict):
+        return [(PALETTE_RELPATH, claim, type(actual).__name__, "✗ not an object")], False
+    if not expected:
+        return [(PALETTE_RELPATH, claim, "no README rows", "✗ README table missing")], False
+    if actual == expected:
+        return [(PALETTE_RELPATH, claim, f"{len(actual)} colors", "✓")], True
+
+    expected_text = json.dumps(expected, ensure_ascii=False)
+    actual_text = json.dumps(actual, ensure_ascii=False)
+    return [(PALETTE_RELPATH, claim, actual_text, f"✗ MISMATCH: expected {expected_text}")], False
 
 
 def verify_presence():
@@ -339,6 +390,7 @@ def main():
     sections = [
         ("PNG dimensions vs README table", verify_dimensions()),
         ("README-named files present", verify_presence()),
+        ("Palette vs README table", verify_palette()),
         ("favicon.ico container", verify_favicon_ico()),
         ("Transparent variants", verify_transparency()),
     ]
