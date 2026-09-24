@@ -180,16 +180,22 @@ pipeline instead of a manual after-step.
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`
 (logo copies + recompressed hero JPEGs) and the GitHub profile avatar. CI here
 can't see them go stale, so after publishing a Forgejo Release and waiting for
-its tag to propagate through the GitHub mirror, run the consumer sync:
+its tag to propagate through the GitHub mirror, run the consumer sync from the
+checked-out release tag. `consumer_sync.py` first performs a read-only Forgejo
+API release-record check; a missing or draft record fails before any consumer
+file is read or changed. If Forgejo requires authentication, set
+`FORGEJO_TOKEN` to a read-only API token in the environment.
 
 ```bash
-python3 tools/consumer_sync.py --check    # what's stale? (also re-verifies the live GitHub avatar)
-python3 tools/consumer_sync.py --apply    # refresh the jedarden.com copies from this checkout
+VERSION=vX.Y.Z
+python3 tools/consumer_sync.py --release-tag "$VERSION" --check  # what's stale?
+python3 tools/consumer_sync.py --release-tag "$VERSION" --apply  # refresh from this checkout
 ```
 
 The full checklist — including the manual commit/push in `jedarden.com`, the
-GitHub avatar re-upload (no API for it), and what "in sync" means per asset —
-is in **`docs/notes/post-tag-consumer-update.md`** (ADR-2).
+GitHub avatar re-upload (no API for it), release-gate failure behavior, and what
+"in sync" means per asset — is in
+**`docs/notes/post-tag-consumer-update.md`** (ADR-2).
 
 ## Usage & rights
 

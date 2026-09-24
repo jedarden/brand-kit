@@ -1,5 +1,6 @@
 import io
 import sys
+import urllib.error
 from pathlib import Path
 
 from PIL import Image
@@ -26,6 +27,70 @@ def write_synced_derivatives(site):
         consumer_sync.hero_crop(width, height, fy).save(
             destination, "JPEG", quality=consumer_sync.JPEG_QUALITY
         )
+
+
+def test_forgejo_release_check_accepts_only_a_published_matching_record(
+    monkeypatch, capsys
+):
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        return b'{"tag_name":"v1.0.0","draft":false}'
+
+    monkeypatch.setattr(consumer_sync, "fetch", fake_fetch)
+
+    assert consumer_sync.check_forgejo_release("v1.0.0") is True
+    assert calls == [
+        "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases/tags/v1.0.0"
+    ]
+    assert "PASS  Forgejo release: v1.0.0 is published" in capsys.readouterr().out
+
+
+def test_forgejo_release_check_fails_closed_for_draft_or_missing_record(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        consumer_sync,
+        "fetch",
+        lambda url: b'{"tag_name":"v1.0.0","draft":true}',
+    )
+    assert consumer_sync.check_forgejo_release("v1.0.0") is False
+    assert "not published" in capsys.readouterr().out
+
+    def missing_fetch(url):
+        raise urllib.error.HTTPError(url, 404, "not found", {}, None)
+
+    monkeypatch.setattr(consumer_sync, "fetch", missing_fetch)
+    assert consumer_sync.check_forgejo_release("v1.0.0") is False
+    assert "no published release record" in capsys.readouterr().out
+
+
+def test_apply_stops_before_consumer_mutation_when_release_check_fails(
+    tmp_path, monkeypatch, capsys
+):
+    site = make_site(tmp_path)
+    destination = site / "public/brand/logo.svg"
+    destination.write_bytes(b"before release gate")
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "consumer_sync.py",
+            "--apply",
+            "--offline",
+            "--release-tag",
+            "v1.0.0",
+            "--site",
+            str(site),
+        ],
+    )
+
+    assert consumer_sync.main() == 1
+    assert destination.read_bytes() == b"before release gate"
+    output = capsys.readouterr().out
+    assert "no consumer files were changed" in output
 
 
 def test_logo_copies_require_exact_bytes_and_apply_refreshes_only_drift(
@@ -189,8 +254,18 @@ def test_check_skips_live_resources_on_fetch_failure(tmp_path, monkeypatch, caps
         raise TimeoutError("network unavailable")
 
     monkeypatch.setattr(consumer_sync, "fetch", fail_fetch)
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
     monkeypatch.setattr(
-        sys, "argv", ["consumer_sync.py", "--check", "--site", str(site)]
+        sys,
+        "argv",
+        [
+            "consumer_sync.py",
+            "--check",
+            "--release-tag",
+            "v1.0.0",
+            "--site",
+            str(site),
+        ],
     )
 
     assert consumer_sync.main() == 0

@@ -7,6 +7,11 @@ that loop is closed here by running this script after each published release and
 after its tag propagates through the GitHub mirror (see
 docs/notes/post-tag-consumer-update.md for the full checklist).
 
+Before inspecting or changing a consumer, this script performs a read-only
+Forgejo API lookup for the release tag. A missing, draft, malformed, or
+inaccessible release record fails closed; ``--offline`` does not bypass this
+release gate.
+
 Consumers handled:
   jedarden.com  (local checkout, default ~/jedarden.com)
     public/brand/logo.svg        byte-identical copy of logo/logo.svg
@@ -26,16 +31,24 @@ Modes:
   --check  verify only (default); exits 1 on any stale/mismatched consumer
   --apply  refresh the jedarden.com checkout in place (never commits), then verify
 
+A published Forgejo release record is required before either mode runs. Set
+FORGEJO_TOKEN to a read-only Forgejo API token when the Forgejo instance requires
+authentication.
+
 Examples:
   python3 tools/consumer_sync.py --check
-  python3 tools/consumer_sync.py --apply
+  python3 tools/consumer_sync.py --apply --release-tag v1.0.0
   python3 tools/consumer_sync.py --check --offline   # skip live-network checks
   python3 tools/consumer_sync.py --check --site ~/src/jedarden.com
 """
 import argparse
 import io
+import json
+import os
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -58,6 +71,8 @@ JPEG_TOLERANCE = 3.0
 AVATAR_TOLERANCE = 8.0
 AVATAR_URL = "https://avatars.githubusercontent.com/jedarden"
 LIVE_OG_URL = "https://jedarden.com/brand/og.jpg"
+FORGEJO_API_URL = "https://git.ardenone.com/api/v1"
+FORGEJO_REPOSITORY = "jedarden/brand-kit"
 
 DEFAULT_SITE = Path.home() / "jedarden.com"
 
@@ -139,10 +154,85 @@ def check_hero_derivatives(site, apply):
     return ok
 
 
-def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "brand-kit-consumer-sync"})
+def fetch(url, headers=None):
+    request_headers = {"User-Agent": "brand-kit-consumer-sync"}
+    request_headers.update(headers or {})
+    req = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.read()
+
+
+def release_tag(explicit=None):
+    if explicit is not None:
+        tag = explicit.strip()
+        if not tag:
+            raise RuntimeError("--release-tag must not be empty")
+        return tag
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--exact-match", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as e:
+        raise RuntimeError(f"cannot determine the release tag: {e}") from e
+    tag = result.stdout.strip()
+    if result.returncode != 0 or not tag:
+        detail = result.stderr.strip()
+        suffix = f" ({detail})" if detail else ""
+        raise RuntimeError(
+            "consumer sync requires HEAD to be checked out at the exact release tag; "
+            "check out the release tag or pass --release-tag" + suffix
+        )
+    return tag
+
+
+def forgejo_release_url(tag, api_url=None):
+    base = (api_url or FORGEJO_API_URL).rstrip("/")
+    encoded_tag = urllib.parse.quote(tag, safe="")
+    return f"{base}/repos/{FORGEJO_REPOSITORY}/releases/tags/{encoded_tag}"
+
+
+def check_forgejo_release(tag, api_url=None, token=None):
+    url = forgejo_release_url(tag, api_url)
+    if token is None:
+        token = os.environ.get("FORGEJO_TOKEN") or os.environ.get("FORGEJO_API_TOKEN")
+    headers = {"Authorization": f"token {token}"} if token else {}
+    try:
+        body = fetch(url, headers) if headers else fetch(url)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"FAIL  Forgejo release: no published release record for {tag} (HTTP 404); "
+                  "publish the Forgejo Release before running consumer_sync")
+        elif e.code in (401, 403):
+            print(f"FAIL  Forgejo release: GET {url} returned HTTP {e.code}; "
+                  "set a read-only FORGEJO_TOKEN or fix repository access")
+        else:
+            print(f"FAIL  Forgejo release: GET {url} returned HTTP {e.code}; refusing to sync")
+        return False
+    except Exception as e:
+        print(f"FAIL  Forgejo release: could not read {url} ({e}); refusing to sync")
+        return False
+
+    try:
+        record = json.loads(body)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as e:
+        print(f"FAIL  Forgejo release: invalid JSON for {tag} ({e}); refusing to sync")
+        return False
+    if not isinstance(record, dict):
+        print(f"FAIL  Forgejo release: response for {tag} is not an object; refusing to sync")
+        return False
+    if record.get("tag_name") != tag:
+        print(f"FAIL  Forgejo release: response names {record.get('tag_name')!r}, "
+              f"expected {tag!r}; refusing to sync")
+        return False
+    if record.get("draft") is not False:
+        print(f"FAIL  Forgejo release: {tag} is not published (draft must be false); "
+              "publish the Forgejo Release before running consumer_sync")
+        return False
+    print(f"PASS  Forgejo release: {tag} is published (read-only record found)")
+    return True
 
 
 def check_live_avatar(offline):
@@ -207,16 +297,29 @@ def main():
                       help="refresh the jedarden.com checkout in place, then verify")
     ap.add_argument("--site", type=Path, default=DEFAULT_SITE,
                     help=f"jedarden.com checkout (default {DEFAULT_SITE})")
+    ap.add_argument("--release-tag",
+                    help="release tag to verify (default: the exact tag checked out at HEAD)")
     ap.add_argument("--offline", action="store_true",
-                    help="skip the live github-avatar and live og.jpg checks")
+                    help="skip the live github-avatar and live og.jpg checks; the "
+                         "Forgejo release gate is still required")
     args = ap.parse_args()
+
+    try:
+        tag = release_tag(args.release_tag)
+    except RuntimeError as e:
+        print(f"error: {e}")
+        return 2
+
+    if not check_forgejo_release(tag):
+        print("Forgejo release gate failed; no consumer files were changed.")
+        return 1
 
     if not (args.site / "public/brand").is_dir():
         print(f"error: {args.site} does not look like a jedarden.com checkout "
               f"(no public/brand/) — pass --site <path>")
         return 2
 
-    print(f"brand-kit: {ROOT}")
+    print(f"brand-kit: {ROOT} @ {tag}")
     print(f"consumer:  {args.site} (mode: {'apply' if args.apply else 'check'})\n")
 
     ok = True
@@ -230,14 +333,12 @@ def main():
 
     print()
     if args.apply:
-        tag = subprocess.run(["git", "describe", "--tags", "--abbrev=0"], cwd=ROOT,
-                             capture_output=True, text=True).stdout.strip() or "<latest tag>"
-        print(f"Applied. Finish by hand:")
+        print("Applied. Finish by hand:")
         print(f"  cd {args.site} && git status            # review the refreshed files")
         print(f"  git add public/brand src/assets && git commit -m "
               f"'chore(brand): sync to brand-kit @{tag}'")
-        print(f"  git push                                # Cloudflare Pages deploys on push")
-        print(f"  python3 {ROOT / 'tools/consumer_sync.py'} --check   # must be all-PASS after deploy")
+        print("  git push                                # Cloudflare Pages deploys on push")
+        print(f"  python3 {ROOT / 'tools/consumer_sync.py'} --release-tag {tag} --check   # must be all-PASS after deploy")
         return 0
     print("All consumer copies in sync." if ok else
           "Consumer drift found — see the STALE/FAIL lines above, or the checklist in "

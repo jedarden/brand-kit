@@ -11,6 +11,12 @@ All notable changes to the brand kit are documented in this file.
   `src/assets/brand-hero.jpg` JPEGs from `source/hero.png`) and re-verifies the
   live GitHub profile avatar against `avatars/github-460.png`
 
+### Changed
+- `tools/consumer_sync.py` now requires a matching, published (non-draft) Forgejo
+  release record before inspecting or changing consumers; the read-only API gate
+  fails closed on missing, inaccessible, or malformed records and is not bypassed
+  by `--offline`
+
 ### Verified
 - 2026-09-15 — first executed consumer sync (ADR-2 workflow): refreshed
   `jedarden.com/public/brand/logo-512.png` (byte-stale since 2026-05-22,

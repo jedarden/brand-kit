@@ -30,15 +30,24 @@ incomplete or merely re-dates the drift.
 ## The workflow
 
 Prereqs: a published `vX.Y.Z` entry in Forgejo's **Releases** tab; a **clean**
-brand-kit checkout; the jedarden.com checkout (default `~/jedarden.com`, else
-`--site <path>`); Pillow (the README's pinned `.venv/bin/python` is fine — the
-compare runs on tolerance, so build flavor doesn't matter here); and network
-access for the live checks.
+brand-kit checkout checked out at that exact tag; the jedarden.com checkout
+(default `~/jedarden.com`, else `--site <path>`); Pillow (the README's pinned
+`.venv/bin/python` is fine — the compare runs on tolerance, so build flavor
+doesn't matter here); and network access for the release-record and live checks.
+If Forgejo requires API authentication, export a read-only API token as
+`FORGEJO_TOKEN` before running the sync. Never put the token in this repository
+or pass it on the command line.
 
 In this workspace, `origin` is canonical Forgejo and `github` is the read-only
 push mirror. Fetch the release tag from Forgejo, require both remotes to
-advertise the same peeled commit, then check out the tag. Every command must
-exit 0 before continuing:
+advertise the same peeled commit, then check out the tag. `consumer_sync.py`
+performs its own read-only `GET` against Forgejo's
+`/api/v1/repos/jedarden/brand-kit/releases/tags/<tag>` before it reads or writes
+any consumer file. The response must be a JSON release object with the exact
+`tag_name` and `draft: false`. A missing or draft record, HTTP/API error, invalid
+JSON, or inaccessible Forgejo instance exits 1 and `--apply` performs no writes;
+`--offline` skips only the live consumer checks and never bypasses this gate.
+Every command must exit 0 before continuing:
 
 ```bash
 VERSION=vX.Y.Z
@@ -55,8 +64,10 @@ GitHub Release object; Forgejo is the sole release record.
 
 1. **Refresh the jedarden.com copies:**
    ```bash
-   python3 tools/consumer_sync.py --apply
+   python3 tools/consumer_sync.py --release-tag "$VERSION" --apply
    ```
+   The release-record check runs before this command touches the checkout. If it
+   fails, publish the Forgejo Release or fix API access and run it again.
    This copies the two logo files byte-for-byte and regenerates both hero JPEGs
    from `source/hero.png`. Files already in sync are left untouched, so the
    resulting site diff contains only what actually changed.
@@ -77,7 +88,7 @@ GitHub Release object; Forgejo is the sole release record.
 
 3. **Re-verify after the deploy lands:**
    ```bash
-   python3 tools/consumer_sync.py --check          # must be all-PASS
+   python3 tools/consumer_sync.py --release-tag "$VERSION" --check  # must be all-PASS
    ```
    `--check` compares the site copies against this checkout **and** fetches the
    live `https://jedarden.com/brand/og.jpg` to confirm the Pages build actually

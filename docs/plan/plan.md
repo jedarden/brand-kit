@@ -232,8 +232,11 @@ purpose.
 ### Consequences
 
 - Consumer drift is now detectable in one command
-  (`python3 tools/consumer_sync.py --check`) and fixable in two (`--apply`,
-  then the printed commit/push commands), instead of by memory.
+  (`python3 tools/consumer_sync.py --release-tag vX.Y.Z --check`) and fixable in
+  two (`--apply`, then the printed commit/push commands), instead of by memory.
+- The helper now performs a read-only Forgejo release-record lookup before any
+  consumer read or write. A missing, draft, malformed, or inaccessible record
+  fails closed; `--offline` does not bypass that release gate.
 - The workflow still depends on a human (or agent) remembering to run it
   after a published Forgejo Release — it's a checklist, not an enforcer.
   Accepted: release cadence here is a handful per year, and the checklist is
