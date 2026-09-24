@@ -165,7 +165,7 @@ a second release record.
   `jedarden.com` and any future consumer from ad hoc copy-paste to consuming
   a pinned brand-kit tag.
 
-## ADR-2: 2026-09-15 — Post-tag consumer-update workflow: a checklist and script, not automation
+## ADR-2: 2026-09-15 — Post-tag consumer-update workflow: a checklist and script, not automation (remediation; detection is extended by ADR-4)
 
 ### Context
 
@@ -237,18 +237,16 @@ purpose.
 - The helper now performs a read-only Forgejo release-record lookup before any
   consumer read or write. A missing, draft, malformed, or inaccessible record
   fails closed; `--offline` does not bypass that release gate.
-- The workflow still depends on a human (or agent) remembering to run it
-  after a published Forgejo Release — it's a checklist, not an enforcer.
-  Accepted: release cadence here is a handful per year, and the checklist is
-  referenced from README, ADR-1's decision text, and the CHANGELOG entry so it
-  can't be forgotten for lack of a pointer.
+- The remediation workflow still depends on a human (or agent) to refresh and
+  review `jedarden.com` after a published Forgejo Release; ADR-4 automates
+  detection and reporting but deliberately does not cross that write boundary.
 - The JPEG regeneration recipe (crop params, quality 88) is now encoded in the
   script instead of in the muscle memory that produced the originals.
 - Avatar verification acquires a recorded trail in `CHANGELOG.md` rather than
   a one-off prose note in plan.md.
-- Scope boundary maintained: this repo ships the checklist and script; actually
-  running them mutates `jedarden.com`, which remains outside brand-kit beads
-  per ADR-1's scope note.
+- Scope boundary maintained: this repo ships the checklist, remediation script,
+  and read-only detector; actually applying the site refresh remains outside
+  brand-kit beads per ADR-1's scope note.
 
 ## ADR-3: 2026-09-23 — SVG-first logo source and guarded raster trace
 
@@ -316,4 +314,59 @@ derives it automatically.
 - Transparent artwork still requires an explicit edit because no trace derives
   it; this is visible in the documented order rather than hidden in an
   intermediate-output side effect.
+
+## ADR-4: 2026-09-24 — Read-only release-triggered consumer drift detection
+
+### Context
+
+ADR-2 made stale consumer copies detectable with a helper command, but its
+operational consequence still depended on a human remembering to run that
+command. A release can therefore land successfully while
+`jedarden.com/public/brand/`, the deployed OG image, or the manually uploaded
+GitHub avatar remains on an older release. The detector must answer the
+question without granting the brand-kit pipeline permission to mutate another
+repository or a platform profile.
+
+### Decision
+
+Ship `tools/consumer_drift.py` with the machine-readable inventory in
+`consumer-drift.json`, and provide the Argo source artifact
+`automation/brand-kit-consumer-drift-cronworkflow.yml` for a daily read-only
+run. The workflow resolves the newest published stable Forgejo release after a
+propagation delay, checks out that exact tag, clones jedarden.com from its
+read-only GitHub mirror, and runs the detector. A release-triggered Argo
+submission may set the `release-tag` workflow parameter instead.
+
+The detector:
+
+1. Resolves and validates the published Forgejo release record; a missing,
+   draft, malformed, or inaccessible record is indeterminate.
+2. Requires the brand-kit checkout to be the selected release tag and records
+   SHA-256 digests for canonical inputs.
+3. Byte-compares jedarden.com's logo copies, compares its hero JPEGs against
+   release-generated crops, compares the live OG image directly against the
+   release crop, and perceptually compares the known live GitHub avatar with
+   the release avatar.
+4. Emits human-readable output and a JSON report, returning `0` only for a
+   fully current audit, `1` for confirmed stale consumers, and `2` for any
+   indeterminate check. Network failures and unavailable live assets cannot be
+   green.
+
+The detector has no apply, commit, or push operation. Remediation remains the
+ADR-2 checklist, including the site repository's review flow and the manual
+GitHub avatar upload.
+
+### Consequences
+
+- A scheduled or release-triggered run creates an operational signal without
+  cross-repository write credentials or automatic consumer mutation.
+- The release tag, source digests, observed digests, image metrics, and
+  consumer-level status are retained in the report for triage.
+- The inventory is extensible: adding a future consumer means adding a
+  read-only path/URL rule to `consumer-drift.json`; it does not expand the
+  remediation authority of this repository.
+- A failed or indeterminate run is visible as a failed Argo workflow. The
+  manifest is reconciled through the shared `declarative-config` ArgoCD
+  application, while this repository remains the owner of the detector and its
+  tests.
 

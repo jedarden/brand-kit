@@ -8,13 +8,47 @@ stale."* CI proves this repo's committed assets match their sources at a given
 tag; it cannot reach into someone else's repo or a platform profile and refresh
 what they copied last May.
 
-This document is that checklist; `tools/consumer_sync.py` is the script. Run
-the workflow **after every published Forgejo Release that changes `source/` or
-the derived output** and after the server-side GitHub push mirror has caught
-up. A Git tag by itself is not a release: the canonical release record is the
-published entry in Forgejo's **Releases** tab. Starting after only the tag
-push, or omitting the consumer refresh, leaves the distribution contract
+This document is that checklist; `tools/consumer_sync.py` is the remediation
+script. Run the workflow **after every published Forgejo Release that changes
+`source/` or the derived output** and after the server-side GitHub push mirror
+has caught up. A Git tag by itself is not a release: the canonical release
+record is the published entry in Forgejo's **Releases** tab. Starting after only
+the tag push, or omitting the consumer refresh, leaves the distribution contract
 incomplete or merely re-dates the drift.
+
+The read-only detector is `tools/consumer_drift.py`, configured by
+`consumer-drift.json`. It is safe to run independently of the remediation
+checklist and is intended for a scheduler or a release event:
+
+```bash
+.venv/bin/python tools/consumer_drift.py \
+  --release-tag "$VERSION" \
+  --site ~/jedarden.com \
+  --json \
+  --report /tmp/brand-kit-consumer-drift.json
+```
+
+The detector resolves the exact published release, checks that the brand-kit
+checkout is at that tag, hashes the canonical inputs, and compares the
+jedarden.com logo copies, both hero JPEGs, the live
+`https://jedarden.com/brand/og.jpg`, and the known live GitHub profile avatar.
+The live comparisons use the release source directly rather than trusting the
+site checkout, so a stale local copy cannot make a stale deployed image look
+current. Exit `0` means every check is current, `1` reports confirmed drift, and
+`2` reports an indeterminate audit; network failures and skipped checks are
+never reported as a pass. The command has no apply, commit, or push operation.
+When the detector is newer than the release being audited, pass
+`--source-root <checkout-of-the-release-tag>` while keeping the detector itself
+on the current checkout; this is what the scheduled workflow does.
+
+`automation/brand-kit-consumer-drift-cronworkflow.yml` is the Argo source
+artifact for a daily read-only run. It resolves the newest stable release
+(after the configured propagation delay), checks out that tag, clones the
+read-only GitHub mirror of jedarden.com, and leaves the JSON report in the
+workflow logs. A release-triggered Argo submission can pass the release tag as
+the same workflow parameter. Infrastructure manifests are reconciled through
+`declarative-config`; this repository keeps the application-owned detector and
+its trigger source together without granting the detector write credentials.
 
 ## Consumer inventory (verified 2026-09-15)
 

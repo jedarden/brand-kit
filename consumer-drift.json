@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "release": {
+    "api_url": "https://git.ardenone.com/api/v1",
+    "repository": "jedarden/brand-kit",
+    "tag_pattern": "^v\\d+\\.\\d+\\.\\d+$",
+    "minimum_age_hours": 24,
+    "require_checkout": true
+  },
+  "site": {
+    "name": "jedarden.com",
+    "checkout": "~/jedarden.com",
+    "repository": "https://github.com/jedarden/jedarden.com.git",
+    "branch": "main"
+  },
+  "live": {
+    "og_url": "https://jedarden.com/brand/og.jpg",
+    "avatar_url": "https://avatars.githubusercontent.com/jedarden"
+  },
+  "source_assets": [
+    {
+      "path": "source/logo.svg",
+      "role": "authoritative logo source"
+    },
+    {
+      "path": "source/hero.png",
+      "role": "authoritative hero source"
+    },
+    {
+      "path": "avatars/github-460.png",
+      "role": "known live profile asset"
+    },
+    {
+      "path": "logo/logo-512.png",
+      "role": "published logo derivative"
+    }
+  ],
+  "site_assets": [
+    {
+      "name": "logo.svg",
+      "source": "logo/logo.svg",
+      "path": "public/brand/logo.svg",
+      "comparison": "bytes"
+    },
+    {
+      "name": "logo-512.png",
+      "source": "logo/logo-512.png",
+      "path": "public/brand/logo-512.png",
+      "comparison": "bytes"
+    },
+    {
+      "name": "og.jpg",
+      "source": "source/hero.png",
+      "path": "public/brand/og.jpg",
+      "comparison": "crop",
+      "tolerance": 3.0,
+      "crop": {
+        "width": 1200,
+        "height": 630,
+        "fy": 0.45
+      }
+    },
+    {
+      "name": "brand-hero.jpg",
+      "source": "source/hero.png",
+      "path": "src/assets/brand-hero.jpg",
+      "comparison": "crop",
+      "tolerance": 3.0,
+      "crop": {
+        "width": 1536,
+        "height": 1024,
+        "fy": 0.0
+      }
+    }
+  ],
+  "live_assets": [
+    {
+      "name": "github profile avatar",
+      "consumer": "github.com/jedarden",
+      "source": "avatars/github-460.png",
+      "url": "https://avatars.githubusercontent.com/jedarden",
+      "comparison": "image",
+      "tolerance": 8.0,
+      "resize_reference": true
+    },
+    {
+      "name": "live open-graph card",
+      "consumer": "jedarden.com live",
+      "source": "source/hero.png",
+      "url": "https://jedarden.com/brand/og.jpg",
+      "comparison": "crop",
+      "tolerance": 3.0,
+      "crop": {
+        "width": 1200,
+        "height": 630,
+        "fy": 0.45
+      }
+    }
+  ]
+}

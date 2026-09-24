@@ -179,23 +179,36 @@ pipeline instead of a manual after-step.
 
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`
 (logo copies + recompressed hero JPEGs) and the GitHub profile avatar. CI here
-can't see them go stale, so after publishing a Forgejo Release and waiting for
-its tag to propagate through the GitHub mirror, run the consumer sync from the
-checked-out release tag. `consumer_sync.py` first performs a read-only Forgejo
-API release-record check; a missing or draft record fails before any consumer
-file is read or changed. If Forgejo requires authentication, set
-`FORGEJO_TOKEN` to a read-only API token in the environment.
+can't see them go stale, so the repository now ships a read-only detector as
+well as the remediation helper. After publishing a Forgejo Release, check out
+its exact tag and run:
 
 ```bash
 VERSION=vX.Y.Z
-python3 tools/consumer_sync.py --release-tag "$VERSION" --check  # what's stale?
-python3 tools/consumer_sync.py --release-tag "$VERSION" --apply  # refresh from this checkout
+.venv/bin/python tools/consumer_drift.py --release-tag "$VERSION" \
+  --site ~/jedarden.com --json
 ```
 
-The full checklist — including the manual commit/push in `jedarden.com`, the
-GitHub avatar re-upload (no API for it), release-gate failure behavior, and what
-"in sync" means per asset — is in
-**`docs/notes/post-tag-consumer-update.md`** (ADR-2).
+`tools/consumer_drift.py` uses the published Forgejo release record, reports
+SHA-256 digests for canonical inputs, compares the four documented jedarden.com
+copies, and compares the live OG image and GitHub profile avatar directly with
+the selected release. It never applies changes, commits, or pushes. Exit `0`
+means current, `1` means confirmed stale consumers, and `2` means the audit was
+indeterminate (for example, a network or release-record failure). Set
+`FORGEJO_TOKEN` to a read-only Forgejo API token when the instance requires
+authentication. `--print-release-tag` resolves the newest stable published
+release for a scheduler. If the detector is newer than the tag under audit, use
+`--source-root <release-checkout>` so the tool code stays current while the
+compared inputs come from the published tag.
+
+The daily Argo `CronWorkflow` source is
+`automation/brand-kit-consumer-drift-cronworkflow.yml`; it clones the exact
+published tag and jedarden.com read-only, emits the JSON report, and fails its
+run on drift. The workflow is intentionally not a GitHub Actions workflow and
+has no consumer-write step. The complete remediation checklist — including the
+manual commit/push in `jedarden.com`, the GitHub avatar re-upload (no API for
+it), release-gate failure behavior, and what "in sync" means per asset — is in
+**`docs/notes/post-tag-consumer-update.md`** (ADR-2 and ADR-4).
 
 ## Usage & rights
 

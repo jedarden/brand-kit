@@ -10,12 +10,20 @@ All notable changes to the brand kit are documented in this file.
   from a release tag (regenerating the hand-recompressed `og.jpg` /
   `src/assets/brand-hero.jpg` JPEGs from `source/hero.png`) and re-verifies the
   live GitHub profile avatar against `avatars/github-460.png`
+- Read-only downstream drift detection (ADR-4): `tools/consumer_drift.py` and
+  `consumer-drift.json` compare a published release with jedarden.com copies,
+  the live OG image, and the known GitHub profile avatar; the daily Argo
+  `CronWorkflow` source is `automation/brand-kit-consumer-drift-cronworkflow.yml`
+  and has no consumer-write step
 
 ### Changed
 - `tools/consumer_sync.py` now requires a matching, published (non-draft) Forgejo
   release record before inspecting or changing consumers; the read-only API gate
   fails closed on missing, inaccessible, or malformed records and is not bypassed
   by `--offline`
+- `tools/consumer_drift.py` reports exit `1` for confirmed stale consumers and
+  exit `2` for indeterminate checks, so scheduled runs never turn an unavailable
+  release record or live fetch into a green result
 
 ### Verified
 - 2026-09-15 — first executed consumer sync (ADR-2 workflow): refreshed

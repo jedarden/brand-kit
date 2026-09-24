@@ -117,7 +117,7 @@ EXPECTED_INVENTORY = EXPECTED_ASSETS | {PALETTE_RELPATH}
 # already open (a PNG listed there reports MISSING when absent). The
 # avatars, banners, sized favicons and logo masters are therefore covered
 # by the dimension table above; these are the rest. README's pointers to
-# jedarden.com/public/brand/ are external — consumer_sync.py owns those.
+# jedarden.com/public/brand/ are external — the consumer tools own those.
 EXPECTED_PRESENT = [
     # Sources (README table)
     "source/logo.svg",
@@ -134,6 +134,9 @@ EXPECTED_PRESENT = [
     "tools/trace_logo.py",
     "tools/build_assets.py",
     "tools/consumer_sync.py",
+    "tools/consumer_drift.py",
+    "consumer-drift.json",
+    "automation/brand-kit-consumer-drift-cronworkflow.yml",
     "docs/notes/post-tag-consumer-update.md",
 ]
 
