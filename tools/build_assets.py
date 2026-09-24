@@ -109,6 +109,11 @@ def cover(img, tw, th, fy=0.45, fx=0.5):
     return im.crop((left, top, left + tw, top + th))
 
 
+def save_banners(hero):
+    for path, (width, height, fy) in BANNERS.items():
+        save(cover(hero, width, height, fy=fy), path)
+
+
 # ---- Profile pictures (from logo) -------------------------------------------
 AVATARS = {
     "avatars/x-400.png": 400,
@@ -199,8 +204,7 @@ def main():
     print("  favicon/favicon.ico: multi-res")
 
     print("banners:")
-    for path, (w, h, fy) in BANNERS.items():
-        save(cover(hero, w, h, fy=fy), path)
+    save_banners(hero)
 
     print("done.")
 

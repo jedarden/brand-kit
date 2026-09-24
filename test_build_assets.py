@@ -1,12 +1,35 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 
 from tools import build_assets
+
+
+HERO_CROP_FIXTURES = {
+    "banners/open-graph-1200x630.png": (
+        (1200, 630, 0.45),
+        (1200, 800),
+        (0, 76, 1200, 706),
+        "cab9fb861fca53d2fd0a7d8e43e48b7872f9da9a2d9fb3c17ada6c1ff1d58fb6",
+    ),
+    "banners/twitter-card-1200x628.png": (
+        (1200, 628, 0.45),
+        (1200, 800),
+        (0, 77, 1200, 705),
+        "45ba755d800e0dc6662dd4a697341c6619d2b733de5a4274fee673d233f1da6d",
+    ),
+    "banners/youtube-banner-2560x1440.png": (
+        (2560, 1440, 0.45),
+        (2560, 1707),
+        (0, 120, 2560, 1560),
+        "1d8281d77fc0258e289d8abc8570cf4c41c3bcab48ebcea98c26644c68586713",
+    ),
+}
 
 
 @pytest.fixture
@@ -144,6 +167,50 @@ def test_build_generates_from_authoritative_fixture_sources(
     with Image.open(asset_fixture.root / "banners/banner.png") as banner:
         assert banner.convert("RGB").getpixel((0, 0)) == (38, 70, 83)
     assert "logo source: vector (resvg)" in capsys.readouterr().out
+
+
+def test_documented_hero_crops_match_committed_fixtures(monkeypatch):
+    expected_settings = {
+        path: fixture[0] for path, fixture in HERO_CROP_FIXTURES.items()
+    }
+    assert {
+        path: build_assets.BANNERS[path] for path in HERO_CROP_FIXTURES
+    } == expected_settings
+    assert build_assets.HERO == build_assets.ROOT / "source/hero.png"
+    saved_banners = {}
+    crop_calls = []
+    original_crop = Image.Image.crop
+
+    def record_crop(image, box=None):
+        crop_calls.append((image.size, box))
+        return original_crop(image, box)
+
+    def record_save(image, relpath):
+        saved_banners[relpath] = image
+
+    monkeypatch.setattr(Image.Image, "crop", record_crop)
+    monkeypatch.setattr(build_assets, "BANNERS", expected_settings)
+    monkeypatch.setattr(build_assets, "save", record_save)
+    with Image.open(build_assets.HERO) as source:
+        hero = source.convert("RGB")
+    build_assets.save_banners(hero)
+
+    assert list(saved_banners) == list(HERO_CROP_FIXTURES)
+    assert crop_calls == [
+        (fixture[1], fixture[2]) for fixture in HERO_CROP_FIXTURES.values()
+    ]
+    for asset_path, (_, _, _, pixel_sha256) in HERO_CROP_FIXTURES.items():
+        actual = saved_banners[asset_path]
+        with Image.open(build_assets.ROOT / asset_path) as fixture_image:
+            expected = fixture_image.convert("RGB")
+
+        actual_sha256 = hashlib.sha256(actual.tobytes()).hexdigest()
+        assert actual_sha256 == pixel_sha256, (
+            f"{asset_path} changed; review the new platform crop before replacing "
+            f"its fixture digest with {actual_sha256}"
+        )
+        assert actual.size == expected.size
+        assert ImageChops.difference(actual, expected).getbbox() is None
 
 
 def test_build_aborts_without_raster_fallback_when_resvg_is_missing(

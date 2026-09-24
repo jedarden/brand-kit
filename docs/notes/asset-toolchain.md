@@ -13,7 +13,8 @@ commit whose assets came from a different toolchain is a broken commit.
 |---|---|---|
 | resvg | `0.47.0` | Renders `source/logo.svg` at each target size. `cargo install resvg@0.47.0` |
 | vtracer | `0.6.5` Cargo CLI | `tools/trace_logo.py` invokes the binary from `cargo install vtracer@0.6.5`; it does not use the PyPI `vtracer` package |
-| Pillow | `12.1.1` — **PyPI wheel build** | Encodes every PNG. Install only the wheel from PyPI with `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1` |
+| Pillow | `12.1.1` — **PyPI wheel build** | Encodes every PNG. Install only the wheel from PyPI with `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2` |
+| pytest | `9.0.2` | Runs the regression suite; it does not affect generated asset bytes. |
 | Python | `>=3.10` (built with 3.13; CI image uses 3.11) | Not byte-sensitive — the PNG encoder/resampler are C-level — but if this ever stops holding, the regen-diff catches it |
 | rustc/cargo | 1.97.1 at time of pinning | Build toolchain only; does not affect rendered bytes. Not pinned — a resvg rebuild from the same crate version renders identically |
 
@@ -73,7 +74,7 @@ Run the one-time setup (or repeat it after a pin bump):
 ```bash
 cargo install resvg@0.47.0 vtracer@0.6.5
 python3 -m venv .venv
-.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1
+.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2
 ```
 
 For a normal edit to `source/logo.svg`, `source/logo-transparent.svg`, or
