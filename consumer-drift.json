@@ -33,6 +33,22 @@
     {
       "path": "logo/logo-512.png",
       "role": "published logo derivative"
+    },
+    {
+      "path": "logo/logo.svg",
+      "role": "published vector logo"
+    },
+    {
+      "path": "favicon/apple-touch-icon-180.png",
+      "role": "published favicon reference derivative"
+    },
+    {
+      "path": "favicon/favicon-192.png",
+      "role": "published favicon reference derivative"
+    },
+    {
+      "path": "favicon/favicon-512.png",
+      "role": "published favicon reference derivative"
     }
   ],
   "site_assets": [
@@ -47,6 +63,33 @@
       "source": "logo/logo-512.png",
       "path": "public/brand/logo-512.png",
       "comparison": "bytes"
+    },
+    {
+      "name": "favicon.svg",
+      "source": "logo/logo.svg",
+      "path": "public/favicon.svg",
+      "comparison": "bytes"
+    },
+    {
+      "name": "apple-touch-icon.png",
+      "source": "favicon/apple-touch-icon-180.png",
+      "path": "public/apple-touch-icon.png",
+      "comparison": "image",
+      "tolerance": 1.0
+    },
+    {
+      "name": "icon-192.png",
+      "source": "favicon/favicon-192.png",
+      "path": "public/icon-192.png",
+      "comparison": "image",
+      "tolerance": 1.0
+    },
+    {
+      "name": "icon-512.png",
+      "source": "favicon/favicon-512.png",
+      "path": "public/icon-512.png",
+      "comparison": "image",
+      "tolerance": 1.0
     },
     {
       "name": "og.jpg",

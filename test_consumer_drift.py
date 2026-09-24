@@ -14,16 +14,35 @@ def image_bytes(image, image_format="PNG"):
     return output.getvalue()
 
 
+def test_image_check_rejects_color_drift_with_equal_red_channel():
+    expected = Image.new("RGB", (20, 20), (200, 10, 10))
+    observed = Image.new("RGB", (20, 20), (200, 100, 100))
+
+    result = consumer_drift._image_check(
+        image_bytes(observed), expected, 1.0, "favicon fixture"
+    )
+
+    assert result["status"] == "stale"
+    assert result["mean_luma"] > 1.0
+
+
 def make_root(tmp_path):
     root = tmp_path / "brand-kit"
     (root / "source").mkdir(parents=True)
     (root / "logo").mkdir()
     (root / "avatars").mkdir()
+    (root / "favicon").mkdir()
     (root / "source/logo.svg").write_bytes(b"<svg>source</svg>")
     Image.new("RGB", (40, 30), (100, 120, 140)).save(root / "source/hero.png")
     (root / "logo/logo.svg").write_bytes(b"<svg>release</svg>")
     (root / "logo/logo-512.png").write_bytes(b"release-logo\x00")
     Image.new("RGB", (20, 20), (80, 90, 100)).save(root / "avatars/github-460.png")
+    for path, size, color in (
+        ("favicon/apple-touch-icon-180.png", 180, (110, 120, 130)),
+        ("favicon/favicon-192.png", 192, (120, 130, 140)),
+        ("favicon/favicon-512.png", 512, (130, 140, 150)),
+    ):
+        Image.new("RGB", (size, size), color).save(root / path)
     return root
 
 
@@ -43,6 +62,10 @@ def make_config():
             {"path": "source/hero.png"},
             {"path": "avatars/github-460.png"},
             {"path": "logo/logo-512.png"},
+            {"path": "logo/logo.svg"},
+            {"path": "favicon/apple-touch-icon-180.png"},
+            {"path": "favicon/favicon-192.png"},
+            {"path": "favicon/favicon-512.png"},
         ],
         "site_assets": [
             {
@@ -56,6 +79,33 @@ def make_config():
                 "source": "logo/logo-512.png",
                 "path": "public/brand/logo-512.png",
                 "comparison": "bytes",
+            },
+            {
+                "name": "favicon.svg",
+                "source": "logo/logo.svg",
+                "path": "public/favicon.svg",
+                "comparison": "bytes",
+            },
+            {
+                "name": "apple-touch-icon.png",
+                "source": "favicon/apple-touch-icon-180.png",
+                "path": "public/apple-touch-icon.png",
+                "comparison": "image",
+                "tolerance": 1,
+            },
+            {
+                "name": "icon-192.png",
+                "source": "favicon/favicon-192.png",
+                "path": "public/icon-192.png",
+                "comparison": "image",
+                "tolerance": 1,
+            },
+            {
+                "name": "icon-512.png",
+                "source": "favicon/favicon-512.png",
+                "path": "public/icon-512.png",
+                "comparison": "image",
+                "tolerance": 1,
             },
             {
                 "name": "og.jpg",
@@ -105,6 +155,13 @@ def make_site(root, tmp_path):
     (site / "public/brand/logo-512.png").write_bytes(
         (root / "logo/logo-512.png").read_bytes()
     )
+    (site / "public/favicon.svg").write_bytes((root / "logo/logo.svg").read_bytes())
+    for source, destination in (
+        ("favicon/apple-touch-icon-180.png", "public/apple-touch-icon.png"),
+        ("favicon/favicon-192.png", "public/icon-192.png"),
+        ("favicon/favicon-512.png", "public/icon-512.png"),
+    ):
+        (site / destination).write_bytes((root / source).read_bytes())
     for width, height, fy, relative in (
         (1200, 630, 0.45, "public/brand/og.jpg"),
         (1536, 1024, 0.0, "src/assets/brand-hero.jpg"),
@@ -188,6 +245,38 @@ def test_run_audit_reports_stale_copy_and_live_asset_separately(tmp_path):
     assert live_checks["live open-graph card"]["status"] == "current"
     assert report["consumers"]["jedarden.com"]["status"] == "stale"
     assert report["consumers"]["jedarden.com live"]["status"] == "current"
+
+
+def test_run_audit_detects_stale_site_owned_favicon_outputs(tmp_path):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+    (site / "public/favicon.svg").write_bytes(b"stale")
+    for name, size in (
+        ("apple-touch-icon.png", 180),
+        ("icon-192.png", 192),
+        ("icon-512.png", 512),
+    ):
+        Image.new("RGB", (size, size), (0, 0, 0)).save(site / f"public/{name}")
+
+    report = consumer_drift.run_audit(
+        root=root,
+        site=site,
+        config=make_config(),
+        release_tag="v1.0.0",
+        fetcher=make_fetcher(root),
+    )
+
+    site_checks = {
+        check["asset"]: check for check in report["checks"] if "path" in check
+    }
+    assert report["status"] == "stale"
+    for name in (
+        "favicon.svg",
+        "apple-touch-icon.png",
+        "icon-192.png",
+        "icon-512.png",
+    ):
+        assert site_checks[name]["status"] == "stale"
 
 
 def test_missing_live_fetch_is_indeterminate_not_a_pass(tmp_path):
@@ -282,10 +371,45 @@ def test_checkout_state_requires_the_selected_tag_when_configured(tmp_path):
 def test_inventory_config_is_machine_readable_and_contains_live_profile_asset():
     config = consumer_drift.load_config()
     live_names = {entry["name"] for entry in config["live_assets"]}
+    site_assets = {entry["name"]: entry for entry in config["site_assets"]}
     assert "github profile avatar" in live_names
     assert config["site_assets"]
     assert config["site"]["repository"].endswith("jedarden.com.git")
+    assert site_assets["favicon.svg"] == {
+        "name": "favicon.svg",
+        "source": "logo/logo.svg",
+        "path": "public/favicon.svg",
+        "comparison": "bytes",
+    }
+    for name, source in (
+        ("apple-touch-icon.png", "favicon/apple-touch-icon-180.png"),
+        ("icon-192.png", "favicon/favicon-192.png"),
+        ("icon-512.png", "favicon/favicon-512.png"),
+    ):
+        assert site_assets[name] == {
+            "name": name,
+            "source": source,
+            "path": f"public/{name}",
+            "comparison": "image",
+            "tolerance": 1.0,
+        }
     assert Path("consumer-drift.json").read_text(encoding="utf-8").endswith("\n")
+
+
+def test_release_checklist_runs_site_favicon_generator_before_commit():
+    workflow = Path("docs/notes/post-tag-consumer-update.md").read_text(
+        encoding="utf-8"
+    ).split("## The workflow", 1)[1]
+    sync = 'tools/consumer_sync.py --release-tag "$VERSION"'
+    generate = "node scripts/make-favicons.mjs"
+    commit = "git commit -m 'chore(brand): sync to brand-kit @vX.Y.Z'"
+    push = "git push"
+    detect = 'tools/consumer_drift.py --release-tag "$VERSION"'
+
+    assert 'SITE="${SITE:-$HOME/jedarden.com}"' in workflow
+    assert 'cd -- "$SITE" || exit' in workflow
+    assert workflow.index(sync) < workflow.index(generate) < workflow.index(commit)
+    assert workflow.index(commit) < workflow.index(push) < workflow.index(detect)
 
 
 def test_scheduled_workflow_source_is_read_only_and_resolves_a_release():

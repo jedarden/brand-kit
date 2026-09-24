@@ -1,4 +1,5 @@
 import io
+import shlex
 import sys
 import urllib.error
 from pathlib import Path
@@ -91,6 +92,85 @@ def test_apply_stops_before_consumer_mutation_when_release_check_fails(
     assert destination.read_bytes() == b"before release gate"
     output = capsys.readouterr().out
     assert "no consumer files were changed" in output
+
+
+def test_apply_handoff_uses_site_favicon_command_and_detector(
+    tmp_path, monkeypatch, capsys
+):
+    original_site = make_site(tmp_path)
+    site = original_site.with_name("jedarden.com with spaces")
+    original_site.rename(site)
+    for repo_rel, site_rel, _ in consumer_sync.COPIES:
+        (site / site_rel).write_bytes((consumer_sync.ROOT / repo_rel).read_bytes())
+    write_synced_derivatives(site)
+    favicon_files = {
+        site / relative: f"site-owned:{relative}".encode()
+        for relative in (
+            "public/favicon.svg",
+            "public/apple-touch-icon.png",
+            "public/icon-192.png",
+            "public/icon-512.png",
+        )
+    }
+    for path, content in favicon_files.items():
+        path.write_bytes(content)
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(consumer_sync, "check_live_avatar", lambda offline: False)
+    monkeypatch.setattr(consumer_sync, "check_live_og", lambda site, offline: False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "consumer_sync.py",
+            "--apply",
+            "--offline",
+            "--release-tag",
+            "v1.0.0",
+            "--site",
+            str(site),
+        ],
+    )
+
+    assert consumer_sync.main() == 0
+    output = capsys.readouterr().out
+    assert f"SITE={shlex.quote(str(site))}" in output
+    assert 'cd -- "$SITE" || exit' in output
+    assert "node scripts/make-favicons.mjs" in output
+    assert "public/favicon.svg" in output
+    assert "public/favicon.ico" in output
+    assert "public/apple-touch-icon.png" in output
+    assert "public/icon-192.png" in output
+    assert "public/icon-512.png" in output
+    assert "tools/consumer_sync.py" in output
+    assert '--check --site "$SITE"' in output
+    assert "tools/consumer_drift.py" in output
+    assert '--site "$SITE"' in output
+    assert {path: path.read_bytes() for path in favicon_files} == favicon_files
+
+
+def test_apply_returns_failure_when_managed_refresh_is_incomplete(
+    tmp_path, monkeypatch, capsys
+):
+    site = make_site(tmp_path)
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "consumer_sync.py",
+            "--apply",
+            "--offline",
+            "--release-tag",
+            "v1.0.0",
+            "--site",
+            str(site),
+        ],
+    )
+
+    assert consumer_sync.main() == 1
+    output = capsys.readouterr().out
+    assert "FAIL  public/brand/logo.svg" in output
+    assert "FAIL  public/brand/og.jpg" in output
 
 
 def test_logo_copies_require_exact_bytes_and_apply_refreshes_only_drift(

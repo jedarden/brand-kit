@@ -367,18 +367,19 @@ def _image_check(
             }
         expected = expected.resize(actual.size, Image.Resampling.LANCZOS)
     difference = ImageChops.difference(actual, expected)
-    means = ImageStat.Stat(difference).mean
+    channel_means = ImageStat.Stat(difference).mean
+    mean_luma = ImageStat.Stat(difference.convert("L")).mean[0]
     metrics = {
-        "mean_luma": round(means[0], 4),
-        "max_channel": round(max(means), 4),
+        "mean_luma": round(mean_luma, 4),
+        "max_channel": round(max(channel_means), 4),
         "observed_size": list(actual.size),
         "expected_size": list(expected_size),
     }
-    if means[0] <= tolerance:
+    if mean_luma <= tolerance:
         return {"status": "current", **metrics}
     return {
         "status": "stale",
-        "reason": f"mean luma difference {means[0]:.4f} exceeds {tolerance:g}",
+        "reason": f"mean luma difference {mean_luma:.4f} exceeds {tolerance:g}",
         **metrics,
     }
 

@@ -322,8 +322,9 @@ derives it automatically.
 ADR-2 made stale consumer copies detectable with a helper command, but its
 operational consequence still depended on a human remembering to run that
 command. A release can therefore land successfully while
-`jedarden.com/public/brand/`, the deployed OG image, or the manually uploaded
-GitHub avatar remains on an older release. The detector must answer the
+`jedarden.com/public/brand/`, its site-owned favicon outputs, the deployed OG
+image, or the manually uploaded GitHub avatar remains on an older release. The
+detector must answer the
 question without granting the brand-kit pipeline permission to mutate another
 repository or a platform profile.
 
@@ -343,10 +344,10 @@ The detector:
    draft, malformed, or inaccessible record is indeterminate.
 2. Requires the brand-kit checkout to be the selected release tag and records
    SHA-256 digests for canonical inputs.
-3. Byte-compares jedarden.com's logo copies, compares its hero JPEGs against
-   release-generated crops, compares the live OG image directly against the
-   release crop, and perceptually compares the known live GitHub avatar with
-   the release avatar.
+3. Byte-compares jedarden.com's logo copies and `favicon.svg`, compares its
+   three favicon PNGs and two hero JPEGs against release-generated reference
+   assets, compares the live OG image directly against the release crop, and
+   perceptually compares the known live GitHub avatar with the release avatar.
 4. Emits human-readable output and a JSON report, returning `0` only for a
    fully current audit, `1` for confirmed stale consumers, and `2` for any
    indeterminate check. Network failures and unavailable live assets cannot be

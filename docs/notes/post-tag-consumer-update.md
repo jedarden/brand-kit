@@ -30,9 +30,10 @@ checklist and is intended for a scheduler or a release event:
 
 The detector resolves the exact published release, checks that the brand-kit
 checkout is at that tag, hashes the canonical inputs, and compares the
-jedarden.com logo copies, both hero JPEGs, the live
-`https://jedarden.com/brand/og.jpg`, and the known live GitHub profile avatar.
-The live comparisons use the release source directly rather than trusting the
+jedarden.com logo copies, both hero JPEGs, the four site favicon outputs, the
+live `https://jedarden.com/brand/og.jpg`, and the known live GitHub profile
+avatar. The favicon checks make a stale regenerated output fail the audit; the
+live comparisons use the release source directly rather than trusting the
 site checkout, so a stale local copy cannot make a stale deployed image look
 current. Exit `0` means every check is current, `1` reports confirmed drift, and
 `2` reports an indeterminate audit; network failures and skipped checks are
@@ -59,15 +60,16 @@ its trigger source together without granting the detector write credentials.
 | | `public/brand/og.jpg` | recompressed JPEG from `source/hero.png` — same crop as `banners/open-graph-1200x630.png` (1200×630, `fy=0.45`), JPEG quality 88; OG card for the `/brand` page |
 | | `src/assets/brand-hero.jpg` | recompressed JPEG from `source/hero.png` at native 1536×1024, quality 88; the `/brand` page hero, served through Astro's `/_astro` pipeline. (plan.md's "`hero.jpg`" refers to this file — no `public/brand/hero.jpg` exists; the URL 404s live.) |
 | `github.com/jedarden` | profile avatar | manual upload of `avatars/github-460.png`. GitHub recompresses on serve, so equality is perceptual, never byte-exact |
-| `jedarden.com` favicon set *(related, manual)* | `public/favicon.svg`, `public/apple-touch-icon.png`, `public/icon-192.png`, `public/icon-512.png` | derived from `public/brand/logo.svg` by jedarden.com's own tooling (its plan P1.6). Not touched by our script — refresh there if the **logo** ever changes |
+| `jedarden.com` favicon set *(site-owned)* | `public/favicon.svg`, `public/apple-touch-icon.png`, `public/icon-192.png`, `public/icon-512.png` | generated from `public/brand/logo.svg` by `node scripts/make-favicons.mjs` in jedarden.com. `consumer_sync.py` copies the logo first but deliberately does not regenerate these files; the read-only drift detector verifies all four |
 
 ## The workflow
 
 Prereqs: a published `vX.Y.Z` entry in Forgejo's **Releases** tab; a **clean**
 brand-kit checkout checked out at that exact tag; the jedarden.com checkout
-(default `~/jedarden.com`, else `--site <path>`); Pillow (the README's pinned
-`.venv/bin/python` is fine — the compare runs on tolerance, so build flavor
-doesn't matter here); and network access for the release-record and live checks.
+(default `~/jedarden.com`, else `--site <path>`) with its Node dependencies
+installed when the logo changes; Pillow (the README's pinned `.venv/bin/python`
+is fine — the compare runs on tolerance, so build flavor doesn't matter here);
+and network access for the release-record and live checks.
 If Forgejo requires API authentication, export a read-only API token as
 `FORGEJO_TOKEN` before running the sync. Never put the token in this repository
 or pass it on the command line.
@@ -85,6 +87,7 @@ Every command must exit 0 before continuing:
 
 ```bash
 VERSION=vX.Y.Z
+SITE="${SITE:-$HOME/jedarden.com}"
 git fetch origin "refs/tags/$VERSION:refs/tags/$VERSION"
 test "$(git rev-parse "$VERSION^{commit}")" = \
   "$(git ls-remote --exit-code origin "refs/tags/$VERSION^{}" | cut -f1)"
@@ -98,7 +101,8 @@ GitHub Release object; Forgejo is the sole release record.
 
 1. **Refresh the jedarden.com copies:**
    ```bash
-   python3 tools/consumer_sync.py --release-tag "$VERSION" --apply
+   .venv/bin/python tools/consumer_sync.py --release-tag "$VERSION" \
+     --site "$SITE" --apply
    ```
    The release-record check runs before this command touches the checkout. If it
    fails, publish the Forgejo Release or fix API access and run it again.
@@ -106,43 +110,57 @@ GitHub Release object; Forgejo is the sole release record.
    from `source/hero.png`. Files already in sync are left untouched, so the
    resulting site diff contains only what actually changed.
 
-2. **Commit and push in jedarden.com** (the script prints the exact commands):
+2. **If the logo changed, refresh the site-owned favicon set.** Run the
+   consumer repository's own command after step 1 has copied the new
+   `public/brand/logo.svg`:
    ```bash
    (
-     cd ~/jedarden.com
-     git status                 # review — should be exactly the 2-4 brand files
-     git add public/brand src/assets
+     cd -- "$SITE" || exit
+     node scripts/make-favicons.mjs
+   )
+   ```
+   This site-side command is the regeneration owner: it uses jedarden.com's
+   pinned Node dependencies and writes `public/favicon.svg`,
+   `public/apple-touch-icon.png`, `public/icon-192.png`, `public/icon-512.png`,
+   and `public/favicon.ico`. `consumer_sync.py` intentionally does not write
+   these site-owned outputs. A hero-only release skips this step.
+
+3. **Commit and push in jedarden.com:**
+   ```bash
+   (
+     cd -- "$SITE" || exit
+     git status                 # review — only the expected brand files
+     git add public/brand src/assets public/favicon.svg public/favicon.ico \
+       public/apple-touch-icon.png public/icon-192.png public/icon-512.png
      git commit -m 'chore(brand): sync to brand-kit @vX.Y.Z'
      git push                    # Cloudflare Pages deploys on push
    )
    ```
-   The subshell leaves the brand-kit checkout as the current directory. The
-   `@vX.Y.Z` in the commit message is the provenance record the hand-copy
-   process never had.
+   The generator also rewrites `public/favicon.ico`, so stage it with the four
+   named PNG/SVG outputs. The subshell leaves the brand-kit checkout as the
+   current directory. The `@vX.Y.Z` commit message is the provenance record.
 
-3. **Re-verify after the deploy lands:**
+4. **Re-verify after the deploy lands:**
    ```bash
-   python3 tools/consumer_sync.py --release-tag "$VERSION" --check  # must be all-PASS
+   .venv/bin/python tools/consumer_sync.py --release-tag "$VERSION" \
+     --site "$SITE" --check
+   .venv/bin/python tools/consumer_drift.py --release-tag "$VERSION" --site "$SITE"
    ```
-   `--check` compares the site copies against this checkout **and** fetches the
-   live `https://jedarden.com/brand/og.jpg` to confirm the Pages build actually
-   deployed. Live checks are skipped offline or on fetch failure — a `SKIP`
-   line means that verification did **not** happen; don't tick the box until a
-   re-run shows `PASS` (or pass `--offline` only when you genuinely intend to
-   defer the live half).
+   Both commands must exit 0. `consumer_sync.py` checks its managed logo/hero
+   copies and the live OG image. `consumer_drift.py` is the stale-output gate
+   for `favicon.svg`, `apple-touch-icon.png`, `icon-192.png`, and
+   `icon-512.png`; it also checks the checkout and live resources. A favicon
+   line reported `STALE` means the site generator did not produce current
+   outputs: rerun step 2, commit and push the result, then rerun this step.
+   Network failures or skipped live resources are indeterminate, not a pass.
 
-4. **Re-verify the GitHub profile avatar.** Same `--check` run covers it: it
-   downloads the live avatar and compares against `avatars/github-460.png`
-   with a recompression tolerance (mean luma diff ≤ 8; the identical image
-   measures ≈ 3.3 through GitHub's re-encode). The avatar is set outside any
-   build system and **GitHub has no API for uploading it** — if the check
-   reports `STALE`, upload `avatars/github-460.png` by hand at
-   *Settings → Public profile → Edit avatar*, then re-run `--check`.
-
-5. **If the logo changed** (not just the hero): also regenerate jedarden.com's
-   favicon set from the refreshed `public/brand/logo.svg` using that repo's own
-   tooling — see the consumer inventory row above. Hero-only releases skip
-   this step.
+5. **Re-verify the GitHub profile avatar.** Both commands above cover it: they
+   download the live avatar and compare against `avatars/github-460.png` with a
+   recompression tolerance (mean luma diff ≤ 8; the identical image measures
+   ≈ 3.3 through GitHub's re-encode). The avatar is set outside any build
+   system and **GitHub has no API for uploading it** — if the check reports
+   `STALE`, upload `avatars/github-460.png` by hand at *Settings → Public
+   profile → Edit avatar*, then re-run both commands.
 
 6. **Record the verification** in this repo's `CHANGELOG.md` under the release,
    date and result, mirroring v1.0.0's "Verified" section. The last-verified
@@ -151,16 +169,21 @@ GitHub Release object; Forgejo is the sole release record.
 
 ## What "in sync" means per asset
 
-- **Logo copies** — byte-identical. Pixels matching isn't the bar: the whole
-  point is that the consumer's copy provably came from the tagged release, and
-  e.g. this repo's oxipng pass made byte-identical-pixels/byte-different-files
-  the *first* thing the check ever caught (site copy 2026-05-22 vs the
-  optimized v1.0.0 output). Byte equality is the honest staleness test.
+- **Logo copies and `favicon.svg`** — byte-identical. Pixels matching isn't
+  the bar for the logo copies: the whole point is that the consumer's copy
+  provably came from the tagged release, and e.g. this repo's oxipng pass made
+  byte-identical-pixels/byte-different-files the *first* thing the check ever
+  caught (site copy 2026-05-22 vs the optimized v1.0.0 output). The site copies
+  `favicon.svg` directly from its refreshed logo, so exact bytes are expected.
+- **Favicon PNGs** — decoded pixel compare against the corresponding committed
+  `favicon/` derivative, mean luma diff ≤ 1.0. Bytes are not equal because the
+  release references use pinned resvg/Pillow while jedarden.com uses its pinned
+  Sharp renderer; dimensions must match.
 - **Hero JPEGs** — pixel compare against the freshly cropped source, mean luma
   diff ≤ 3.0. Tolerance, not bytes, because JPEG decodes vary slightly across
   Pillow builds; a just-applied file measures ≈ 1.5 (the codec's own loss).
 - **Live GitHub avatar** — perceptual, tolerance ≤ 8.0, because GitHub
-  re-encodes on serve (see step 4).
+  re-encodes on serve (see step 5).
 
 ## Known state at last run (2026-09-15, all-PASS after the first executed sync)
 
@@ -177,11 +200,12 @@ GitHub Release object; Forgejo is the sole release record.
 
 ## Non-goals
 
-- Not automating the jedarden.com commit/push — that's a different repo with
-  its own review flow, and plan.md explicitly scopes migrating consumers out
-  of brand-kit beads. The script refreshes files and prints the finish-by-hand
-  commands; it never commits outside this repo.
-- Not automating the avatar upload — GitHub offers no API for it (step 4).
+- Not automating favicon generation or the jedarden.com commit/push. Favicon
+  rendering stays in the consumer's Node toolchain, and committing belongs to
+  a different repo with its own review flow. `consumer_sync.py` refreshes its
+  managed files and prints the site-owned generator plus finish-by-hand
+  commands; it never runs Node or commits outside this repo.
+- Not automating the avatar upload — GitHub offers no API for it (step 5).
 - If consumers multiply past jedarden.com + platform profiles, revisit
   ADR-1's deferred CDN-hotlink option (`@vX.Y.Z` hotlinks would delete this
   checklist); with one web consumer it stays cheaper to run the script.

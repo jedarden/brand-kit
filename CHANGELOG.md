@@ -15,6 +15,10 @@ All notable changes to the brand kit are documented in this file.
   the live OG image, and the known GitHub profile avatar; the daily Argo
   `CronWorkflow` source is `automation/brand-kit-consumer-drift-cronworkflow.yml`
   and has no consumer-write step
+- Site-owned favicon refresh path: the post-tag workflow runs
+  `node scripts/make-favicons.mjs` in jedarden.com after a logo sync and before
+  its commit, while `consumer_drift.py` detects stale `favicon.svg`,
+  `apple-touch-icon.png`, `icon-192.png`, and `icon-512.png` outputs
 
 ### Changed
 - `tools/consumer_sync.py` now requires a matching, published (non-draft) Forgejo

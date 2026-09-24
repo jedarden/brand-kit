@@ -27,6 +27,12 @@ Consumers handled:
                                  avatars/github-460.png (GitHub recompresses on
                                  serve, so this is a perceptual compare)
 
+Site-owned favicon refresh:
+  node scripts/make-favicons.mjs
+                                 run in jedarden.com after copying a changed
+                                 logo; consumer_sync.py deliberately does not
+                                 regenerate or overwrite these files
+
 Modes:
   --check  verify only (default); exits 1 on any stale/mismatched consumer
   --apply  refresh the jedarden.com checkout in place (never commits), then verify
@@ -45,6 +51,7 @@ import argparse
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -322,24 +329,37 @@ def main():
     print(f"brand-kit: {ROOT} @ {tag}")
     print(f"consumer:  {args.site} (mode: {'apply' if args.apply else 'check'})\n")
 
-    ok = True
+    local_ok = True
     print("logo copies (byte-identical required):")
-    ok &= check_copies(args.site, args.apply)
+    local_ok &= check_copies(args.site, args.apply)
     print("\nhero derivatives (regenerated from source/hero.png):")
-    ok &= check_hero_derivatives(args.site, args.apply)
+    local_ok &= check_hero_derivatives(args.site, args.apply)
     print("\nresources set outside any build system (verify only):")
-    ok &= check_live_avatar(args.offline)
-    ok &= check_live_og(args.site, args.offline)
+    live_ok = check_live_avatar(args.offline)
+    live_ok &= check_live_og(args.site, args.offline)
 
     print()
     if args.apply:
+        quoted_tag = shlex.quote(tag)
+        commit_message = shlex.quote(f"chore(brand): sync to brand-kit @{tag}")
+        python = shlex.quote(sys.executable)
         print("Applied. Finish by hand:")
-        print(f"  cd {args.site} && git status            # review the refreshed files")
-        print(f"  git add public/brand src/assets && git commit -m "
-              f"'chore(brand): sync to brand-kit @{tag}'")
-        print("  git push                                # Cloudflare Pages deploys on push")
-        print(f"  python3 {ROOT / 'tools/consumer_sync.py'} --release-tag {tag} --check   # must be all-PASS after deploy")
-        return 0
+        print(f"  SITE={shlex.quote(str(args.site))}")
+        print("  (")
+        print('    cd -- "$SITE" || exit')
+        print("    git status                 # review the refreshed files")
+        print("    node scripts/make-favicons.mjs  # if the logo changed; site-owned")
+        print("    git add public/brand src/assets public/favicon.svg public/favicon.ico "
+              "public/apple-touch-icon.png public/icon-192.png public/icon-512.png")
+        print(f"    git commit -m {commit_message}")
+        print("    git push                    # Cloudflare Pages deploys on push")
+        print("  )")
+        print(f"  {python} {ROOT / 'tools/consumer_sync.py'} --release-tag {quoted_tag} "
+              "--check --site \"$SITE\"")
+        print(f"  {python} {ROOT / 'tools/consumer_drift.py'} --release-tag {quoted_tag} "
+              "--site \"$SITE\"   # both must be all-CURRENT after deploy")
+        return 0 if local_ok else 1
+    ok = local_ok and live_ok
     print("All consumer copies in sync." if ok else
           "Consumer drift found — see the STALE/FAIL lines above, or the checklist in "
           "docs/notes/post-tag-consumer-update.md.")

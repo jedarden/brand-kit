@@ -178,9 +178,10 @@ pipeline instead of a manual after-step.
 ## Downstream consumers (post-tag sync)
 
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`
-(logo copies + recompressed hero JPEGs) and the GitHub profile avatar. CI here
-can't see them go stale, so the repository now ships a read-only detector as
-well as the remediation helper. After publishing a Forgejo Release, check out
+(logo copies + recompressed hero JPEGs), jedarden.com's site-owned favicon
+outputs, and the GitHub profile avatar. CI here can't see them go stale, so the
+repository now ships a read-only detector as well as the remediation helper.
+After publishing a Forgejo Release, check out
 its exact tag and run:
 
 ```bash
@@ -190,16 +191,23 @@ VERSION=vX.Y.Z
 ```
 
 `tools/consumer_drift.py` uses the published Forgejo release record, reports
-SHA-256 digests for canonical inputs, compares the four documented jedarden.com
-copies, and compares the live OG image and GitHub profile avatar directly with
-the selected release. It never applies changes, commits, or pushes. Exit `0`
-means current, `1` means confirmed stale consumers, and `2` means the audit was
+SHA-256 digests for canonical inputs, compares the eight documented
+jedarden.com outputs (two logos, two hero JPEGs, and four favicon outputs), and
+compares the live OG image and GitHub profile avatar directly with the selected
+release. It never applies changes, commits, or pushes. Exit `0` means current,
+`1` means confirmed stale consumers, and `2` means the audit was
 indeterminate (for example, a network or release-record failure). Set
 `FORGEJO_TOKEN` to a read-only Forgejo API token when the instance requires
 authentication. `--print-release-tag` resolves the newest stable published
 release for a scheduler. If the detector is newer than the tag under audit, use
 `--source-root <release-checkout>` so the tool code stays current while the
 compared inputs come from the published tag.
+
+Favicon generation remains site-owned: after `consumer_sync.py --apply` refreshes
+a changed logo, run `node scripts/make-favicons.mjs` from jedarden.com before
+committing its site diff. The command uses that repository's Sharp toolchain;
+`consumer_drift.py` verifies `favicon.svg`, `apple-touch-icon.png`,
+`icon-192.png`, and `icon-512.png` against the tagged brand-kit derivatives.
 
 The daily Argo `CronWorkflow` source is
 `automation/brand-kit-consumer-drift-cronworkflow.yml`; it clones the exact
