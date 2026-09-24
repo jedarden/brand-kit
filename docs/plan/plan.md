@@ -11,30 +11,35 @@ low-churn asset repo.
 
 ## What this repo ships
 
-Two canonical sources (`source/logo.svg`, `source/hero.png`) and every
-per-platform derived asset rendered from them (avatars, banners, favicons,
-logo masters — 30 files, ~14MB). There is no running service, API, or k8s
-workload; the "deployment" surface is: (1) the files as committed to this
-repo, referenced directly by consumers, and (2) copies hand-placed into
-downstream repos (confirmed: `jedarden.com/public/brand/` — `logo.svg` and
-`logo-512.png` are currently byte-identical to this repo's `logo/` output;
-`hero.jpg`/`og.jpg` are manually recompressed derivatives). The GitHub
-profile avatar for `jedarden` is confirmed live-serving this repo's
-`avatars/github-460.png` (verified 2026-07-20 by diffing the live
-`avatars.githubusercontent.com` image against the committed file — same
-pixels, GitHub-recompressed).
+Three authoritative artwork sources drive the platform assets:
+`source/logo.svg` for the opaque vector logo, the independently maintained
+`source/logo-transparent.svg` for transparent variants, and `source/hero.png`
+for banners/covers. `source/logo.png` is preserved provenance, is copied to
+`logo/logo-original.png`, and may explicitly replace the opaque SVG through
+`tools/trace_logo.py`; it is not the source used for normal vector rendering
+and there is no raster fallback. The build produces 37 asset files plus
+`palette.json`. There is no running service, API, or k8s workload; the
+"deployment" surface is: (1) the files as committed to this repo, referenced
+directly by consumers, and (2) copies hand-placed into downstream repos
+(confirmed: `jedarden.com/public/brand/` — `logo.svg` and `logo-512.png` are
+currently byte-identical to this repo's `logo/` output; `hero.jpg`/`og.jpg` are
+manually recompressed derivatives). The GitHub profile avatar for `jedarden`
+is confirmed live-serving this repo's `avatars/github-460.png` (verified
+2026-07-20 by diffing the live `avatars.githubusercontent.com` image against
+the committed file — same pixels, GitHub-recompressed).
 
 ## ADR-1: 2026-07-20 — CI-verified regeneration and versioned releases as the distribution contract
 
 ### Context
 
-`tools/build_assets.py` and `tools/trace_logo.py` are the only thing standing
-between `source/logo.svg` / `source/hero.png` and the 30 committed derived
-files. Nothing enforces that the committed PNGs actually match what those
-scripts would produce from the current source — there is no CI in this repo
-at all (no `.github/`, no Argo WorkflowTemplate, confirmed by search). It is
-entirely possible to hand-edit a derived PNG, or edit `source/logo.svg`
-without re-running the build, and nothing would catch the drift.
+`tools/build_assets.py` is the only thing standing between the authoritative
+artwork sources and the 37 committed asset files. `tools/trace_logo.py` is a
+separate raster-to-vector replacement operation, not part of the normal build.
+At the time of this decision, nothing enforced that the committed assets
+matched what the scripts produced from the current source — there was no CI in
+this repo yet (no `.github/`, no Argo WorkflowTemplate). It was entirely
+possible to hand-edit a derived PNG, or edit `source/logo.svg` without
+re-running the build, and nothing caught the drift.
 
 Separately, downstream consumers currently get brand assets by manual
 copy-paste of whatever `main` looks like at the moment someone remembers to
@@ -51,10 +56,12 @@ existing as a single source of truth.
 ### Decision
 
 1. Add a CI check (Argo Workflow, per this workspace's Argo-only CI policy —
-   GitHub Actions stay disabled) that runs `tools/build_assets.py` (and
-   `tools/trace_logo.py` when `source/logo.png` changes) in a clean checkout
-   and fails the run if the regenerated files differ from what's committed.
-   This turns "did you remember to re-run the build script" from a trust-based
+   GitHub Actions stay disabled) that runs `tools/build_assets.py` from the
+   authoritative sources in a clean checkout and fails the run if the
+   regenerated files differ from what's committed. The regen invariant is
+   build-only: a raster diff does not change which source is authoritative, and
+   an explicit raster replacement is committed before that build check. This
+   turns "did you remember to re-run the build script" from a trust-based
    README instruction into an enforced invariant.
 2. Once that check is green, publish releases on Forgejo for commits that
    change `source/` or the derived output. A release is complete only when an
@@ -136,9 +143,10 @@ a second release record.
 
 ### Consequences
 
-- Any edit to `source/logo.svg` / `source/hero.png` that isn't followed by
-  re-running the build script and committing the results now gets caught by
-  CI before it lands, instead of silently diverging.
+- Any edit to `source/logo.svg`, `source/logo-transparent.svg`, or
+  `source/hero.png` that isn't followed by re-running the build script and
+  committing the results now gets caught by CI before it lands, instead of
+  silently diverging.
 - Consuming repos get an explicit version to pin to and a changelog to check,
   instead of an unrecorded copy-paste timestamp.
 - Forgejo owns the release record while GitHub remains a read-only distribution
@@ -238,4 +246,71 @@ purpose.
 - Scope boundary maintained: this repo ships the checklist and script; actually
   running them mutates `jedarden.com`, which remains outside brand-kit beads
   per ADR-1's scope note.
+
+## ADR-3: 2026-09-23 — SVG-first logo source and guarded raster trace
+
+### Context
+
+The repository's actual build had an SVG-first implementation:
+`build_assets.py` renders opaque logo assets from `source/logo.svg`, while
+`source/logo.png` is copied separately as `logo/logo-original.png`. The
+documentation, however, presented `trace_logo.py` beside the normal build and
+invited hand edits to `source/logo.svg`. That left two incompatible claims:
+`source/logo.svg` was editable authoritative artwork, yet running the raster
+tracer would overwrite it directly with no ownership check.
+
+The transparent logo is a separate source of truth. `source/logo-transparent.svg`
+is maintained by removing the background from the opaque artwork; neither script
+derives it automatically.
+
+### Decision
+
+1. `source/logo.svg` is authoritative for the opaque logo. A normal SVG or hero
+   edit runs `build_assets.py`, never `trace_logo.py`.
+   `source/logo.png` remains preserved provenance, produces the original-raster
+   master, and is an input only to an explicitly requested raster-to-vector
+   replacement. `source/logo-transparent.svg` is independently authoritative
+   for transparent outputs.
+2. The hand-edit order is: edit the authoritative source(s), run
+   `build_assets.py`, run `verify_assets.py`, review the complete diff, and
+   commit. Editing `source/logo-transparent.svg` follows the same order.
+3. A PNG-only change that updates `logo/logo-original.png` does not trigger a
+   trace. To replace the vector explicitly, the order is: replace
+   `source/logo.png`; run `trace_logo.py`; review the traced SVG; update
+   `source/logo-transparent.svg` separately if needed; run
+   `build_assets.py` and `verify_assets.py`; review the complete diff; and
+   commit all coupled changes. The trace is part of that explicit transition,
+   not the clean-checkout regen invariant:
+
+   ```bash
+   .venv/bin/python tools/trace_logo.py
+   ```
+
+   ```bash
+   .venv/bin/python tools/build_assets.py
+   .venv/bin/python tools/verify_assets.py
+   ```
+4. `source/logo.svg.sha256` records the digest from the last successful trace.
+   `trace_logo.py` refuses to overwrite an existing SVG whose digest differs
+   and checks that invariant again immediately before replacement, but
+   `build_assets.py` does not read the digest: a deliberately hand-edited SVG
+   remains a valid authoritative build source.
+5. Replacing a modified SVG from the raster is possible only through the
+   explicit `.venv/bin/python tools/trace_logo.py --force` command. A normal
+   trace gives vtracer a temporary output path; the authoritative SVG is not
+   replaced unless that process exits successfully, after which the new digest
+   is written.
+
+### Consequences
+
+- Hand-edited vector work has a separate safe path: authoritative SVG → build.
+  Raster replacement is an explicit, reviewable transition, and a concurrent SVG
+  edit is rechecked before the traced file replaces it.
+- A malformed or missing digest fails closed, so the ordinary trace path cannot
+  silently discard a committed SVG modification.
+- `source/logo.png` is no longer ambiguously described as the logo source of
+  truth, even though it remains build-visible for the original-raster master.
+- Transparent artwork still requires an explicit edit because no trace derives
+  it; this is visible in the documented order rather than hidden in an
+  intermediate-output side effect.
 

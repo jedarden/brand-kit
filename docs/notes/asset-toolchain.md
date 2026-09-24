@@ -26,8 +26,33 @@ installed by `cargo install vtracer@0.6.5`. Do not substitute a pip-installed
 `vtracer` package: that package and build are not covered by this pin.
 
 Both Python entry points use Pillow, so both must run with the venv interpreter.
-The vtracer command is needed only when `source/logo.png` changes; resvg is
-needed whenever the derived assets are regenerated.
+`resvg` is needed whenever derived assets are regenerated. The vtracer command
+is needed only for an explicit raster-to-vector replacement of
+`source/logo.svg`.
+
+## Logo source-of-truth contract
+
+`source/logo.svg` is the authoritative source for the opaque logo. The normal
+build renders avatars, favicons, opaque logo masters, and `logo/logo.svg` from
+that SVG with `resvg`; `source/logo.png` is never a raster fallback.
+`source/logo-transparent.svg` is a separate, hand-maintained authoritative
+source for the transparent logo outputs.
+
+`source/logo.png` has two narrower roles: it is preserved provenance and is
+copied to `logo/logo-original.png`; it may also be the input to an explicit
+`tools/trace_logo.py` run that replaces `source/logo.svg`. The trace is not part
+of the normal build from the authoritative SVG.
+
+`source/logo.svg.sha256` records the digest written by the last successful
+trace. It is overwrite protection, not a build input: `build_assets.py` does
+not require it to match, so intentionally hand-edited SVGs remain valid build
+sources. Before an ordinary trace, `trace_logo.py` fails closed when the digest
+is missing or malformed. It refuses to replace an existing SVG whose digest
+does not match and checks that invariant again immediately before replacement.
+This prevents a later raster change from silently discarding a committed hand
+edit. A missing SVG can be recovered with its recorded digest;
+`trace_logo.py --force` is the explicit escape hatch for deliberately replacing
+a modified SVG from `source/logo.png`.
 
 ## The Pillow build flavor is part of the pin
 
@@ -51,19 +76,50 @@ python3 -m venv .venv
 .venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1
 ```
 
-Then regenerate. Run `trace_logo.py` only when the raster logo changes:
+For a normal edit to `source/logo.svg`, `source/logo-transparent.svg`, or
+`source/hero.png`, skip the trace and run:
 
 ```bash
-.venv/bin/python tools/trace_logo.py
 .venv/bin/python tools/build_assets.py
-git diff --exit-code
+.venv/bin/python tools/verify_assets.py
 ```
 
-The diff must be empty for an already-generated tree; otherwise review and
-commit the changed asset bytes. `tools/build_assets.py` aborts if `resvg` or a
-source file is missing — there is no raster-resize fallback. Fallback output is
-not byte-identical to the vector renders, so silently degrading would make
-every environment produce different bytes for the same commit.
+Review and commit the changed bytes. On an already-generated commit, repeating
+those commands and then running `git diff --exit-code` must produce no diff.
+
+A PNG-only change that is meant to update `logo/logo-original.png` does not
+require a trace; use the normal build commands above. To replace the opaque SVG
+from the original raster, run this explicit transition in order:
+
+1. Replace `source/logo.png`.
+2. Run the trace:
+
+   ```bash
+   .venv/bin/python tools/trace_logo.py
+   ```
+
+3. Review `source/logo.svg`. Update `source/logo-transparent.svg` separately if
+   the transparent artwork changed.
+4. Run the build and verification commands:
+
+   ```bash
+   .venv/bin/python tools/build_assets.py
+   .venv/bin/python tools/verify_assets.py
+   ```
+
+5. Review the complete diff and commit the traced SVG, updated checksum, sources,
+   and generated assets together.
+
+The trace writes `source/logo.svg` and `source/logo.svg.sha256` only. If it
+refuses because the current SVG differs from the recorded digest, either keep
+the SVG and continue from `build_assets.py`, or run
+`.venv/bin/python tools/trace_logo.py --force` only when replacing that SVG is
+intentional, then continue with the same build and verification steps.
+
+`tools/build_assets.py` aborts if `resvg` or a source file is missing — there
+is no raster-resize fallback. Fallback output is not byte-identical to the
+vector renders, so silently degrading would make every environment produce
+different bytes for the same commit.
 
 ## Bumping a pin
 
@@ -72,8 +128,8 @@ All pins move together, in one commit:
 1. Update the table above.
 2. Update the install lines in `brand-kit-ci-workflowtemplate.yml` (they name
    this file in a comment).
-3. Regenerate every asset with the new toolchain (recipe above) and include
-   the full byte diff in the same commit.
+3. Regenerate every asset with the new toolchain (using the applicable sequence
+   above) and include the full byte diff in the same commit.
 4. Push and confirm the CI regen-diff passes.
 
 ## Provenance
@@ -81,7 +137,9 @@ All pins move together, in one commit:
 Every asset byte in the tree as of 2026-09-15 was produced by exactly the
 pinned toolchain above (resvg 0.47.0 + PyPI Pillow 12.1.1 wheel): two
 consecutive regenerations from `source/` were byte-identical, and the
-committed tree matches that output exactly. History before that date was
-generated by unrecorded tool versions (including an era before
-`optimize=True`, and raster-fallback renders before the 2026-05-22
-vectorization) and is not reproducible.
+committed tree matches that output exactly. `source/logo.svg.sha256` records
+the SHA-256 of the existing vtracer 0.6.5 trace. A later successful trace
+updates it; an intentional SVG edit leaves it as a guard marker rather than
+rewriting it by hand. History before 2026-09-15 was generated by unrecorded
+tool versions (including an era before `optimize=True`, and raster-fallback
+renders before the 2026-05-22 vectorization) and is not reproducible.

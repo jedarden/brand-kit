@@ -2,18 +2,21 @@
 """Regenerate every platform asset in the brand kit from the canonical sources.
 
 Sources:
-  source/logo.svg  -- vector cartoon avatar (red polo); rendered crisply at each
-                      target size via resvg.
-  source/hero.png  -- photoreal desk scene (red polo), used for all banners/covers.
+  source/logo.svg             -- authoritative opaque vector logo.
+  source/logo-transparent.svg -- independently maintained transparent logo.
+  source/hero.png             -- authoritative banner/cover raster.
+  source/logo.png             -- original raster copied to logo-original.png.
 
-Profile pictures + favicons come from the logo; banners/covers from the hero.
+Profile pictures + favicons come from the opaque SVG; transparent logo assets
+come from the transparent SVG; banners/covers come from the hero.
 
 Requires the PINNED toolchain recorded in docs/notes/asset-toolchain.md:
 resvg 0.47.0 on PATH and the Pillow 12.1.1 PyPI wheel in `.venv`. There is
 deliberately no raster fallback — output bytes depend on the exact tool versions
 (and for Pillow, the wheel build), so a missing tool aborts the build instead of
-silently producing bytes the CI regen-diff would reject. Regenerate the SVG
-itself with the pinned vtracer 0.6.5 CLI via `.venv/bin/python tools/trace_logo.py`.
+silently producing bytes the CI regen-diff would reject. Only an explicit
+raster-to-vector replacement uses the pinned vtracer 0.6.5 CLI via
+`.venv/bin/python tools/trace_logo.py`.
 
 Run:  .venv/bin/python tools/build_assets.py
 """

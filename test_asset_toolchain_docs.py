@@ -39,3 +39,32 @@ def test_trace_logo_uses_pinned_cargo_vtracer_cli():
     assert "cargo install vtracer@0.6.5" in trace_logo
     assert "PyPI `vtracer`" in toolchain
     assert "PyPI `vtracer`" in trace_logo
+
+
+def test_logo_source_and_regeneration_contract_is_consistent():
+    documents = [
+        (ROOT / path).read_text()
+        for path in (
+            "README.md",
+            "docs/plan/plan.md",
+            "docs/notes/asset-toolchain.md",
+        )
+    ]
+    trace = """```bash
+.venv/bin/python tools/trace_logo.py
+```"""
+    build_verify = """```bash
+.venv/bin/python tools/build_assets.py
+.venv/bin/python tools/verify_assets.py
+```"""
+
+    for document in documents:
+        normalized = "\n".join(line.strip() for line in document.splitlines())
+        assert (
+            "`source/logo.svg` is authoritative" in document
+            or "`source/logo.svg` is the authoritative" in document
+        )
+        assert "`source/logo.svg.sha256`" in document
+        assert ".venv/bin/python tools/trace_logo.py --force" in document
+        assert trace in normalized
+        assert build_verify in normalized
