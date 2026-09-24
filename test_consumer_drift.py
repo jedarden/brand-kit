@@ -1,8 +1,11 @@
+import hashlib
 import io
 import json
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from tools import consumer_drift
@@ -195,6 +198,147 @@ def make_fetcher(root):
     return fetcher
 
 
+def invoke_main(monkeypatch, capsys, root, site, fetch_bytes, extra_args=()):
+    monkeypatch.setattr(consumer_drift, "load_config", lambda path: make_config())
+    monkeypatch.setattr(consumer_drift, "fetch_bytes", fetch_bytes)
+    arguments = [
+        "--source-root",
+        str(root),
+        "--site",
+        str(site),
+        "--release-tag",
+        "v1.0.0",
+        "--json",
+        *extra_args,
+    ]
+    exit_code = consumer_drift.main(arguments)
+    return exit_code, json.loads(capsys.readouterr().out)
+
+
+def test_fetch_release_resolves_an_exact_published_tag_with_auth():
+    calls = []
+    record = {
+        "tag_name": "v1.0.0",
+        "draft": False,
+        "prerelease": False,
+        "published_at": "2026-09-01T00:00:00Z",
+    }
+
+    def fetcher(url, headers=None):
+        calls.append((url, headers))
+        return json.dumps(record).encode()
+
+    resolved = consumer_drift.fetch_release(
+        "v1.0.0", make_config(), token="read-only-token", fetcher=fetcher
+    )
+
+    assert resolved == record
+    assert calls == [
+        (
+            "https://forgejo.example/api/v1/repos/jedarden/brand-kit/releases/tags/v1.0.0",
+            {"Authorization": "token read-only-token"},
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        (
+            {"tag_name": "v1.0.0", "draft": True, "prerelease": False},
+            "not published",
+        ),
+        (
+            {"tag_name": "v1.0.0", "draft": False, "prerelease": True},
+            "prerelease",
+        ),
+        (
+            {"tag_name": "v1.1.0", "draft": False, "prerelease": False},
+            "expected 'v1.0.0'",
+        ),
+    ],
+)
+def test_fetch_release_rejects_non_stable_or_mismatched_records(record, message):
+    with pytest.raises(consumer_drift.ReleaseError, match=message):
+        consumer_drift.fetch_release(
+            "v1.0.0",
+            make_config(),
+            fetcher=lambda url, headers=None: json.dumps(record).encode(),
+        )
+
+
+def test_run_audit_resolves_the_newest_published_release_when_tag_is_omitted(tmp_path):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+    records = [
+        {
+            "tag_name": "nightly",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-09-24T00:00:00Z",
+        },
+        {
+            "tag_name": "v2.0.0",
+            "draft": False,
+            "prerelease": True,
+            "published_at": "2026-09-23T00:00:00Z",
+        },
+        {
+            "tag_name": "v1.1.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-09-22T00:00:00Z",
+        },
+        {
+            "tag_name": "v1.0.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-09-01T00:00:00Z",
+        },
+    ]
+
+    def fetcher(url, headers=None):
+        if "releases?limit=50" in url:
+            return json.dumps(records).encode()
+        return make_fetcher(root)(url, headers)
+
+    report = consumer_drift.run_audit(
+        root=root,
+        site=site,
+        config=make_config(),
+        fetcher=fetcher,
+    )
+
+    assert report["status"] == "current"
+    assert report["release"]["tag"] == "v1.1.0"
+
+
+def test_source_digests_are_exact_hashes_from_the_requested_source_root(tmp_path):
+    root = make_root(tmp_path / "release")
+    site = make_site(root, tmp_path)
+    (root / "source/logo.svg").write_bytes(b"canonical source bytes\x00")
+    config = make_config()
+
+    report = consumer_drift.run_audit(
+        root=root,
+        site=site,
+        config=config,
+        release_tag="v1.0.0",
+        fetcher=make_fetcher(root),
+    )
+
+    expected = [
+        {
+            "path": entry["path"],
+            "role": entry.get("role", "source"),
+            "sha256": hashlib.sha256((root / entry["path"]).read_bytes()).hexdigest(),
+        }
+        for entry in config["source_assets"]
+    ]
+    assert report["source_digests"] == expected
+    assert report["site"]["path"] == str(site.resolve())
+
+
 def test_run_audit_reports_current_without_writing_consumers(tmp_path):
     root = make_root(tmp_path)
     site = make_site(root, tmp_path)
@@ -302,6 +446,141 @@ def test_missing_live_fetch_is_indeterminate_not_a_pass(tmp_path):
     )
     assert avatar["status"] == "unavailable"
     assert "unavailable" in avatar["reason"]
+
+
+def test_run_audit_compares_live_asset_bytes_against_the_release_reference(tmp_path):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+    stale_avatar = image_bytes(Image.new("RGB", (20, 20), (0, 0, 0)))
+    base_fetcher = make_fetcher(root)
+
+    def fetcher(url, headers=None):
+        if "avatars.example" in url:
+            return stale_avatar
+        return base_fetcher(url, headers)
+
+    report = consumer_drift.run_audit(
+        root=root,
+        site=site,
+        config=make_config(),
+        release_tag="v1.0.0",
+        fetcher=fetcher,
+    )
+
+    avatar = next(
+        check for check in report["checks"] if check["asset"] == "github profile avatar"
+    )
+    assert report["status"] == "stale"
+    assert avatar["status"] == "stale"
+    assert avatar["observed_sha256"] == hashlib.sha256(stale_avatar).hexdigest()
+    assert "exceeds" in avatar["reason"]
+
+
+def test_main_returns_zero_for_a_current_release_and_uses_source_root(
+    tmp_path, monkeypatch, capsys
+):
+    root = make_root(tmp_path / "release")
+    site = make_site(root, tmp_path)
+    (root / "source/logo.svg").write_bytes(b"root-specific source")
+
+    exit_code, report = invoke_main(
+        monkeypatch, capsys, root, site, make_fetcher(root)
+    )
+
+    assert exit_code == 0
+    assert report["status"] == "current"
+    assert report["release"]["tag"] == "v1.0.0"
+    assert report["site"]["path"] == str(site.resolve())
+    logo_digest = next(
+        item for item in report["source_digests"] if item["path"] == "source/logo.svg"
+    )
+    assert logo_digest["sha256"] == hashlib.sha256(
+        (root / "source/logo.svg").read_bytes()
+    ).hexdigest()
+
+
+def test_main_returns_one_for_a_confirmed_stale_consumer(tmp_path, monkeypatch, capsys):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+    (site / "public/brand/logo.svg").write_bytes(b"stale")
+
+    exit_code, report = invoke_main(
+        monkeypatch, capsys, root, site, make_fetcher(root)
+    )
+
+    assert exit_code == 1
+    assert report["status"] == "stale"
+    stale = next(
+        check for check in report["checks"] if check["asset"] == "logo.svg"
+    )
+    assert stale["status"] == "stale"
+
+
+def test_main_returns_two_when_release_network_access_fails(
+    tmp_path, monkeypatch, capsys
+):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+
+    def fetcher(url, headers=None):
+        raise urllib.error.URLError("forgejo unavailable")
+
+    exit_code, report = invoke_main(monkeypatch, capsys, root, site, fetcher)
+
+    assert exit_code == 2
+    assert report["status"] == "indeterminate"
+    assert report["checks"] == []
+    assert any("cannot read release" in error for error in report["errors"])
+
+
+def test_main_returns_two_when_live_network_access_fails(
+    tmp_path, monkeypatch, capsys
+):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+    base_fetcher = make_fetcher(root)
+
+    def fetcher(url, headers=None):
+        if "avatars.example" in url:
+            raise urllib.error.URLError("avatar service unavailable")
+        return base_fetcher(url, headers)
+
+    exit_code, report = invoke_main(monkeypatch, capsys, root, site, fetcher)
+
+    assert exit_code == 2
+    assert report["status"] == "indeterminate"
+    live = [
+        check for check in report["checks"] if check["asset"] == "github profile avatar"
+    ][0]
+    assert live["status"] == "unavailable"
+
+
+def test_main_returns_two_when_offline_mode_skips_live_checks(
+    tmp_path, monkeypatch, capsys
+):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+    calls = []
+    base_fetcher = make_fetcher(root)
+
+    def fetcher(url, headers=None):
+        calls.append(url)
+        return base_fetcher(url, headers)
+
+    exit_code, report = invoke_main(
+        monkeypatch, capsys, root, site, fetcher, extra_args=("--offline",)
+    )
+
+    assert exit_code == 2
+    assert report["status"] == "indeterminate"
+    assert calls == [
+        "https://forgejo.example/api/v1/repos/jedarden/brand-kit/releases/tags/v1.0.0"
+    ]
+    assert all(
+        check["status"] == "unavailable"
+        for check in report["checks"]
+        if "url" in check
+    )
 
 
 def test_release_discovery_ignores_drafts_and_waits_for_the_configured_age():
