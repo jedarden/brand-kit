@@ -1,6 +1,8 @@
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
@@ -9,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from tools import consumer_drift
+from tools import consumer_drift, consumer_sync
 
 
 def image_bytes(image, image_format="PNG"):
@@ -199,8 +201,11 @@ def make_fetcher(root):
     return fetcher
 
 
-def invoke_main(monkeypatch, capsys, root, site, fetch_bytes, extra_args=()):
-    monkeypatch.setattr(consumer_drift, "load_config", lambda path: make_config())
+def invoke_main(
+    monkeypatch, capsys, root, site, fetch_bytes, extra_args=(), config=None
+):
+    config = make_config() if config is None else config
+    monkeypatch.setattr(consumer_drift, "load_config", lambda path: config)
     monkeypatch.setattr(consumer_drift, "fetch_bytes", fetch_bytes)
     arguments = [
         "--source-root",
@@ -363,6 +368,201 @@ def test_run_audit_reports_current_without_writing_consumers(tmp_path):
         path: path.read_bytes() for path in site.rglob("*") if path.is_file()
     } == before
     assert all(len(item["sha256"]) == 64 for item in report["source_digests"])
+
+
+def test_release_to_consumer_refresh_only_remediation_writes(
+    tmp_path, monkeypatch, capsys
+):
+    root = make_root(tmp_path)
+    git_identity = [
+        "-c",
+        "user.name=Brand Kit Test",
+        "-c",
+        "user.email=brand-kit@example.invalid",
+    ]
+    git_commands = (
+        ["git", "init", "--quiet", str(root)],
+        ["git", "-C", str(root), "add", "--all"],
+        [
+            "git",
+            "-C",
+            str(root),
+            *git_identity,
+            "commit",
+            "--quiet",
+            "-m",
+            "published release",
+        ],
+        [
+            "git",
+            "-C",
+            str(root),
+            *git_identity,
+            "tag",
+            "--annotate",
+            "v1.0.0",
+            "--message",
+            "v1.0.0",
+        ],
+    )
+    for command in git_commands:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+
+    site = make_site(root, tmp_path)
+    for relative in ("public/brand/logo.svg", "public/brand/logo-512.png"):
+        (site / relative).write_bytes(b"stale consumer copy")
+    for width, height, _, relative, _ in consumer_sync.HERO_DERIVATIVES:
+        Image.new("RGB", (width, height), (0, 0, 0)).save(
+            site / relative, "JPEG"
+        )
+    sentinel = site / "unrelated.txt"
+    sentinel.write_bytes(b"must not change")
+
+    config = make_config()
+    config["release"]["require_checkout"] = True
+    release_body = json.dumps(
+        {
+            "tag_name": "v1.0.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-09-01T00:00:00Z",
+        }
+    ).encode()
+    base_fetcher = make_fetcher(root)
+    calls = []
+    detector_release_url = consumer_drift.release_url("v1.0.0", config)
+    sync_release_url = consumer_sync.forgejo_release_url("v1.0.0")
+
+    def fetcher(url, headers=None):
+        calls.append(url)
+        if url in {detector_release_url, sync_release_url}:
+            return release_body
+        return base_fetcher(url, headers)
+
+    monkeypatch.setattr(consumer_sync, "ROOT", root)
+    monkeypatch.setattr(consumer_sync, "fetch", fetcher)
+
+    def consumer_snapshot():
+        return {
+            path.relative_to(site): path.read_bytes()
+            for path in site.rglob("*")
+            if path.is_file()
+        }
+
+    protected = {
+        relative: (site / relative).read_bytes()
+        for relative in (
+            "public/favicon.svg",
+            "public/apple-touch-icon.png",
+            "public/icon-192.png",
+            "public/icon-512.png",
+            "unrelated.txt",
+        )
+    }
+    before = consumer_snapshot()
+    stage = "detect"
+    write_events = []
+    original_write_bytes = Path.write_bytes
+    original_write_text = Path.write_text
+    original_save = Image.Image.save
+
+    def record_write_bytes(path, data):
+        write_events.append((stage, "write_bytes", path))
+        return original_write_bytes(path, data)
+
+    def record_write_text(path, *args, **kwargs):
+        write_events.append((stage, "write_text", path))
+        return original_write_text(path, *args, **kwargs)
+
+    def record_image_save(image, destination, *args, **kwargs):
+        write_events.append((stage, "image.save", Path(destination)))
+        return original_save(image, destination, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_bytes", record_write_bytes)
+    monkeypatch.setattr(Path, "write_text", record_write_text)
+    monkeypatch.setattr(Image.Image, "save", record_image_save)
+
+    exit_code, report = invoke_main(
+        monkeypatch, capsys, root, site, fetcher, config=config
+    )
+
+    assert exit_code == 1
+    assert report["status"] == "stale"
+    assert report["release"]["tag"] == "v1.0.0"
+    assert report["release"]["checkout"]["matches"] is True
+    assert (
+        report["release"]["checkout"]["head"]
+        == report["release"]["checkout"]["tag_commit"]
+    )
+    assert {
+        check["asset"] for check in report["checks"] if check["status"] == "stale"
+    } == {"logo.svg", "logo-512.png", "og.jpg", "brand-hero.jpg"}
+    assert all(
+        check["status"] == "current" for check in report["checks"] if "url" in check
+    )
+    assert write_events == []
+    assert consumer_snapshot() == before
+
+    stage = "remediate"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "consumer_sync.py",
+            "--apply",
+            "--offline",
+            "--release-tag",
+            "v1.0.0",
+            "--site",
+            str(site),
+        ],
+    )
+
+    assert consumer_sync.main() == 0
+    remediation_output = capsys.readouterr().out
+    assert "PASS  Forgejo release: v1.0.0 is published" in remediation_output
+    assert remediation_output.count("SYNC  ") == 4
+    assert write_events == [
+        ("remediate", "write_bytes", site / "public/brand/logo.svg"),
+        ("remediate", "write_bytes", site / "public/brand/logo-512.png"),
+        ("remediate", "image.save", site / "public/brand/og.jpg"),
+        ("remediate", "image.save", site / "src/assets/brand-hero.jpg"),
+    ]
+    assert (site / "public/brand/logo.svg").read_bytes() == (
+        root / "logo/logo.svg"
+    ).read_bytes()
+    assert (site / "public/brand/logo-512.png").read_bytes() == (
+        root / "logo/logo-512.png"
+    ).read_bytes()
+    assert {
+        relative: (site / relative).read_bytes() for relative in protected
+    } == protected
+
+    remediation_writes = list(write_events)
+    stage = "reaudit"
+    exit_code, report = invoke_main(
+        monkeypatch, capsys, root, site, fetcher, config=config
+    )
+
+    assert exit_code == 0
+    assert report["status"] == "current"
+    assert report["release"]["tag"] == "v1.0.0"
+    assert report["release"]["checkout"]["matches"] is True
+    assert (
+        report["release"]["checkout"]["head"]
+        == report["release"]["checkout"]["tag_commit"]
+    )
+    assert all(check["status"] == "current" for check in report["checks"])
+    assert write_events == remediation_writes
+    assert {
+        relative: (site / relative).read_bytes() for relative in protected
+    } == protected
+    assert [url for url in calls if "/releases/" in url] == [
+        detector_release_url,
+        sync_release_url,
+        detector_release_url,
+    ]
 
 
 def test_run_audit_reports_stale_copy_and_live_asset_separately(tmp_path):
