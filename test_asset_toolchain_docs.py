@@ -14,7 +14,8 @@ def test_regeneration_commands_use_pinned_venv():
             "tools/verify_assets.py",
         )
     )
-    documented_commands = readme + toolchain + tools
+    local_readme = readme.split("## CI regression gate\n", 1)[0]
+    documented_commands = local_readme + toolchain + tools
 
     assert ".venv/bin/python tools/trace_logo.py" in readme
     assert ".venv/bin/python tools/build_assets.py" in readme
@@ -29,6 +30,25 @@ def test_regeneration_commands_use_pinned_venv():
         in toolchain
     )
     assert "docs/notes/asset-toolchain.md" in readme
+
+
+def test_ci_regression_acceptance_sequence_is_documented():
+    readme = (ROOT / "README.md").read_text()
+    section = readme.split("## CI regression gate\n", 1)[1].split("\n## ", 1)[0]
+    commands = (
+        "cargo install resvg@0.47.0 vtracer@0.6.5",
+        "pip3 install --break-system-packages Pillow==12.1.1 pytest==9.0.2",
+        "python3 tools/verify_assets.py",
+        "python3 -m pytest -q",
+        "python3 tools/build_assets.py",
+        "git diff --exit-code --quiet",
+    )
+
+    positions = [section.index(command) for command in commands]
+    assert positions == sorted(positions)
+    assert "unexpected generated files" in section
+    assert "Argo phase of `Succeeded`" in section
+    assert "not CI acceptance evidence" in section
 
 
 def test_trace_logo_uses_pinned_cargo_vtracer_cli():

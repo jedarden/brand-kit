@@ -5,6 +5,10 @@ All notable changes to the brand kit are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Argo `brand-kit-ci` regression-gate acceptance contract: the workflow installs
+  the pinned toolchain, runs asset verification and the full pytest suite, and
+  fails on test failures, unexpected generated files, or regenerated drift;
+  README CI acceptance logs are the proof for each revision
 - Post-tag consumer-update workflow (ADR-2): `docs/notes/post-tag-consumer-update.md`
   checklist + `tools/consumer_sync.py`, which refreshes `jedarden.com/public/brand/`
   from a release tag (regenerating the hand-recompressed `og.jpg` /

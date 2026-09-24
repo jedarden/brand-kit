@@ -55,14 +55,16 @@ existing as a single source of truth.
 
 ### Decision
 
-1. Add a CI check (Argo Workflow, per this workspace's Argo-only CI policy —
-   GitHub Actions stay disabled) that runs `tools/build_assets.py` from the
-   authoritative sources in a clean checkout and fails the run if the
-   regenerated files differ from what's committed. The regen invariant is
+1. Add a CI gate (Argo Workflow, per this workspace's Argo-only CI policy —
+   GitHub Actions stay disabled) that installs the canonical pinned toolchain,
+   runs `tools/verify_assets.py` and the full pytest suite, then runs
+   `tools/build_assets.py` from the authoritative sources in a clean checkout.
+   The gate fails on a failed install, test or asset verification, an unexpected
+   generated file, or any regenerated tracked-file diff. The regen invariant is
    build-only: a raster diff does not change which source is authoritative, and
    an explicit raster replacement is committed before that build check. This
-   turns "did you remember to re-run the build script" from a trust-based
-   README instruction into an enforced invariant.
+   turns "did you remember to re-run the checks and build script" from a
+   trust-based README instruction into an enforced invariant.
 2. Once that check is green, publish releases on Forgejo for commits that
    change `source/` or the derived output. A release is complete only when an
    annotated `vX.Y.Z` tag has been pushed to the canonical Forgejo remote and a

@@ -177,6 +177,30 @@ optimization happens inside the script (`optimize=True` on every save); if you
 want a stronger compressor, it has to become part of the pinned, CI-replicated
 pipeline instead of a manual after-step.
 
+## CI regression gate
+
+The Argo `brand-kit-ci` WorkflowTemplate in `jedarden/declarative-config`
+(`k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml`) applies the
+pinned toolchain and runs this acceptance sequence in order:
+
+1. Install `resvg@0.47.0` and `vtracer@0.6.5` with
+   `cargo install resvg@0.47.0 vtracer@0.6.5`, then run
+   `pip3 install --break-system-packages Pillow==12.1.1 pytest==9.0.2`.
+2. Run `python3 tools/verify_assets.py`. It must exit `0`, including the exact
+   generated-asset inventory check, so missing or unexpected generated files
+   fail the workflow.
+3. Run the full default suite with `python3 -m pytest -q`. Any test failure
+   exits non-zero and fails the workflow.
+4. Run `python3 tools/build_assets.py` to regenerate every derived asset.
+5. Run `git diff --exit-code --quiet`. A regenerated tracked-file difference
+   exits non-zero and fails the workflow.
+
+The container uses `set -ex`, so an install, verification, test, build, or diff
+failure aborts the Argo run. Acceptance for a revision therefore requires an
+Argo phase of `Succeeded` plus logs showing the verifier, full pytest, build,
+and final no-drift check all reached exit `0`. A local test pass or the mere
+presence of the WorkflowTemplate is not CI acceptance evidence.
+
 ## Downstream consumers (post-tag sync)
 
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`

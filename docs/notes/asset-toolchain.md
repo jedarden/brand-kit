@@ -1,11 +1,14 @@
 # Asset toolchain pins
 
 The committed PNGs in `avatars/`, `banners/`, `favicon/` and `logo/` are
-byte-reproducible only with the exact toolchain below. The CI regen-diff
+byte-reproducible only with the exact toolchain below. The CI regression gate
 (`brand-kit-ci` WorkflowTemplate in `jedarden/declarative-config`,
-`k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml`) installs
-exactly these versions and fails if regenerating produces any diff, so a
-commit whose assets came from a different toolchain is a broken commit.
+`k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml`) installs exactly
+these versions, runs the full pytest suite and `tools/verify_assets.py`, and
+fails on test failures, unexpected generated files, or regenerated diffs, so a
+commit whose assets or checks did not pass this toolchain is a broken commit.
+The ordered commands and required Argo log evidence are documented under
+[CI regression gate](../README.md#ci-regression-gate).
 
 ## Pinned versions (canonical)
 
@@ -131,7 +134,8 @@ All pins move together, in one commit:
    this file in a comment).
 3. Regenerate every asset with the new toolchain (using the applicable sequence
    above) and include the full byte diff in the same commit.
-4. Push and confirm the CI regen-diff passes.
+4. Push and confirm the full CI regression gate passes: asset verification,
+   all pytest tests, and the no-diff check.
 
 ## Provenance
 
