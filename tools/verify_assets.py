@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify that committed assets match every testable claim README.md makes.
 
-Five classes of README-vs-repo drift are checked:
+Six classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
   2. Presence of every repo path README names (plus absence of the file
      it documents as removed).
@@ -11,6 +11,8 @@ Five classes of README-vs-repo drift are checked:
      transparent SVG master has its background removed relative to the
      opaque one.
   5. The names and hexes in palette.json match the README palette table.
+  6. The generated asset inventory is exactly the 37 documented derived
+     assets plus palette.json.
 
 Run: .venv/bin/python tools/verify_assets.py
 Exits 1 on any mismatch, 0 if all checks pass.
@@ -68,6 +70,48 @@ EXPECTED_DIMENSIONS = {
     "logo/logo-1024.png": (1024, 1024),
     "logo/logo-original.png": (640, 640),
 }
+
+GENERATED_ASSET_DIRECTORIES = ("avatars", "banners", "favicon", "logo")
+EXPECTED_ASSETS = frozenset({
+    "avatars/x-400.png",
+    "avatars/linkedin-400.png",
+    "avatars/github-460.png",
+    "avatars/instagram-320.png",
+    "avatars/threads-320.png",
+    "avatars/facebook-320.png",
+    "avatars/youtube-800.png",
+    "avatars/tiktok-200.png",
+    "avatars/mastodon-400.png",
+    "avatars/bluesky-400.png",
+    "avatars/discord-512.png",
+    "banners/x-header-1500x500.png",
+    "banners/linkedin-personal-1584x396.png",
+    "banners/linkedin-company-1128x191.png",
+    "banners/facebook-cover-851x315.png",
+    "banners/facebook-cover-2x-1702x630.png",
+    "banners/youtube-banner-2560x1440.png",
+    "banners/discord-banner-960x540.png",
+    "banners/github-social-1280x640.png",
+    "banners/open-graph-1200x630.png",
+    "banners/twitter-card-1200x628.png",
+    "favicon/favicon-16.png",
+    "favicon/favicon-32.png",
+    "favicon/favicon-48.png",
+    "favicon/favicon-192.png",
+    "favicon/favicon-512.png",
+    "favicon/apple-touch-icon-180.png",
+    "favicon/favicon.ico",
+    "logo/logo-256.png",
+    "logo/logo-512.png",
+    "logo/logo-1024.png",
+    "logo/logo-original.png",
+    "logo/logo-256-transparent.png",
+    "logo/logo-512-transparent.png",
+    "logo/logo-1024-transparent.png",
+    "logo/logo.svg",
+    "logo/logo-transparent.svg",
+})
+EXPECTED_INVENTORY = EXPECTED_ASSETS | {PALETTE_RELPATH}
 
 # Every repo path README.md names that EXPECTED_DIMENSIONS does not
 # already open (a PNG listed there reports MISSING when absent). The
@@ -148,6 +192,52 @@ def verify_dimensions():
             all_match = False
 
     return results, all_match
+
+
+def verify_inventory():
+    """Check the exact generated asset inventory, including palette.json."""
+    expected = set(EXPECTED_INVENTORY)
+    actual = set()
+    errors = []
+
+    for directory in GENERATED_ASSET_DIRECTORIES:
+        root = ROOT / directory
+        if not root.is_dir():
+            continue
+        try:
+            actual.update(
+                path.relative_to(ROOT).as_posix()
+                for path in root.rglob("*")
+                if path.is_file()
+            )
+        except OSError as error:
+            errors.append(f"{directory}: {error}")
+
+    if (ROOT / PALETTE_RELPATH).is_file():
+        actual.add(PALETTE_RELPATH)
+
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    rows = []
+
+    if errors:
+        rows.append(("asset inventory", "read generated files", "ERROR", "; ".join(errors)))
+
+    for relpath in missing:
+        rows.append((relpath, "expected generated file", "MISSING", "✗ MISSING"))
+
+    for relpath in unexpected:
+        rows.append((relpath, "no unexpected generated file", "UNEXPECTED", "✗ UNEXPECTED"))
+
+    if not rows:
+        rows.append((
+            "asset inventory",
+            "37 derived assets + palette.json",
+            f"{len(actual)} files",
+            "✓",
+        ))
+
+    return rows, not errors and not missing and not unexpected
 
 
 def read_readme_palette():
@@ -389,6 +479,7 @@ def main():
 
     sections = [
         ("PNG dimensions vs README table", verify_dimensions()),
+        ("Generated asset inventory", verify_inventory()),
         ("README-named files present", verify_presence()),
         ("Palette vs README table", verify_palette()),
         ("favicon.ico container", verify_favicon_ico()),
