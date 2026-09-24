@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import urllib.error
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -647,31 +648,106 @@ def test_checkout_state_requires_the_selected_tag_when_configured(tmp_path):
         raise AssertionError("a directory without a git checkout must fail closed")
 
 
-def test_inventory_config_is_machine_readable_and_contains_live_profile_asset():
+def test_inventory_config_matches_documented_consumer_inventory():
     config = consumer_drift.load_config()
-    live_names = {entry["name"] for entry in config["live_assets"]}
-    site_assets = {entry["name"]: entry for entry in config["site_assets"]}
-    assert "github profile avatar" in live_names
-    assert config["site_assets"]
-    assert config["site"]["repository"].endswith("jedarden.com.git")
-    assert site_assets["favicon.svg"] == {
-        "name": "favicon.svg",
-        "source": "logo/logo.svg",
-        "path": "public/favicon.svg",
-        "comparison": "bytes",
-    }
-    for name, source in (
-        ("apple-touch-icon.png", "favicon/apple-touch-icon-180.png"),
-        ("icon-192.png", "favicon/favicon-192.png"),
-        ("icon-512.png", "favicon/favicon-512.png"),
-    ):
-        assert site_assets[name] == {
-            "name": name,
-            "source": source,
-            "path": f"public/{name}",
+
+    assert config["site_assets"] == [
+        {
+            "name": "logo.svg",
+            "source": "logo/logo.svg",
+            "path": "public/brand/logo.svg",
+            "comparison": "bytes",
+        },
+        {
+            "name": "logo-512.png",
+            "source": "logo/logo-512.png",
+            "path": "public/brand/logo-512.png",
+            "comparison": "bytes",
+        },
+        {
+            "name": "favicon.svg",
+            "source": "logo/logo.svg",
+            "path": "public/favicon.svg",
+            "comparison": "bytes",
+        },
+        {
+            "name": "apple-touch-icon.png",
+            "source": "favicon/apple-touch-icon-180.png",
+            "path": "public/apple-touch-icon.png",
             "comparison": "image",
             "tolerance": 1.0,
-        }
+        },
+        {
+            "name": "icon-192.png",
+            "source": "favicon/favicon-192.png",
+            "path": "public/icon-192.png",
+            "comparison": "image",
+            "tolerance": 1.0,
+        },
+        {
+            "name": "icon-512.png",
+            "source": "favicon/favicon-512.png",
+            "path": "public/icon-512.png",
+            "comparison": "image",
+            "tolerance": 1.0,
+        },
+        {
+            "name": "og.jpg",
+            "source": "source/hero.png",
+            "path": "public/brand/og.jpg",
+            "comparison": "crop",
+            "tolerance": 3.0,
+            "crop": {"width": 1200, "height": 630, "fy": 0.45},
+        },
+        {
+            "name": "brand-hero.jpg",
+            "source": "source/hero.png",
+            "path": "src/assets/brand-hero.jpg",
+            "comparison": "crop",
+            "tolerance": 3.0,
+            "crop": {"width": 1536, "height": 1024, "fy": 0.0},
+        },
+    ]
+    assert config["live_assets"] == [
+        {
+            "name": "github profile avatar",
+            "consumer": "github.com/jedarden",
+            "source": "avatars/github-460.png",
+            "url": "https://avatars.githubusercontent.com/jedarden",
+            "comparison": "image",
+            "tolerance": 8.0,
+            "resize_reference": True,
+        },
+        {
+            "name": "live open-graph card",
+            "consumer": "jedarden.com live",
+            "source": "source/hero.png",
+            "url": "https://jedarden.com/brand/og.jpg",
+            "comparison": "crop",
+            "tolerance": 3.0,
+            "crop": {"width": 1200, "height": 630, "fy": 0.45},
+        },
+    ]
+    assert config["site"]["repository"] == "https://github.com/jedarden/jedarden.com.git"
+    assert config["live"] == {
+        "og_url": "https://jedarden.com/brand/og.jpg",
+        "avatar_url": "https://avatars.githubusercontent.com/jedarden",
+    }
+
+    source_paths = {entry["path"] for entry in config["source_assets"]}
+    assert all((consumer_drift.ROOT / path).is_file() for path in source_paths)
+    assert {entry["source"] for entry in config["site_assets"]}.issubset(source_paths)
+    assert {entry["source"] for entry in config["live_assets"]}.issubset(source_paths)
+    for entry in config["site_assets"]:
+        path = Path(entry["path"])
+        assert not path.is_absolute()
+        assert ".." not in path.parts
+        assert entry["comparison"] in {"bytes", "image", "crop"}
+    for entry in config["live_assets"]:
+        url = urllib.parse.urlparse(entry["url"])
+        assert url.scheme == "https"
+        assert url.netloc
+        assert entry["comparison"] in {"image", "crop"}
     assert Path("consumer-drift.json").read_text(encoding="utf-8").endswith("\n")
 
 
