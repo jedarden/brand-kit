@@ -5,6 +5,11 @@ All notable changes to the brand kit are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Repeatable Forgejo release-publication workflow: `tools/release_publish.py`
+  creates or verifies the exact annotated tag after a successful CI run,
+  confirms canonical and mirror tag readiness, and records Forgejo as the sole
+  release authority; the operator checklist is
+  `docs/notes/release-publication.md`
 - Argo `brand-kit-ci` regression-gate acceptance contract: the workflow installs
   the pinned toolchain, runs asset verification and the full pytest suite, and
   fails on test failures, unexpected generated files, or regenerated drift;

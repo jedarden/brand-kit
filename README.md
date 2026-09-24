@@ -201,6 +201,26 @@ Argo phase of `Succeeded` plus logs showing the verifier, full pytest, build,
 and final no-drift check all reached exit `0`. A local test pass or the mere
 presence of the WorkflowTemplate is not CI acceptance evidence.
 
+## Forgejo release publication
+
+A pushed tag is not a release. After the Argo `brand-kit-ci` run for the exact
+release commit succeeds, use the repeatable publisher documented in
+[`docs/notes/release-publication.md`](docs/notes/release-publication.md):
+
+```bash
+.venv/bin/python tools/release_publish.py \
+  --tag "$VERSION" \
+  --ci-run "brand-kit-ci/<successful-run-id>"
+```
+
+The publisher requires the exact annotated `vX.Y.Z` tag at `HEAD`, creates or
+reuses the non-draft Forgejo Release, and confirms that the canonical Forgejo
+tag and the read-only GitHub mirror advertise the same peeled commit. It is
+idempotent and never creates a GitHub Release. Wait for its `READY` result and
+run the read-only `--verify-only` form before starting the consumer workflow
+below. Forgejo remains the sole release authority; the mirrored Git tag is only
+a distribution path.
+
 ## Downstream consumers (post-tag sync)
 
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`

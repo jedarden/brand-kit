@@ -81,33 +81,37 @@ a reason to notice when a new one exists.
 
 `origin` is the canonical Forgejo repository at
 `https://git.ardenone.com/jedarden/brand-kit.git`; `github` is its read-only,
-server-side push mirror. After the regen check is green on the exact release
-commit, create and push the annotated tag:
+server-side push mirror. The repeatable operator procedure is
+[`docs/notes/release-publication.md`](notes/release-publication.md), backed by
+`tools/release_publish.py`. It runs only after the `brand-kit-ci` Argo run for
+the exact release commit has succeeded and records that run identifier.
+
+First create and push the annotated tag:
 
 ```bash
 git tag -a vX.Y.Z -m "brand-kit vX.Y.Z"
 git push origin refs/tags/vX.Y.Z
 ```
 
-Then open the repository's **Releases** tab on Forgejo, choose **New
-Release**, select the existing `vX.Y.Z` tag, use that tag as the title, paste
-the corresponding `CHANGELOG.md` section as the release notes, and publish it.
-A pushed Git ref is not a Forgejo Release object, so this explicit publication
-step is required. Do not run `gh release create` or push to `github`: the
-server-side mirror propagates the tag, but release objects are not mirrored and
-Forgejo remains the canonical release record.
-
-After the mirror catches up, both remotes must advertise the peeled tag before
-consumers start the ADR-2 workflow:
+Then publish and verify the exact tag with:
 
 ```bash
-git ls-remote --exit-code origin "refs/tags/vX.Y.Z^{}"
-git ls-remote --exit-code github "refs/tags/vX.Y.Z^{}"
+.venv/bin/python tools/release_publish.py \
+  --tag vX.Y.Z \
+  --ci-run "brand-kit-ci/<successful-run-id>"
 ```
 
-Both commands must exit 0, and the release must appear in Forgejo's
-**Releases** tab. The mirrored GitHub tag is a read-only distribution path, not
-a second release record.
+The publisher refuses a tag that is not annotated, is not at `HEAD`, or is not
+advertised by both remotes. It creates or reuses a non-draft Forgejo Release
+from the exact tag, then queries Forgejo and both remotes again. A published
+tag without the corresponding Forgejo Release is incomplete. Do not run `gh
+release create` or push a release object to `github`: the server-side mirror
+propagates the tag, but release objects are not mirrored and Forgejo remains
+the canonical release record.
+
+Before consumers start ADR-2, run the publisher's read-only
+`--verify-only` form and require its `READY` result. The mirror's peeled tag is
+only a distribution path; it is not a second release record.
 
 > **Follow-through:** the consumer half of this contract — what to do after a
 > Forgejo Release is published so downstream copies actually catch up — is

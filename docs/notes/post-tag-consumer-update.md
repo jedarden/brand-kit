@@ -69,10 +69,23 @@ brand-kit checkout checked out at that exact tag; the jedarden.com checkout
 (default `~/jedarden.com`, else `--site <path>`) with its Node dependencies
 installed when the logo changes; Pillow (the README's pinned `.venv/bin/python`
 is fine — the compare runs on tolerance, so build flavor doesn't matter here);
-and network access for the release-record and live checks.
-If Forgejo requires API authentication, export a read-only API token as
-`FORGEJO_TOKEN` before running the sync. Never put the token in this repository
-or pass it on the command line.
+and network access for the release-record and live checks. Before touching a
+consumer, run the release publisher's read-only gate from
+[`release-publication.md`](release-publication.md):
+
+```bash
+.venv/bin/python tools/release_publish.py \
+  --tag "$VERSION" \
+  --ci-run "brand-kit-ci/<successful-run-id>" \
+  --verify-only
+```
+
+Its `READY` result confirms the published Forgejo record and the exact tag on
+both the canonical remote and the read-only mirror. If it does not print
+`READY`, stop: do not synchronize from `main` or from a tag that is still
+propagating. If Forgejo requires API authentication, export a read-only API
+token as `FORGEJO_TOKEN` before running the sync. Never put the token in this
+repository or pass it on the command line.
 
 In this workspace, `origin` is canonical Forgejo and `github` is the read-only
 push mirror. Fetch the release tag from Forgejo, require both remotes to
