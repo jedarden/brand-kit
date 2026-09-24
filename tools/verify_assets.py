@@ -10,7 +10,8 @@ Six classes of README-vs-repo drift are checked:
   4. The transparent variants have full alpha channels, and the
      transparent SVG master has its background removed relative to the
      opaque one.
-  5. The names and hexes in palette.json match the README palette table.
+  5. The required names and exact six-digit hex values in palette.json match
+     the canonical palette table.
   6. The generated asset inventory is exactly the 37 documented derived
      assets plus palette.json.
 
@@ -27,6 +28,14 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 PALETTE_RELPATH = "palette.json"
+CANONICAL_PALETTE = {
+    "Polo Red": "#DC3127",
+    "Ink": "#0A0A08",
+    "Canvas Cream": "#EFDECC",
+    "Skin Tan": "#F5B079",
+    "Control-Room Black": "#070506",
+}
+HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 # Expected dimensions mirror the README.md table
 # Format: {path: (expected_width, expected_height)}
@@ -248,7 +257,12 @@ def read_readme_palette():
     start = text.find("## Palette")
     if start == -1:
         return {}
-    end = text.find("\n## ", start + len("## Palette"))
+    next_heading = re.search(r"^#{1,6}\s+", text[start + len("## Palette"):], re.MULTILINE)
+    end = (
+        start + len("## Palette") + next_heading.start()
+        if next_heading is not None
+        else -1
+    )
     section = text[start:] if end == -1 else text[start:end]
     palette = {}
     for line in section.splitlines():
@@ -256,39 +270,102 @@ def read_readme_palette():
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) < 2:
+            raise ValueError("malformed palette table row")
+        if cells[:2] == ["Name", "Hex"]:
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
             continue
         name, value = cells[0], cells[1]
-        if re.fullmatch(r"`#[0-9A-Fa-f]{6}`", value):
-            palette[name] = value[1:-1]
+        if not re.fullmatch(r"`#[0-9A-Fa-f]{6}`", value):
+            raise ValueError(f"malformed palette color for {name or 'unnamed entry'}")
+        if name in palette:
+            raise ValueError(f"duplicate palette name: {name}")
+        palette[name] = value[1:-1]
+    return palette
+
+
+def _palette_with_unique_keys(pairs):
+    palette = {}
+    for name, value in pairs:
+        if name in palette:
+            raise ValueError(f"duplicate palette name: {name}")
+        palette[name] = value
     return palette
 
 
 def verify_palette():
-    claim = "names and hexes match README palette table"
+    claim = "names and exact hexes match the canonical palette"
     path = ROOT / PALETTE_RELPATH
     if not path.exists():
         return [(PALETTE_RELPATH, claim, "MISSING", "file not found")], False
 
     try:
-        actual = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        return [(PALETTE_RELPATH, claim, "ERROR", str(e))], False
+        actual = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_palette_with_unique_keys,
+        )
+    except (OSError, UnicodeError, ValueError) as e:
+        return [(PALETTE_RELPATH, claim, "ERROR", f"invalid JSON: {e}")], False
 
     try:
-        expected = read_readme_palette()
-    except OSError as e:
+        documented = read_readme_palette()
+    except (OSError, UnicodeError, ValueError) as e:
         return [(PALETTE_RELPATH, claim, "README ERROR", str(e))], False
 
     if not isinstance(actual, dict):
         return [(PALETTE_RELPATH, claim, type(actual).__name__, "✗ not an object")], False
-    if not expected:
+    if not documented:
         return [(PALETTE_RELPATH, claim, "no README rows", "✗ README table missing")], False
-    if actual == expected:
+    if documented != CANONICAL_PALETTE:
+        return [
+            (
+                PALETTE_RELPATH,
+                claim,
+                json.dumps(documented, ensure_ascii=False),
+                "✗ README MISMATCH: documented palette is not canonical",
+            )
+        ], False
+
+    actual_names = set(actual)
+    canonical_names = set(CANONICAL_PALETTE)
+    missing = sorted(canonical_names - actual_names)
+    extra = sorted(actual_names - canonical_names)
+    malformed = sorted(
+        name
+        for name, value in actual.items()
+        if not isinstance(value, str) or HEX_COLOR_RE.fullmatch(value) is None
+    )
+    mismatched = sorted(
+        name
+        for name, value in actual.items()
+        if name in CANONICAL_PALETTE
+        and isinstance(value, str)
+        and HEX_COLOR_RE.fullmatch(value) is not None
+        and value != CANONICAL_PALETTE[name]
+    )
+
+    issues = []
+    if missing:
+        issues.append(f"missing names: {', '.join(missing)}")
+    if extra:
+        issues.append(f"extra names: {', '.join(extra)}")
+    if malformed:
+        issues.append(f"malformed colors: {', '.join(malformed)}")
+    if mismatched:
+        issues.append(f"hex mismatches: {', '.join(mismatched)}")
+
+    if not issues:
         return [(PALETTE_RELPATH, claim, f"{len(actual)} colors", "✓")], True
 
-    expected_text = json.dumps(expected, ensure_ascii=False)
     actual_text = json.dumps(actual, ensure_ascii=False)
-    return [(PALETTE_RELPATH, claim, actual_text, f"✗ MISMATCH: expected {expected_text}")], False
+    return [
+        (
+            PALETTE_RELPATH,
+            claim,
+            actual_text,
+            f"✗ MISMATCH: {'; '.join(issues)}",
+        )
+    ], False
 
 
 def verify_presence():
@@ -484,7 +561,7 @@ def main():
         ("PNG dimensions vs README table", verify_dimensions()),
         ("Generated asset inventory", verify_inventory()),
         ("README-named files present", verify_presence()),
-        ("Palette vs README table", verify_palette()),
+        ("Canonical palette", verify_palette()),
         ("favicon.ico container", verify_favicon_ico()),
         ("Transparent variants", verify_transparency()),
     ]
