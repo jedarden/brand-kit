@@ -39,23 +39,27 @@ SRC = ROOT / "source"
 LOGO_SVG = SRC / "logo.svg"
 LOGO_TRANSPARENT_SVG = SRC / "logo-transparent.svg"
 LOGO_PNG = SRC / "logo.png"
-HERO = Image.open(SRC / "hero.png").convert("RGB")
+HERO = SRC / "hero.png"
+REQUIRED_SOURCES = (LOGO_SVG, LOGO_TRANSPARENT_SVG, HERO, LOGO_PNG)
 
-RESVG = shutil.which("resvg")
-if RESVG is None:
-    raise SystemExit(
-        "error: resvg not found on PATH. There is no raster fallback: resizing\n"
-        "source/logo.png would silently produce different bytes than the vector\n"
-        "renders committed in this repo and fail the CI regen-diff. Install the\n"
-        "pinned toolchain (see docs/notes/asset-toolchain.md) and re-run."
-    )
-for required in (LOGO_SVG, LOGO_TRANSPARENT_SVG, SRC / "hero.png", LOGO_PNG):
-    if not required.exists():
+
+def resolve_toolchain():
+    resvg = shutil.which("resvg")
+    if resvg is None:
         raise SystemExit(
-            f"error: required source {required.name} not found in {SRC}. All\n"
-            "sources must be present — there is no fallback path (see\n"
-            "docs/notes/asset-toolchain.md)."
+            "error: resvg not found on PATH. There is no raster fallback: resizing\n"
+            "source/logo.png would silently produce different bytes than the vector\n"
+            "renders committed in this repo and fail the CI regen-diff. Install the\n"
+            "pinned toolchain (see docs/notes/asset-toolchain.md) and re-run."
         )
+    for required in REQUIRED_SOURCES:
+        if not required.exists():
+            raise SystemExit(
+                f"error: required source {required.name} not found in {SRC}. All\n"
+                "sources must be present — there is no fallback path (see\n"
+                "docs/notes/asset-toolchain.md)."
+            )
+    return resvg
 
 
 def save(img, relpath):
@@ -71,22 +75,22 @@ def save_palette():
     print(f"  palette.json: {len(PALETTE)} colors")
 
 
-def logo_at(size):
+def logo_at(size, resvg):
     """Render the vector logo crisply at size x size."""
     with tempfile.NamedTemporaryFile(suffix=".png") as tf:
         subprocess.run(
-            [RESVG, "--width", str(size), "--height", str(size),
+            [resvg, "--width", str(size), "--height", str(size),
              str(LOGO_SVG), tf.name],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return Image.open(tf.name).convert("RGB")
 
 
-def logo_at_transparent(size):
+def logo_at_transparent(size, resvg):
     """Render the transparent logo (no background) at size x size."""
     with tempfile.NamedTemporaryFile(suffix=".png") as tf:
         subprocess.run(
-            [RESVG, "--width", str(size), "--height", str(size),
+            [resvg, "--width", str(size), "--height", str(size),
              str(LOGO_TRANSPARENT_SVG), tf.name],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -152,8 +156,11 @@ FAVICON_SIZES = {
 
 
 def main():
+    resvg = resolve_toolchain()
+    with Image.open(HERO) as source:
+        hero = source.convert("RGB")
     resvg_version = subprocess.run(
-        [RESVG, "--version"], capture_output=True, text=True, check=True
+        [resvg, "--version"], capture_output=True, text=True, check=True
     ).stdout.strip()
     print(f"toolchain: resvg {resvg_version}, Pillow {Image.__version__}"
           f" (pinned per docs/notes/asset-toolchain.md)")
@@ -164,18 +171,18 @@ def main():
 
     print("avatars:")
     for path, size in AVATARS.items():
-        save(logo_at(size), path)
+        save(logo_at(size, resvg), path)
 
     print("logo masters:")
     for path, size in LOGO_SIZES.items():
-        save(logo_at(size), path)
+        save(logo_at(size, resvg), path)
     shutil.copy(LOGO_SVG, ROOT / "logo/logo.svg")
     print("  logo/logo.svg: vector")
     save(Image.open(LOGO_PNG).convert("RGB"), "logo/logo-original.png")
 
     print("logo masters (transparent):")
     for path, size in LOGO_SIZES.items():
-        transparent_img = logo_at_transparent(size)
+        transparent_img = logo_at_transparent(size, resvg)
         # Save with -transparent suffix
         base_path = path.replace(".png", "-transparent.png")
         save(transparent_img, base_path)
@@ -184,16 +191,16 @@ def main():
 
     print("favicons:")
     for path, size in FAVICON_SIZES.items():
-        save(logo_at(size), path)
+        save(logo_at(size, resvg), path)
     ico = ROOT / "favicon/favicon.ico"
-    logo_at(256).save(
+    logo_at(256, resvg).save(
         ico, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     )
     print("  favicon/favicon.ico: multi-res")
 
     print("banners:")
     for path, (w, h, fy) in BANNERS.items():
-        save(cover(HERO, w, h, fy=fy), path)
+        save(cover(hero, w, h, fy=fy), path)
 
     print("done.")
 
