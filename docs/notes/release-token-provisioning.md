@@ -136,6 +136,36 @@ the replacement, run the probe until all three checks pass, run the publisher's
 read-only gate, then revoke the old credential. Do not put a token in a report,
 workflow parameter, URL, command argument, or log.
 
+### Owner alert and recovery
+
+The probe WorkflowTemplate writes a sanitized fallback report before installing
+packages or cloning the repository. Its three Kubernetes Secret references are
+optional so a missing `brand-kit-release-tokens` Secret or key is reported as a
+failed credential check rather than stopping pod admission. Argo retains the
+report at
+`https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-release-token-probe/v1/<workflow-uid>/report.json`
+with `artifactGC: Never`. The workflow exit handler sends
+`BrandKitReleaseTokenProbe` to the iad-ci Alertmanager only when the workflow
+is not `Succeeded`; the alert contains the fixed report URL, workflow status,
+and owner labels, never report contents or credential values.
+
+When the owner receives the alert:
+
+1. Open the durable report and identify the failed credential by name and its
+   sanitized provider status. If the report says the probe did not start,
+   repair the workflow, Secret materialization, or dependency/network failure
+   named by the workflow status, then rerun the same CronWorkflow.
+2. For a missing credential, repair the ExternalSecret so all three keys are
+   present. For `401`/expired credentials, provision a replacement at the same
+   OpenBao path. For `403`/scope failures, restore the documented minimum
+   policy or provision a new credential; never widen scope to make the probe
+   pass. Keep the last known-good credential active until the replacement is
+   validated.
+3. Rerun the probe until all three checks pass, run the publisher's read-only
+   gate, and only then revoke the replaced provider credential or resume the
+   consumer-drift handoff. A failed or indeterminate rerun keeps release and
+   consumer operations blocked.
+
 ## Failure and observability rules
 
 - Missing or blank required variables fail before the network operation. The

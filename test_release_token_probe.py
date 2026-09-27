@@ -279,7 +279,9 @@ def test_scheduled_probe_workflows_are_safe_and_route_owner_follow_up():
             "          - name:", 1
         )[0]
         assert "name: brand-kit-release-tokens" in environment_block
+        assert "optional: true" in environment_block
     assert "brand-kit-release-tokens" in workflow
+    assert '"workflow did not reach the probe"' in workflow
     assert "artifactGC:\n                strategy: Never" in workflow
     assert "failures/brand-kit-release-token-probe/v1/{{workflow.uid}}/report.json" in workflow
     assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow

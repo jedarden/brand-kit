@@ -129,7 +129,7 @@ def test_main_writes_a_sanitized_durable_failure_report(tmp_path, monkeypatch, c
         }
 
     def run_watch(token_arg, **kwargs):
-        return real_run_watch(token_arg, request=request, **kwargs)
+        return real_run_watch(token_arg, now=NOW, request=request, **kwargs)
 
     monkeypatch.setenv("ARGO_TOKEN", token)
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)

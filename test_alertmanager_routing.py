@@ -31,6 +31,14 @@ EXPECTED_ALERTS = {
         "bucket": "brand-kit",
         "workflow_status": "{{workflow.status}}",
     },
+    "automation/brand-kit-release-token-probe-workflowtemplate.yml": {
+        "alertname": "BrandKitReleaseTokenProbe",
+        "owner": "jedarden",
+        "component": "release-token-probe",
+        "follow_up": "consumer-drift",
+        "bucket": "brand-kit",
+        "workflow_status": "{{workflow.status}}",
+    },
 }
 
 
@@ -62,12 +70,28 @@ def test_failure_alert_delivery_is_best_effort():
         assert "curl --fail --silent --show-error --retry 3 --retry-delay 5" in workflow
 
 
-def test_documented_route_verification_covers_both_alerts_without_secrets():
+def test_release_token_alert_contains_no_token_values_or_secret_inputs():
+    workflow, alert = alert_from_workflow(
+        "automation/brand-kit-release-token-probe-workflowtemplate.yml"
+    )
+    alert_json = json.dumps(alert)
+
+    for token in ("forgejo-secret", "argo-read-secret", "argo-submit-secret"):
+        assert token not in workflow
+        assert token not in alert_json
+    assert "secretKeyRef" not in workflow.split("    - name: notify-owner\n", 1)[1]
+    assert "FORGEJO_TOKEN" not in alert_json
+    assert "ARGO_TOKEN" not in alert_json
+    assert "ARGO_SUBMIT_TOKEN" not in alert_json
+
+
+def test_documented_route_verification_covers_all_alerts_without_secrets():
     procedure = Path("docs/notes/asset-toolchain.md").read_text(encoding="utf-8")
 
     assert "## Alertmanager route verification" in procedure
     assert "BrandKitCIRegressionGate" in procedure
     assert "BrandKitConsumerDrift" in procedure
+    assert "BrandKitReleaseTokenProbe" in procedure
     assert "alertmanager-config" in procedure
     assert "port-forward svc/alertmanager" in procedure
     assert "ntfy" in procedure

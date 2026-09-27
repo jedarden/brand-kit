@@ -46,7 +46,8 @@ the asset commit passed, so repair the read path and rerun the check first.
 
 ## Alertmanager route verification
 
-The regression-gate and consumer-drift handlers have a contract test in
+The regression-gate, consumer-drift, and release-token-probe handlers have a
+contract test in
 `test_alertmanager_routing.py`. It parses the JSON heredoc each workflow posts
 to Alertmanager, checking the alert names and labels below. The shared
 `bucket: brand-kit` label is also the grouping key used by the configured
@@ -56,9 +57,10 @@ Alertmanager route.
 |---|---|---|---|---|
 | `brand-kit-ci-failure-watch` | `BrandKitCIRegressionGate` | `brand-kit-ci` | `regression-gate` | `jedarden` |
 | `brand-kit-consumer-drift` | `BrandKitConsumerDrift` | `consumer-drift` | — | `jedarden` |
+| `brand-kit-release-token-probe` | `BrandKitReleaseTokenProbe` | `release-token-probe` | `consumer-drift` | `jedarden` |
 
 The complete label payloads also include `bucket: brand-kit` and the
-`workflow_status` template value. Both handlers POST to
+`workflow_status` template value. All three handlers POST to
 `http://alertmanager.monitoring.svc:9093/api/v1/alerts`; their `onExit` steps
 run only for non-successful workflows and use `continueOn` so an Alertmanager
 or ntfy outage cannot change the original failure result.

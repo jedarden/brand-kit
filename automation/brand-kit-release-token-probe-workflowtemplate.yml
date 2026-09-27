@@ -37,16 +37,22 @@ spec:
               secretKeyRef:
                 name: brand-kit-release-tokens
                 key: FORGEJO_TOKEN
+                # Let the probe report a missing Secret/key instead of
+                # preventing the pod from starting before its fallback report
+                # can be uploaded.
+                optional: true
           - name: ARGO_TOKEN
             valueFrom:
               secretKeyRef:
                 name: brand-kit-release-tokens
                 key: ARGO_TOKEN
+                optional: true
           - name: ARGO_SUBMIT_TOKEN
             valueFrom:
               secretKeyRef:
                 name: brand-kit-release-tokens
                 key: ARGO_SUBMIT_TOKEN
+                optional: true
         outputs:
           parameters:
             - name: probe-exit-code

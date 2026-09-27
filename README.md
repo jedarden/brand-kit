@@ -304,8 +304,11 @@ The same token contract is checked before release day by the daily
 read access, and the consumer-template submit permission with Argo server
 dry-run; it never publishes a release or creates a workflow. Failures use the
 same Alertmanager/ntfy owner follow-up path as the consumer-drift alert and
-retain a sanitized report. The rotation and deployment-secret requirements
-are documented in
+retain a non-GC'd sanitized report, including when a deployment Secret/key is
+missing. The owner repairs or rotates the named credential, reruns the probe
+until all checks pass, and reruns the publisher's read-only gate before
+resuming release or consumer work. The alert and report never contain token
+values. The rotation and deployment-secret requirements are documented in
 [`release-token-provisioning.md`](docs/notes/release-token-provisioning.md).
 
 ## Downstream consumers (post-tag sync)
