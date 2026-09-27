@@ -1,6 +1,6 @@
 import io
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import urllib.error
 
@@ -289,16 +289,21 @@ def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch):
     }
 
 
-def test_run_watch_applies_the_two_hour_lookback_to_both_failure_phases():
+def test_run_watch_covers_failures_at_the_argo_retention_boundary():
+    retention = brand_kit_ci_failure_watch.ARGO_FAILURE_RETENTION_SECONDS
+    boundary = (NOW - timedelta(seconds=retention)).isoformat().replace("+00:00", "Z")
+    just_outside = (NOW - timedelta(seconds=retention + 1)).isoformat().replace(
+        "+00:00", "Z"
+    )
     report = brand_kit_ci_failure_watch.run_watch(
         "argo-secret",
         now=NOW,
         request=lambda *args, **kwargs: {
             "items": [
-                workflow("brand-kit-ci-failed-boundary", "Failed", "2026-09-27T11:00:00Z"),
-                workflow("brand-kit-ci-error-boundary", "Error", "2026-09-27T11:00:00Z"),
-                workflow("brand-kit-ci-failed-old", "Failed", "2026-09-27T10:59:59Z"),
-                workflow("brand-kit-ci-error-old", "Error", "2026-09-27T10:59:59Z"),
+                workflow("brand-kit-ci-failed-boundary", "Failed", boundary),
+                workflow("brand-kit-ci-error-boundary", "Error", boundary),
+                workflow("brand-kit-ci-failed-old", "Failed", just_outside),
+                workflow("brand-kit-ci-error-old", "Error", just_outside),
                 workflow("brand-kit-ci-success", "Succeeded", "2026-09-27T12:59:00Z"),
             ]
         },
@@ -308,6 +313,19 @@ def test_run_watch_applies_the_two_hour_lookback_to_both_failure_phases():
         "brand-kit-ci-failed-boundary",
         "brand-kit-ci-error-boundary",
     ]
+
+
+@pytest.mark.parametrize("lookback_minutes", (1, 119))
+def test_run_watch_rejects_a_lookback_shorter_than_argo_retention(lookback_minutes):
+    with pytest.raises(
+        release_publish.ReleaseError,
+        match="lookback minutes must cover Argo failure retention",
+    ):
+        brand_kit_ci_failure_watch.run_watch(
+            "argo-secret",
+            lookback_minutes=lookback_minutes,
+            request=lambda *args, **kwargs: pytest.fail("Argo must not be queried"),
+        )
 
 
 def test_main_writes_a_sanitized_durable_failure_report(tmp_path, monkeypatch, capsys):
@@ -461,6 +479,8 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "key: ARGO_TOKEN" in workflow
     assert "tools/prune_ci_failure_watch_reports.py" in workflow
     assert "--retention-days 30" in workflow
+    assert 'brand-kit.ardenone.com/argo-failure-retention-seconds: "7200"' in workflow
+    assert 'brand-kit.ardenone.com/failure-watch-lookback-minutes: "120"' in workflow
     assert "name: needle-ci-artifact-reader" in workflow
     assert "name: needle-ci-artifact-publisher" in workflow
     assert "artifactGC:\n              strategy: Never" in workflow

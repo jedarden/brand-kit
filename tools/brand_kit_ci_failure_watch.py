@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -29,7 +30,12 @@ from tools import release_publish
 DEFAULT_ARGO_API_URL = release_publish.DEFAULT_ARGO_API_URL
 DEFAULT_ARGO_NAMESPACE = release_publish.DEFAULT_ARGO_NAMESPACE
 DEFAULT_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
-DEFAULT_LOOKBACK_MINUTES = 120
+# This mirrors controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure
+# in declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml.
+# Keep the watcher at least this wide: a shorter window can silently miss a
+# failed brand-kit-ci Workflow after Argo has reaped it.
+ARGO_FAILURE_RETENTION_SECONDS = 2 * 60 * 60
+DEFAULT_LOOKBACK_MINUTES = math.ceil(ARGO_FAILURE_RETENTION_SECONDS / 60)
 DEFAULT_LIST_LIMIT = 100
 MAX_LIST_PAGES = 10_000
 REPORT_SCHEMA = "brand-kit-ci-failure-watch/v1"
@@ -324,6 +330,20 @@ def _success_attestation(
     }
 
 
+def validate_lookback_coverage(lookback_minutes: int) -> None:
+    """Reject a watcher window that cannot cover Argo's failure retention."""
+    if not isinstance(lookback_minutes, int) or isinstance(lookback_minutes, bool):
+        raise release_publish.ReleaseError("lookback minutes must be an integer")
+    if not 1 <= lookback_minutes <= 24 * 60:
+        raise release_publish.ReleaseError("lookback minutes must be between 1 and 1440")
+    if lookback_minutes * 60 < ARGO_FAILURE_RETENTION_SECONDS:
+        required_minutes = math.ceil(ARGO_FAILURE_RETENTION_SECONDS / 60)
+        raise release_publish.ReleaseError(
+            "lookback minutes must cover Argo failure retention: "
+            f"{lookback_minutes} < {required_minutes}"
+        )
+
+
 def run_watch(
     token: str | None,
     *,
@@ -336,10 +356,7 @@ def run_watch(
 ) -> dict[str, Any]:
     """Return recent failures plus successful runs worth durably attesting."""
     token = release_publish.require_token(token, "ARGO_TOKEN")
-    if not isinstance(lookback_minutes, int) or isinstance(lookback_minutes, bool):
-        raise release_publish.ReleaseError("lookback minutes must be an integer")
-    if not 1 <= lookback_minutes <= 24 * 60:
-        raise release_publish.ReleaseError("lookback minutes must be between 1 and 1440")
+    validate_lookback_coverage(lookback_minutes)
 
     current = _utc_now(now)
     cutoff = current - timedelta(minutes=lookback_minutes)
@@ -386,6 +403,7 @@ def run_watch(
         "status": "fail" if failures else "pass",
         "observed_at": current.isoformat().replace("+00:00", "Z"),
         "lookback_minutes": lookback_minutes,
+        "argo_failure_retention_seconds": ARGO_FAILURE_RETENTION_SECONDS,
         "workflow_template": workflow_template,
         "failures": failures,
         "attestations": attestations,

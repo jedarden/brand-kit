@@ -19,9 +19,23 @@ The gate has an application-owned companion check in
 `automation/brand-kit-ci-failure-watch-cronworkflow.yml`. Every 15 minutes it
 uses the existing read-only `ARGO_TOKEN` to list `brand-kit-ci` Workflow records
 and retains `Failed`/`Error` runs from the preceding two hours. The lookback is
-intentional: it spans the Argo failure-log/workflow retention window, so a
-short-lived failed run is still detected after its logs or Workflow object are
-reaped.
+intentional: iad-ci's Argo controller retains failed Workflows for 7200 seconds
+through `controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure` in
+`declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml`.
+The watcher contract requires its lookback to cover that full retention window,
+and retains the exact boundary (`cutoff` is inclusive), so a short-lived failed
+run is still detected before its Workflow is reaped. The deployed
+WorkflowTemplate records both values as annotations. Check the repository
+copy, and optionally the external controller configuration, with:
+
+```bash
+python3 tools/check_ci_failure_watch_retention.py \
+  --argo-config ../src/declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml
+```
+
+The check fails if the command, annotations, watcher contract, or external
+Argo retention drift apart; the watcher also fails closed at runtime rather
+than running with a shorter unsafe lookback.
 
 The list is a complete Kubernetes-style snapshot, not a single page. The
 watcher requests at most 100 records per page, follows every non-empty

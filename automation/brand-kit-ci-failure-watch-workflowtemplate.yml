@@ -5,6 +5,11 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: "Read-only owner alert and durable evidence archive for brand-kit-ci runs"
+    # These values mirror declarative-config's controller.workflowDefaults
+    # secondsAfterFailure and the command below. Run
+    # tools/check_ci_failure_watch_retention.py to detect drift before deploy.
+    brand-kit.ardenone.com/argo-failure-retention-seconds: "7200"
+    brand-kit.ardenone.com/failure-watch-lookback-minutes: "120"
 spec:
   entrypoint: watch
   onExit: route-ci-failure-watch

@@ -281,8 +281,11 @@ attestation.
 The application-owned `brand-kit-ci-failure-watch` companion in
 `automation/` checks the Argo API every 15 minutes for `Failed` or `Error`
 `brand-kit-ci` runs from the preceding two hours. That lookback covers the
-cluster's short failure-log/workflow retention window, so the gate failure is
-reported before Argo reaps its record. The watcher uses the existing read-only
+cluster's two-hour `secondsAfterFailure` Workflow retention window, so the gate
+failure is reported before Argo reaps its record. The retention/lookback
+contract is encoded in the WorkflowTemplate annotations and checked by
+`python3 tools/check_ci_failure_watch_retention.py`; the watcher also rejects
+an unsafe shorter runtime window. The watcher uses the existing read-only
 `ARGO_TOKEN` from `brand-kit-release-tokens`, keeps a sanitized report at
 `failures/brand-kit-ci-failure-watch/v1/<workflow-uid>/report.json` with
 `artifactGC: Never`, and its exit handler posts a `BrandKitCIRegressionGate`
