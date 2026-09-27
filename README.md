@@ -211,7 +211,8 @@ pinned toolchain and runs this acceptance sequence in order:
    generated-asset inventory check, so missing or unexpected generated files
    fail the workflow.
 4. Run the full default suite with `.venv/bin/python -m pytest -q`. Any test failure
-   exits non-zero and fails the workflow.
+   exits non-zero and fails the workflow, including the contract tests in
+   `test_check_asset_toolchain.py`.
 5. Run `.venv/bin/python tools/build_assets.py` to regenerate every derived asset.
 6. Run `git diff --exit-code --quiet`. A regenerated tracked-file difference
    exits non-zero and fails the workflow.
