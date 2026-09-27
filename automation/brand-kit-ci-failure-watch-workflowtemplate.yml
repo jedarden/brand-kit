@@ -29,6 +29,17 @@ spec:
             git clone --filter=blob:none --no-tags --depth=1 --branch main \
               https://github.com/jedarden/brand-kit.git /brand-kit
             set +e
+            python3 /brand-kit/tools/prune_ci_failure_watch_reports.py \
+              --retention-days 30
+            PRUNE_EXIT=$?
+            set -e
+            if [ "$PRUNE_EXIT" -ne 0 ]; then
+              printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"failure-watch report retention cleanup did not complete","failures":[]}' \
+                > /tmp/brand-kit-ci-failure-report.json
+              printf '%s\n' '2' > /tmp/brand-kit-ci-failure-watch-exit-code
+              exit 2
+            fi
+            set +e
             python3 /brand-kit/tools/brand_kit_ci_failure_watch.py \
               --report /tmp/brand-kit-ci-failure-report.json \
               --attestations /tmp/brand-kit-ci-attestations.json \
@@ -43,6 +54,30 @@ spec:
               secretKeyRef:
                 name: brand-kit-release-tokens
                 key: ARGO_TOKEN
+          - name: S3_READER_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-reader
+                key: access-key
+          - name: S3_READER_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-reader
+                key: secret-key
+          - name: S3_PUBLISHER_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-publisher
+                key: access-key
+          - name: S3_PUBLISHER_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-publisher
+                key: secret-key
+          - name: S3_ENDPOINT
+            value: https://s3.ardenone.com
+          - name: S3_REGION
+            value: garage
         resources:
           requests:
             cpu: 100m

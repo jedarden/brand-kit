@@ -30,6 +30,22 @@ Garage-backed `needle-ci-artifacts` bucket with `artifactGC: Never`:
 https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-ci-failure-watch/v1/<watcher-workflow-uid>/report.json
 ```
 
+`artifactGC: Never` only prevents Argo from deleting the object when this
+watcher's Workflow is reaped; it is not an indefinite-retention policy. Before
+each Argo inspection, the watcher runs
+`tools/prune_ci_failure_watch_reports.py` with the Garage reader credential to
+list only this report prefix and the publisher credential to delete only
+`report.json` objects older than **30 days**. The pass runs on the same
+15-minute schedule, so cleanup can lag the 30-day boundary by one schedule
+interval. It does not touch the separate CI attestation prefix.
+
+An owner can realistically fetch the report URL in an alert for at least 30
+days after the report upload (normally up to about 30 days and 15 minutes).
+After that window the URL may return `404`; an older alert is stale evidence,
+not a guarantee that its durable report still exists. Preserve any report
+needed for a longer investigation outside this rolling prefix before the
+window expires.
+
 The release-triggered consumer-drift handoff and its scheduled CronWorkflow
 fallback share the `brand-kit-consumer-drift` WorkflowTemplate. For confirmed
 drift (exit `1`), an indeterminate audit (exit `2`), or a setup failure before

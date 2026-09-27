@@ -340,6 +340,10 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "onExit: route-ci-failure-watch" in workflow
     assert "brand-kit-release-tokens" in workflow
     assert "key: ARGO_TOKEN" in workflow
+    assert "tools/prune_ci_failure_watch_reports.py" in workflow
+    assert "--retention-days 30" in workflow
+    assert "name: needle-ci-artifact-reader" in workflow
+    assert "name: needle-ci-artifact-publisher" in workflow
     assert "artifactGC:\n              strategy: Never" in workflow
     assert "failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json" in workflow
     assert "attestations/brand-kit-ci/v1/{{workflow.uid}}/attestations.json" in workflow
@@ -353,6 +357,9 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "BrandKitCIRegressionGate" in readme
     assert "brand-kit-ci-failure-watch" in readme
     assert "BrandKitCIRegressionGate" in note
+    assert "30 days" in note
+    assert "15-minute schedule" in note
+    assert "may return `404`" in note
 
 
 def test_exit_handler_alert_contract_links_the_durable_report_without_credentials():
