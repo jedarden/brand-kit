@@ -6,6 +6,8 @@ from tools import consumer_drift_submit, release_publish
 
 
 COMMIT = "a" * 40
+FORGEJO_TOKEN = "forgejo-test-token"
+ARGO_SUBMIT_TOKEN = "argo-submit-test-token"
 
 
 def published(**overrides):
@@ -74,6 +76,21 @@ def test_submit_waits_for_mirror_before_posting_the_exact_tag(monkeypatch):
     }
 
 
+def test_submit_requires_dedicated_argo_submit_credential(monkeypatch):
+    monkeypatch.setenv("FORGEJO_TOKEN", FORGEJO_TOKEN)
+    monkeypatch.setenv("ARGO_TOKEN", "read-only-token-must-not-be-reused")
+    monkeypatch.delenv("ARGO_SUBMIT_TOKEN", raising=False)
+    monkeypatch.setattr(
+        consumer_drift_submit,
+        "submit_consumer_drift",
+        lambda *args, **kwargs: pytest.fail("submission must stop at credential validation"),
+    )
+
+    result = consumer_drift_submit.main(["--release-tag", "v1.1.0"])
+
+    assert result == 1
+
+
 def test_submit_retries_until_canonical_and_mirror_tags_agree(monkeypatch):
     events = []
     observed_commits = iter([COMMIT, None, COMMIT, COMMIT])
@@ -96,6 +113,8 @@ def test_submit_retries_until_canonical_and_mirror_tags_agree(monkeypatch):
 
     result = consumer_drift_submit.submit_consumer_drift(
         "v1.1.0",
+        forgejo_token=FORGEJO_TOKEN,
+        argo_token=ARGO_SUBMIT_TOKEN,
         timeout=1,
         interval=0,
         sleep=lambda delay: events.append(("sleep", delay)),
@@ -143,6 +162,8 @@ def test_failed_or_unverifiable_release_never_submits(
     with pytest.raises(release_publish.ReleaseError, match=message):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -165,6 +186,8 @@ def test_forgejo_api_failure_never_checks_tags_or_submits(monkeypatch):
     with pytest.raises(release_publish.ReleaseError, match="cannot read Forgejo release"):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -187,6 +210,8 @@ def test_canonical_tag_mismatch_never_submits(monkeypatch):
     with pytest.raises(release_publish.ReleaseError, match="origin .* expected"):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -210,6 +235,8 @@ def test_mirror_timeout_never_submits(monkeypatch):
     with pytest.raises(release_publish.ReleaseError, match="has not caught up"):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
             timeout=0,
             interval=0,
             request=lambda *args, **kwargs: submits.append(args),
@@ -243,7 +270,12 @@ def test_argo_api_failure_is_reported_after_all_read_only_gates(monkeypatch):
         release_publish.ReleaseError,
         match=r"cannot submit consumer-drift workflow for v1\.1\.0.*HTTP 502",
     ):
-        consumer_drift_submit.submit_consumer_drift("v1.1.0", request=request)
+        consumer_drift_submit.submit_consumer_drift(
+            "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
+            request=request,
+        )
 
     assert len(submits) == 1
 
@@ -263,6 +295,8 @@ def test_malformed_argo_success_response_fails_closed(monkeypatch):
     with pytest.raises(release_publish.ReleaseError, match="no workflow name"):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
             request=lambda *args, **kwargs: {"metadata": {}},
         )
 
@@ -283,6 +317,8 @@ def test_mirror_failure_never_submits(monkeypatch):
     with pytest.raises(release_publish.ReleaseError, match="mirror has not caught up"):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 

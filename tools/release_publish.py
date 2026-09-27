@@ -61,6 +61,27 @@ class HttpFailure(ReleaseError):
         super().__init__(f"{service} returned HTTP {status}: {detail}")
 
 
+def require_token(token: str | None, variable: str) -> str:
+    """Require a non-blank token without ever including its value in errors."""
+    if not isinstance(token, str) or not token.strip():
+        raise ReleaseError(f"{variable} is required; provide it through the environment")
+    return token
+
+
+def environment_token(variable: str) -> str:
+    """Read one canonical release credential from the process environment."""
+    return require_token(os.environ.get(variable), variable)
+
+
+def _redact(value: Any, *secrets: str | None) -> str:
+    """Remove credential values from text that may be surfaced to operators."""
+    text = str(value)
+    for secret in secrets:
+        if isinstance(secret, str) and secret:
+            text = text.replace(secret, "[REDACTED]")
+    return text
+
+
 def validate_tag(tag: str) -> str:
     if not isinstance(tag, str) or tag != tag.strip() or not TAG_PATTERN.fullmatch(tag):
         raise ReleaseError(f"release tag must be an exact vX.Y.Z value, got {tag!r}")
@@ -239,14 +260,19 @@ def request_json(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read()
     except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")[:300]
+        detail = _redact(
+            error.read().decode("utf-8", errors="replace"),
+            token,
+        )[:300]
         raise HttpFailure(
             error.code,
-            detail or error.reason or f"{service} request failed",
+            detail or _redact(error.reason, token) or f"{service} request failed",
             service=service,
         ) from error
     except urllib.error.URLError as error:
-        raise ReleaseError(f"cannot reach {service}: {error.reason}") from error
+        raise ReleaseError(
+            f"cannot reach {service}: {_redact(error.reason, token)}"
+        ) from error
     try:
         return json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -354,6 +380,7 @@ def get_argo_workflow(
     token: str | None = None,
 ) -> dict[str, Any]:
     """Read one Argo Workflow record without submitting or mutating a run."""
+    token = require_token(token, "ARGO_TOKEN")
     run_name = argo_run_name(ci_run)
     try:
         workflow = request_json(
@@ -587,8 +614,7 @@ def publish_release(
         raise ReleaseError(f"release commit is not a full object ID: {commit!r}")
     if not isinstance(notes, str) or not notes.strip():
         raise ReleaseError("release notes must not be empty")
-    if not token:
-        raise ReleaseError("FORGEJO_TOKEN is required to create or publish a release")
+    token = require_token(token, "FORGEJO_TOKEN")
 
     existing = get_release(
         tag,
@@ -764,9 +790,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    token = os.environ.get("FORGEJO_TOKEN") or os.environ.get("FORGEJO_API_TOKEN")
-    argo_token = os.environ.get("ARGO_TOKEN") or os.environ.get("ARGO_API_TOKEN")
     try:
+        # Credentials are intentionally environment-only.  In particular, do
+        # not accept a token option or fall back to a token with another scope.
+        token = environment_token("FORGEJO_TOKEN")
+        argo_token = environment_token("ARGO_TOKEN")
         changelog_notes = release_notes_from_changelog(args.notes_file, args.tag)
         if args.notes is not None and args.notes != changelog_notes:
             raise ReleaseError(

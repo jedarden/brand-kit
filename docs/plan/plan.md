@@ -79,6 +79,10 @@ a reason to notice when a new one exists.
 
 ### Release procedure
 
+Release credential source, scope, injection, rotation, and fail-closed
+behavior are defined in
+[`docs/notes/release-token-provisioning.md`](../notes/release-token-provisioning.md).
+
 `origin` is the canonical Forgejo repository at
 `https://git.ardenone.com/jedarden/brand-kit.git`; `github` is its read-only,
 server-side push mirror. The repeatable operator procedure is

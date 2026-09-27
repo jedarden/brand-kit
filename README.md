@@ -226,7 +226,9 @@ Forgejo Release whose tag, full target commit, and body exactly match those
 inputs. It creates or reuses the non-draft release and confirms that the
 canonical Forgejo tag and the read-only GitHub mirror advertise the same
 peeled commit. It is idempotent and never creates a GitHub Release. Set
-`ARGO_TOKEN` to a read-only Argo token when the server requires authentication.
+`FORGEJO_TOKEN` and `ARGO_TOKEN` using the
+[`release-token-provisioning.md`](docs/notes/release-token-provisioning.md)
+contract; both are required and are never accepted as command-line options.
 Wait for its `READY` result and run the read-only `--verify-only` form before
 starting the consumer workflow below. Forgejo remains the sole release
 authority; the mirrored Git tag is only a distribution path.

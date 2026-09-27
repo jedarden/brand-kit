@@ -24,27 +24,12 @@ verified and left unchanged.
 3. Make sure `origin` is the canonical Forgejo remote and `github` is the
    read-only tag mirror. The publisher reads both remotes and never pushes to
    either remote.
-4. Export a narrowly scoped Forgejo API token with permission to create and
-   publish releases. Do not put the token in the repository or pass it as a
-   command-line argument:
-
-   ```bash
-   export FORGEJO_TOKEN='...'
-   ```
-
-   If the Argo server requires authentication, export its read-only token
-   separately. The publisher uses it only for the workflow `GET`:
-
-   ```bash
-   export ARGO_TOKEN='...'
-   ```
-
-   The release-triggered consumer handoff uses an Argo token with permission
-   to submit workflows. Keep it separate from the read-only attestation token:
-
-   ```bash
-   export ARGO_SUBMIT_TOKEN='...'
-   ```
+4. Provision the three release credentials according to
+   [`release-token-provisioning.md`](release-token-provisioning.md). The
+   publisher requires `FORGEJO_TOKEN` and `ARGO_TOKEN`; the consumer handoff
+   requires `FORGEJO_TOKEN` and `ARGO_SUBMIT_TOKEN`. Load them from OpenBao
+   into the short-lived process environment only. Never put a token in the
+   repository, a workflow parameter, a URL, or a command-line argument.
 
 ## Create the exact tag
 

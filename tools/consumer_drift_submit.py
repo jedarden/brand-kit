@@ -8,7 +8,6 @@ read-only mirror tags to agree, and only then submits the read-only audit.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 import urllib.parse
@@ -106,6 +105,8 @@ def submit_consumer_drift(
     full target commit, and both remotes advertise that commit for the tag.
     """
     release_publish.validate_tag(release_tag)
+    forgejo_token = release_publish.require_token(forgejo_token, "FORGEJO_TOKEN")
+    argo_token = release_publish.require_token(argo_token, "ARGO_SUBMIT_TOKEN")
     record = release_publish.get_release(
         release_tag,
         forgejo_api_url,
@@ -222,13 +223,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    forgejo_token = os.environ.get("FORGEJO_TOKEN") or os.environ.get(
-        "FORGEJO_API_TOKEN"
-    )
-    argo_token = os.environ.get("ARGO_SUBMIT_TOKEN") or os.environ.get(
-        "ARGO_TOKEN"
-    ) or os.environ.get("ARGO_API_TOKEN")
     try:
+        # Submission must use its dedicated credential.  Never silently reuse
+        # the read-only attestation token for a write operation.
+        forgejo_token = release_publish.environment_token("FORGEJO_TOKEN")
+        argo_token = release_publish.environment_token("ARGO_SUBMIT_TOKEN")
         submitted = submit_consumer_drift(
             args.release_tag,
             forgejo_api_url=args.api_url,

@@ -117,11 +117,12 @@ consumer, run the release publisher's read-only gate from
 Its `READY` result confirms the Argo run attestation, the published Forgejo
 record, and the exact tag on both the canonical remote and the read-only mirror.
 If it does not print `READY`, stop: do not synchronize from `main` or from a
-tag that is still propagating. If either API requires authentication, export
-`ARGO_TOKEN` and `FORGEJO_TOKEN` before running the gate. Export
-`ARGO_SUBMIT_TOKEN` when the Argo submission endpoint requires a token with
-workflow-submit permission. Never put tokens in this repository or pass them
-on the command line.
+tag that is still propagating. Provision and inject `ARGO_TOKEN` and
+`FORGEJO_TOKEN` using the
+[`release-token-provisioning.md`](release-token-provisioning.md) contract
+before running the gate; use the separate `ARGO_SUBMIT_TOKEN` for the
+release-triggered handoff. Never put tokens in this repository or pass them on
+the command line.
 
 In this workspace, `origin` is canonical Forgejo and `github` is the read-only
 push mirror. Fetch the release tag from Forgejo, require both remotes to

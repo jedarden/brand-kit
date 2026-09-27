@@ -1,5 +1,8 @@
+import io
 from pathlib import Path
 import subprocess
+import sys
+import urllib.error
 
 import pytest
 
@@ -7,6 +10,7 @@ from tools import release_publish
 
 
 COMMIT = "a" * 40
+ARGO_READ_TOKEN = "argo-read-test-token"
 
 
 def published(tag="v1.1.0", **overrides):
@@ -394,6 +398,141 @@ def test_publish_release_requires_a_token_before_making_a_request():
         release_publish.publish_release("v1.1.0", COMMIT, "release notes")
 
 
+def test_denied_forgejo_credential_never_reaches_release_write(monkeypatch):
+    calls = []
+
+    def request(method, url, payload=None, token=None, timeout=20.0):
+        calls.append((method, payload))
+        raise release_publish.HttpFailure(403, "insufficient repository scope")
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+    with pytest.raises(release_publish.ReleaseError, match="cannot read Forgejo release"):
+        release_publish.publish_release(
+            "v1.1.0", COMMIT, "release notes", token="forgejo-denied-token"
+        )
+
+    assert calls == [("GET", None)]
+
+
+@pytest.mark.parametrize("token", (None, "", "   "))
+def test_required_tokens_reject_missing_or_blank_values(token):
+    with pytest.raises(release_publish.ReleaseError, match="ARGO_TOKEN"):
+        release_publish.require_token(token, "ARGO_TOKEN")
+
+
+def test_publisher_requires_canonical_environment_tokens_before_running_gates(
+    monkeypatch, capsys
+):
+    monkeypatch.delenv("FORGEJO_TOKEN", raising=False)
+    monkeypatch.delenv("ARGO_TOKEN", raising=False)
+    monkeypatch.setenv("FORGEJO_API_TOKEN", "legacy-forgejo-token")
+    monkeypatch.setenv("ARGO_API_TOKEN", "legacy-argo-token")
+
+    result = release_publish.main(
+        ["--tag", "v1.1.0", "--ci-run", "brand-kit-ci-abc123"]
+    )
+
+    assert result == 1
+    assert "FORGEJO_TOKEN" in capsys.readouterr().err
+
+
+def test_request_places_token_in_header_not_url_or_argv(monkeypatch):
+    token = "forgejo-header-test-token"
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def urlopen(request, timeout):
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    release_publish.request_json(
+        "GET",
+        "https://forgejo.example/api/v1/releases/tags/v1.1.0",
+        token=token,
+    )
+
+    request = requests[0]
+    assert token not in request.full_url
+    assert token not in " ".join(sys.argv)
+    assert ("Authorization", f"token {token}") in request.header_items()
+
+
+def test_http_failures_redact_tokens_from_cli_diagnostics(monkeypatch, capsys):
+    token = "forgejo-error-test-token"
+
+    def urlopen(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "https://forgejo.example/api/v1/releases/tags/v1.1.0",
+            403,
+            "Forbidden",
+            hdrs=None,
+            fp=io.BytesIO(f"access denied for {token}".encode()),
+        )
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    with pytest.raises(release_publish.HttpFailure) as error:
+        release_publish.request_json(
+            "GET",
+            "https://forgejo.example/api/v1/releases/tags/v1.1.0",
+            token=token,
+        )
+
+    assert token not in str(error.value)
+    assert "[REDACTED]" in str(error.value)
+
+
+def test_denied_argo_credential_blocks_publication_and_does_not_log_token(
+    monkeypatch, capsys
+):
+    token = "argo-denied-test-token"
+    monkeypatch.setenv("FORGEJO_TOKEN", "forgejo-test-token")
+    monkeypatch.setenv("ARGO_TOKEN", token)
+    monkeypatch.setattr(
+        release_publish,
+        "release_notes_from_changelog",
+        lambda *args, **kwargs: "release notes",
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "verify_ready",
+        lambda *args, **kwargs: COMMIT,
+    )
+    published = []
+    monkeypatch.setattr(
+        release_publish,
+        "publish_release",
+        lambda *args, **kwargs: published.append(args),
+    )
+
+    def urlopen(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "https://argo.example/api/v1/workflows/argo-workflows/brand-kit-ci-abc123",
+            403,
+            "Forbidden",
+            hdrs=None,
+            fp=io.BytesIO(f"denied {token}".encode()),
+        )
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    result = release_publish.main(
+        ["--tag", "v1.1.0", "--ci-run", "brand-kit-ci-abc123"]
+    )
+
+    assert result == 1
+    assert published == []
+    assert token not in capsys.readouterr().err
+
+
 def test_mirror_gate_requires_exact_peeled_refs(monkeypatch):
     observed = iter([COMMIT, None])
 
@@ -470,7 +609,7 @@ def test_argo_attestation_reads_one_workflow_and_accepts_exact_succeeded_commit(
         "brand-kit-ci/brand-kit-ci-abc123",
         COMMIT,
         api_url="https://argo.example",
-        token="argo-read-only",
+        token=ARGO_READ_TOKEN,
     )
 
     assert result["status"]["phase"] == "Succeeded"
@@ -479,7 +618,7 @@ def test_argo_attestation_reads_one_workflow_and_accepts_exact_succeeded_commit(
             "GET",
             "https://argo.example/api/v1/workflows/argo-workflows/brand-kit-ci-abc123",
             None,
-            "argo-read-only",
+            ARGO_READ_TOKEN,
             {"authorization_scheme": "Bearer", "service": "Argo API"},
         )
     ]
@@ -502,7 +641,9 @@ def test_argo_attestation_fails_closed_for_phase_commit_or_missing_evidence(
     monkeypatch.setattr(release_publish, "request_json", lambda *args, **kwargs: workflow)
 
     with pytest.raises(release_publish.ReleaseError, match=message):
-        release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci-abc123", COMMIT, token=ARGO_READ_TOKEN
+        )
 
 
 def test_failed_argo_attestation_can_be_retried_for_the_same_run(monkeypatch):
@@ -516,11 +657,13 @@ def test_failed_argo_attestation_can_be_retried_for_the_same_run(monkeypatch):
     monkeypatch.setattr(release_publish, "request_json", request)
 
     with pytest.raises(release_publish.ReleaseError, match="only Succeeded is accepted"):
-        release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci-abc123", COMMIT, token=ARGO_READ_TOKEN
+        )
 
-    assert release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)[
-        "status"
-    ]["phase"] == "Succeeded"
+    assert release_publish.attest_argo_ci_run(
+        "brand-kit-ci-abc123", COMMIT, token=ARGO_READ_TOKEN
+    )["status"]["phase"] == "Succeeded"
     assert [method for method, _, _ in calls] == ["GET", "GET"]
     assert calls[0][1] == calls[1][1]
 
@@ -537,7 +680,9 @@ def test_argo_attestation_rejects_conflicting_structured_commits(monkeypatch):
     monkeypatch.setattr(release_publish, "request_json", lambda *args, **kwargs: workflow)
 
     with pytest.raises(release_publish.ReleaseError, match="conflicting commit attestations"):
-        release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci-abc123", COMMIT, token=ARGO_READ_TOKEN
+        )
 
 
 def test_verify_only_reads_the_published_release_without_writing_or_pushing(monkeypatch, capsys):
@@ -545,6 +690,7 @@ def test_verify_only_reads_the_published_release_without_writing_or_pushing(monk
     api_calls = []
 
     monkeypatch.setenv("FORGEJO_TOKEN", "secret")
+    monkeypatch.setenv("ARGO_TOKEN", ARGO_READ_TOKEN)
     monkeypatch.setattr(
         release_publish,
         "verify_ready",
@@ -600,6 +746,8 @@ def test_verify_only_reads_the_published_release_without_writing_or_pushing(monk
 
 
 def test_main_does_not_allow_notes_to_bypass_the_changelog_gate(monkeypatch, capsys):
+    monkeypatch.setenv("FORGEJO_TOKEN", "forgejo-test-token")
+    monkeypatch.setenv("ARGO_TOKEN", ARGO_READ_TOKEN)
     monkeypatch.setattr(
         release_publish,
         "release_notes_from_changelog",
@@ -685,6 +833,25 @@ def test_workflow_documentation_keeps_forgejo_authoritative():
     assert "existing name" in document
     assert "force-push" in document
     assert "new annotated tag" in document
+    assert "release-token-provisioning.md" in document
+
+
+def test_release_token_documentation_defines_secure_provisioning_contract():
+    document = Path(
+        "docs/notes/release-token-provisioning.md"
+    ).read_text(encoding="utf-8")
+
+    for variable in ("FORGEJO_TOKEN", "ARGO_TOKEN", "ARGO_SUBMIT_TOKEN"):
+        assert variable in document
+    assert "secret/rs-manager/brand-kit/release/forgejo" in document
+    assert "secret/rs-manager/brand-kit/release/argo-read" in document
+    assert "secret/rs-manager/brand-kit/release/argo-submit" in document
+    assert "minimum scope" in document
+    assert "Rotation order" in document
+    assert "401`/`403" in document
+    assert "argv" in document
+    assert "ARGO_TOKEN` is never promoted to `ARGO_SUBMIT_TOKEN" in document
+    assert "export FORGEJO_TOKEN='...'" not in document
 
 
 def test_consumer_recovery_documentation_keeps_the_exact_tag_and_requires_reverify():
