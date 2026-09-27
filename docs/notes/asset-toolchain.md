@@ -23,6 +23,20 @@ intentional: it spans the Argo failure-log/workflow retention window, so a
 short-lived failed run is still detected after its logs or Workflow object are
 reaped.
 
+The list is a complete Kubernetes-style snapshot, not a single page. The
+watcher requests at most 100 records per page, follows every non-empty
+`metadata.continue` token with the original label selector and limit, and only
+then applies the local UTC cutoff. It does not stop because a page is old or
+short: Argo may return pages in an order that is not timestamp order. A failure
+is in-window when its first usable timestamp among `status.finishedAt`,
+`status.startedAt`, and `metadata.creationTimestamp` is at or after the cutoff;
+an in-window successful attestation requires `status.finishedAt` at or after
+the cutoff. A missing timestamp on a failed record remains reportable for
+manual review. Missing `items`, missing pagination metadata on a continuation
+page, malformed workflow objects or continuation metadata, a repeated token, a
+failed page request, or any other incomplete page fails the watcher closed with
+an error report and no partial result.
+
 ### Deployment path and live parity
 
 These two manifests are not copied into `declarative-config`. The

@@ -31,6 +31,7 @@ DEFAULT_ARGO_NAMESPACE = release_publish.DEFAULT_ARGO_NAMESPACE
 DEFAULT_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
 DEFAULT_LOOKBACK_MINUTES = 120
 DEFAULT_LIST_LIMIT = 100
+MAX_LIST_PAGES = 10_000
 REPORT_SCHEMA = "brand-kit-ci-failure-watch/v1"
 ATTESTATION_SCHEMA = release_publish.CI_ATTESTATION_SCHEMA
 FAILURE_PHASES = frozenset({"Failed", "Error"})
@@ -74,6 +75,7 @@ def workflow_list_url(
     workflow_template: str,
     *,
     limit: int = DEFAULT_LIST_LIMIT,
+    continue_token: str | None = None,
 ) -> str:
     if not isinstance(workflow_template, str) or not release_publish.WORKFLOW_NAME_PATTERN.fullmatch(
         workflow_template
@@ -83,11 +85,105 @@ def workflow_list_url(
         )
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise release_publish.ReleaseError("Argo workflow list limit must be between 1 and 1000")
+    if continue_token is not None and (
+        not isinstance(continue_token, str) or not continue_token.strip()
+    ):
+        raise release_publish.ReleaseError("Argo workflow continuation token must be non-empty")
     label_selector = urllib.parse.quote(
         f"workflows.argoproj.io/workflow-template={workflow_template}",
         safe="",
     )
-    return f"{argo_workflows_url(api_url, namespace)}?labelSelector={label_selector}&limit={limit}"
+    url = f"{argo_workflows_url(api_url, namespace)}?labelSelector={label_selector}&limit={limit}"
+    if continue_token is not None:
+        url += f"&continue={urllib.parse.quote(continue_token, safe='')}"
+    return url
+
+
+def _workflow_list_items(
+    token: str,
+    *,
+    api_url: str,
+    namespace: str,
+    workflow_template: str,
+    request: Callable[..., Any],
+) -> list[dict[str, Any]]:
+    """Read one complete, consistently paginated Workflow list snapshot.
+
+    Argo exposes Kubernetes list pagination in ``metadata.continue``. A
+    missing or empty token is the only terminal condition; pages are not
+    assumed to be ordered by any workflow timestamp, so the caller must apply
+    its time window after this function has collected every page.
+    """
+    items: list[dict[str, Any]] = []
+    continuation: str | None = None
+    seen_tokens: set[str] = set()
+    page_number = 0
+
+    while True:
+        page_number += 1
+        if page_number > MAX_LIST_PAGES:
+            raise release_publish.ReleaseError(
+                "Argo workflow-list pagination exceeded the maximum page count"
+            )
+        response = request(
+            "GET",
+            workflow_list_url(
+                api_url,
+                namespace,
+                workflow_template,
+                continue_token=continuation,
+            ),
+            token=token,
+            authorization_scheme="Bearer",
+            service="Argo API",
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("items"), list):
+            raise release_publish.ReleaseError(
+                f"Argo workflow-list page {page_number} has no items list"
+            )
+
+        page_items = response["items"]
+        for item in page_items:
+            if not isinstance(item, dict):
+                raise release_publish.ReleaseError(
+                    f"Argo workflow-list page {page_number} contains a non-object item"
+                )
+            if not isinstance(item.get("metadata"), dict) or not isinstance(
+                item.get("status"), dict
+            ):
+                raise release_publish.ReleaseError(
+                    f"Argo workflow-list page {page_number} contains an incomplete workflow"
+                )
+        items.extend(page_items)
+
+        if "metadata" not in response:
+            if continuation is not None:
+                raise release_publish.ReleaseError(
+                    f"Argo workflow-list page {page_number} has no pagination metadata"
+                )
+            next_continuation = None
+        elif not isinstance(response["metadata"], dict):
+            raise release_publish.ReleaseError(
+                f"Argo workflow-list page {page_number} has invalid metadata"
+            )
+        else:
+            metadata = response["metadata"]
+            next_continuation = metadata.get("continue")
+            if next_continuation in (None, ""):
+                next_continuation = None
+            elif not isinstance(next_continuation, str) or not next_continuation.strip():
+                raise release_publish.ReleaseError(
+                    f"Argo workflow-list page {page_number} has an invalid continuation token"
+                )
+
+        if next_continuation is None:
+            return items
+        if next_continuation in seen_tokens:
+            raise release_publish.ReleaseError(
+                "Argo workflow-list pagination repeated a continuation token"
+            )
+        seen_tokens.add(next_continuation)
+        continuation = next_continuation
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -246,20 +342,17 @@ def run_watch(
         raise release_publish.ReleaseError("lookback minutes must be between 1 and 1440")
 
     current = _utc_now(now)
-    response = request(
-        "GET",
-        workflow_list_url(api_url, namespace, workflow_template),
-        token=token,
-        authorization_scheme="Bearer",
-        service="Argo API",
-    )
-    if not isinstance(response, dict) or not isinstance(response.get("items"), list):
-        raise release_publish.ReleaseError("Argo workflow-list response has no items list")
-
     cutoff = current - timedelta(minutes=lookback_minutes)
+    workflows = _workflow_list_items(
+        token,
+        api_url=api_url,
+        namespace=namespace,
+        workflow_template=workflow_template,
+        request=request,
+    )
     failures = [
         summary
-        for item in response["items"]
+        for item in workflows
         if (summary := _failure_summary(
             item,
             cutoff=cutoff,
@@ -271,7 +364,7 @@ def run_watch(
     ]
     attestations = [
         attestation
-        for item in response["items"]
+        for item in workflows
         if (attestation := _success_attestation(item, cutoff=cutoff)) is not None
     ]
     failures.sort(

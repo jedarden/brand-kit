@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import urllib.error
 
+import pytest
+
 from tools import brand_kit_ci_failure_watch
 from tools import release_publish
 
@@ -76,6 +78,123 @@ def test_run_watch_reports_recent_failures_and_ignores_successes_and_old_runs():
     assert "workflow-template%3Dbrand-kit-ci" in calls[0][1]
     assert calls[0][2]["authorization_scheme"] == "Bearer"
     assert "argo-secret" not in json.dumps(report)
+
+
+def test_run_watch_exhausts_continuation_pages_before_applying_timestamp_cutoff():
+    calls = []
+    pages = iter(
+        [
+            {
+                "items": [
+                    workflow("brand-kit-ci-old-page-one", "Failed", "2026-09-27T10:59:59Z")
+                ],
+                "metadata": {"continue": "opaque/page+two"},
+            },
+            {
+                "items": [
+                    workflow(
+                        "brand-kit-ci-recent-page-two",
+                        "Error",
+                        "2026-09-27T11:00:00-00:00",
+                    ),
+                    workflow(
+                        "brand-kit-ci-success-page-two",
+                        "Succeeded",
+                        "2026-09-27T12:45:00Z",
+                        commit=COMMIT,
+                    ),
+                ],
+                "metadata": {"continue": ""},
+            },
+        ]
+    )
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return next(pages)
+
+    report = brand_kit_ci_failure_watch.run_watch(
+        "argo-secret",
+        api_url="https://argo.example",
+        now=NOW,
+        request=request,
+    )
+
+    assert [failure["name"] for failure in report["failures"]] == [
+        "brand-kit-ci-recent-page-two"
+    ]
+    assert report["attestations"][0]["workflow_uid"] == "uid-brand-kit-ci-success-page-two"
+    assert len(calls) == 2
+    assert "continue=opaque%2Fpage%2Btwo" in calls[1][1]
+    assert "labelSelector=workflows.argoproj.io%2Fworkflow-template%3Dbrand-kit-ci" in calls[1][1]
+    assert "limit=100" in calls[1][1]
+
+
+def test_run_watch_fails_closed_when_a_continuation_page_is_incomplete():
+    calls = []
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if len(calls) == 1:
+            return {
+                "items": [workflow("brand-kit-ci-first-page", "Failed", "2026-09-27T12:45:00Z")],
+                "metadata": {"continue": "next-page"},
+            }
+        return {"metadata": {"continue": "ignored"}}
+
+    with pytest.raises(release_publish.ReleaseError, match="page 2 has no items list"):
+        brand_kit_ci_failure_watch.run_watch(
+            "argo-secret",
+            now=NOW,
+            request=request,
+        )
+
+    assert len(calls) == 2
+
+
+def test_run_watch_fails_closed_when_a_continuation_page_omits_pagination_metadata():
+    calls = []
+
+    def request(method, url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return {"items": [], "metadata": {"continue": "next-page"}}
+        return {"items": []}
+
+    with pytest.raises(
+        release_publish.ReleaseError,
+        match="page 2 has no pagination metadata",
+    ):
+        brand_kit_ci_failure_watch.run_watch(
+            "argo-secret",
+            now=NOW,
+            request=request,
+        )
+
+    assert len(calls) == 2
+
+
+def test_run_watch_fails_closed_on_invalid_or_repeated_continuation_tokens():
+    for metadata, message in (
+        ({"continue": 123}, "invalid continuation token"),
+        ({"continue": "same"}, "repeated a continuation token"),
+    ):
+        calls = []
+
+        def request(method, url, **kwargs):
+            calls.append(url)
+            if len(calls) == 1:
+                return {"items": [], "metadata": metadata}
+            return {"items": [], "metadata": metadata}
+
+        with pytest.raises(release_publish.ReleaseError, match=message):
+            brand_kit_ci_failure_watch.run_watch(
+                "argo-secret",
+                now=NOW,
+                request=request,
+            )
+
+        assert len(calls) == (1 if isinstance(metadata["continue"], int) else 2)
 
 
 def test_run_watch_passes_when_no_recent_failure_exists():
