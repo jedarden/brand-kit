@@ -270,6 +270,7 @@ def test_apply_handoff_uses_site_favicon_command_and_detector(
     for path, content in favicon_files.items():
         path.write_bytes(content)
     monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
     monkeypatch.setattr(consumer_sync, "check_live_avatar", lambda offline: False)
     monkeypatch.setattr(consumer_sync, "check_live_og", lambda site, offline: False)
     monkeypatch.setattr(
@@ -308,6 +309,7 @@ def test_apply_returns_failure_when_managed_refresh_is_incomplete(
 ):
     site = make_site(tmp_path)
     monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
     monkeypatch.setattr(
         sys,
         "argv",
