@@ -8,6 +8,10 @@ stale."* CI proves this repo's committed assets match their sources at a given
 tag; it cannot reach into someone else's repo or a platform profile and refresh
 what they copied last May.
 
+The implemented release-publication, mirror-propagation, and tri-state audit
+architecture is captured in
+[`ADR-6`](../plan/plan.md#adr-6-2026-09-27--release-publication-and-consumer-drift-handoff-architecture).
+
 This document is that checklist; `tools/consumer_sync.py` is the remediation
 script. Run the workflow **after every published Forgejo Release that changes
 `source/` or the derived output** and after the server-side GitHub push mirror

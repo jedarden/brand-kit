@@ -6,6 +6,10 @@ pushed tag alone is not a release. Forgejo is the only release authority;
 GitHub receives the tag through the server-side mirror and must not receive a
 second Release object. Forgejo is the sole release authority.
 
+The architecture and rationale for the publication gates, CI attestation,
+mirror agreement, and consumer handoff are recorded in
+[`ADR-6`](../plan/plan.md#adr-6-2026-09-27--release-publication-and-consumer-drift-handoff-architecture).
+
 Choose the version using [ADR-5's SemVer policy](../plan/plan.md#adr-5-2026-09-27--semver-policy-and-canonical-release-version).
 The root `VERSION` file is the one authoritative version source. Do not
 invent a value by hand in this checklist or infer it from the previous

@@ -466,3 +466,101 @@ which could drift from the changelog or the tag.
 - Release preparation has one extra commit-time check: `VERSION`, the
   changelog section, and the release candidate must be updated together before
   CI and tagging.
+
+## ADR-6: 2026-09-27 — Release-publication and consumer-drift handoff architecture
+
+### Context
+
+ADR-1 defined the intended release identity — an annotated tag plus a published
+Forgejo Release — but the machinery that now enforces the distribution
+boundary grew across the publication and consumer-audit tools. A server-side
+GitHub mirror introduces propagation delay without mirroring Forgejo Release
+objects. The release publisher therefore has to prove both the content that CI
+checked and the exact tag visible at both remotes before it can publish or hand
+off to consumers. The consumer audit also runs against network resources and
+must distinguish a confirmed stale copy from an audit that could not obtain
+enough evidence. Without recording those rules here, the operational notes
+describe behavior that is easy to mistake for optional ceremony.
+
+### Decision
+
+1. **Forgejo is the sole release authority.** A complete release consists of
+   the annotated `vX.Y.Z` tag on the release commit and one published Forgejo
+   Release attached to that exact tag. `origin` is the canonical Forgejo
+   remote and the only release-publication authority. GitHub is a read-only,
+   server-side push mirror for Git refs: its peeled tag must agree with
+   Forgejo's, but it must never receive a second GitHub Release object. A
+   pushed tag without the matching published Forgejo record is incomplete.
+2. **Publication is a fail-closed, idempotent gate.**
+   `tools/release_publish.py` requires an annotated tag at `HEAD`, waits for
+   the canonical and mirror peeled refs to agree, and reads the exact
+   changelog section for the release body. Before any Forgejo write, it
+   performs a read-only Argo attestation of the named `brand-kit-ci` run: the
+   run must be `Succeeded` and expose a structured full commit SHA matching
+   the release commit. Missing, failed, malformed, mismatched, or inaccessible
+   tag, mirror, Argo, or Forgejo state blocks publication. The publisher
+   reuses an exact existing record or publishes an exact matching draft,
+   accepts a create race only after an exact reread, and verifies the record
+   and both remotes again after the write. It never calls the GitHub Releases
+   API or pushes the mirror itself.
+3. **The consumer handoff uses the same identity and propagation gates.**
+   `tools/consumer_drift_submit.py` first requires a published Forgejo record
+   with a verifiable full target commit, then waits for the canonical and
+   read-only mirror tags to agree before submitting the exact release tag to
+   the Argo `brand-kit-consumer-drift` WorkflowTemplate. The workflow waits
+   again for mirror visibility before checking out that tag. This duplicate
+   visibility check is intentional: it protects both the submitting operator
+   and the isolated workflow from starting against a tag that is still
+   propagating.
+4. **Consumer drift is read-only and tri-state.**
+   `tools/consumer_drift.py` audits the selected release checkout and the
+   registered consumer/live assets without applying, committing, or pushing
+   anything. Exit `0` means every required check is current; exit `1` means
+   confirmed consumer drift; exit `2` means the audit is indeterminate because
+   the release record, checkout, configuration, network, or a required live
+   resource could not be verified. Network failures, unavailable live assets,
+   and skipped checks must never be reported as a pass. Remediation remains
+   the ADR-2 checklist and the consumer repository's own review boundary.
+5. **The daily CronWorkflow is an eventual-consistency fallback.**
+   `automation/brand-kit-consumer-drift-cronworkflow.yml` remains enabled at
+   06:17 UTC. With the configured 24-hour minimum release age, discovery
+   considers only published, stable SemVer releases whose peeled tags are
+   visible on the read-only GitHub mirror, and selects the newest eligible
+   release. If the newest release is still propagating, it audits the newest
+   older eligible release instead of treating temporary propagation as a
+   consumer failure. The release-triggered workflow is the fast path; the
+   daily run provides recovery when that handoff is delayed or missed.
+
+### Alternatives Considered
+
+- **Create a second GitHub Release.** Rejected — the mirror propagates Git
+  refs, not Forgejo Release objects, and two release records would create
+  divergent authority, notes, and recovery semantics.
+- **Start consumer work from the tag push or webhook alone.** Rejected — the
+  mirror can lag the canonical tag, and a tag does not prove that CI checked
+  the exact release commit or that a published Forgejo record exists.
+- **Treat network failures or unavailable live assets as a pass.** Rejected —
+  an audit that cannot observe a required resource has no evidence of current
+  state; exit `2` preserves that distinction for operators and schedulers.
+- **Let the detector refresh or commit consumers automatically.** Rejected —
+  read-only detection avoids cross-repository write credentials, preserves the
+  consumer's review and deployment flow, and keeps manual avatar management
+  outside this repository's authority.
+
+### Consequences
+
+- Every publication and consumer audit has one immutable identity: the exact
+  annotated release tag, its full commit, and the single Forgejo Release
+  record.
+- Mirror propagation is handled explicitly at publication, handoff, and
+  scheduled discovery boundaries, so downstream work cannot silently audit a
+  different or unavailable release.
+- CI evidence is an authorization prerequisite rather than a best-effort
+  status check, and an audit failure cannot become a misleading green result
+  because the network was unavailable.
+- Consumer remediation stays human-reviewed and cross-repository writes remain
+  outside the detector and its Argo credentials; the trade-off is a separate
+  scheduled fallback and a tri-state result that operators must interpret.
+- The implementation and operator procedures are maintained together in
+  [`release-publication.md`](../notes/release-publication.md) and
+  [`post-tag-consumer-update.md`](../notes/post-tag-consumer-update.md).
