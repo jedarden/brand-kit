@@ -63,8 +63,12 @@ def probe_forgejo(
     """Check token authentication and release-record read access in Forgejo."""
     token = release_publish.require_token(token, "FORGEJO_TOKEN")
     user = request("GET", f"{api_url.rstrip('/')}/user", token=token)
-    if not isinstance(user, dict):
-        raise release_publish.ReleaseError("Forgejo token self-lookup returned a non-object")
+    if not isinstance(user, dict) or not isinstance(user.get("login"), str) or not user[
+        "login"
+    ].strip():
+        raise release_publish.ReleaseError(
+            "Forgejo token self-lookup returned an inconclusive response"
+        )
 
     releases = request(
         "GET",
@@ -105,9 +109,9 @@ def probe_argo_read(
         authorization_scheme="Bearer",
         service="Argo API",
     )
-    if not isinstance(workflows, dict):
+    if not isinstance(workflows, dict) or not isinstance(workflows.get("items"), list):
         raise release_publish.ReleaseError(
-            "Argo workflow-list probe returned a non-object response"
+            "Argo workflow-list probe returned an inconclusive response"
         )
 
 
@@ -143,9 +147,10 @@ def probe_argo_submit(
         authorization_scheme="Bearer",
         service="Argo API",
     )
-    if not isinstance(response, dict):
+    metadata = response.get("metadata") if isinstance(response, dict) else None
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("name"), str):
         raise release_publish.ReleaseError(
-            "Argo WorkflowTemplate dry-run returned a non-object response"
+            "Argo WorkflowTemplate dry-run returned an inconclusive response"
         )
 
 
@@ -194,11 +199,18 @@ def run_probe(
             ),
         ),
     )
+    tokens = (forgejo_token, argo_token, argo_submit_token)
     for name, probe in probes:
         try:
             probe()
         except release_publish.ReleaseError as error:
-            checks.append({"credential": name, "status": "fail", "error": str(error)})
+            checks.append(
+                {
+                    "credential": name,
+                    "status": "fail",
+                    "error": release_publish._redact(str(error), *tokens),
+                }
+            )
         else:
             checks.append({"credential": name, "status": "pass"})
     return {
