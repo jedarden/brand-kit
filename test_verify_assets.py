@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import pytest
 from PIL import Image
@@ -107,6 +108,58 @@ def test_dimensions_report_incorrect_dimensions(dimension_fixture):
 
     assert not ok
     assert rows[0] == ("avatars/avatar.png", "4×4", "5×4", "✗ MISMATCH")
+
+
+def test_platform_manifest_matches_readme_and_committed_files():
+    rows, ok = verify_assets.verify_platform_manifest()
+
+    assert ok
+    assert rows[-1] == (
+        verify_assets.PLATFORM_MANIFEST_RELPATH,
+        "README platform table, committed files, and source assets",
+        "31 entries",
+        "✓",
+    )
+
+
+def test_platform_manifest_reports_committed_dimension_drift(monkeypatch, tmp_path):
+    source_root = verify_assets.ROOT
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    shutil.copy(source_root / "README.md", root / "README.md")
+    shutil.copy(
+        source_root / verify_assets.PLATFORM_MANIFEST_RELPATH,
+        root / verify_assets.PLATFORM_MANIFEST_RELPATH,
+    )
+    manifest = json.loads(
+        (root / verify_assets.PLATFORM_MANIFEST_RELPATH).read_text(encoding="utf-8")
+    )
+    for asset in manifest["assets"]:
+        path = root / asset["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.name == "favicon.ico":
+            _write_ico(path, [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+        else:
+            Image.new(
+                "RGB",
+                (asset["dimensions"]["width"], asset["dimensions"]["height"]),
+                "#DC3127",
+            ).save(path)
+        source = root / asset["source"]
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"source")
+    drifted = root / "avatars/x-400.png"
+    Image.new("RGB", (399, 400), "#DC3127").save(drifted)
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+
+    rows, ok = verify_assets.verify_platform_manifest()
+
+    assert not ok
+    assert any(
+        row[0] == "avatars/x-400.png"
+        and row[3] == "✗ committed dimensions mismatch"
+        for row in rows
+    )
 
 
 def test_presence_accepts_valid_fixture(presence_fixture):

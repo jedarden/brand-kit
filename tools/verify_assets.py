@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """Verify that committed assets match every testable claim README.md makes.
 
-Six classes of README-vs-repo drift are checked:
+Seven classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
-  2. Presence of every repo path README names (plus absence of the file
+  2. The generated platform manifest matches the README table, committed
+     dimensions, and declared source assets.
+  3. Presence of every repo path README names (plus absence of the file
      it documents as removed).
-  3. favicon.ico is multi-resolution 16-256 and every contained frame
+  4. favicon.ico is multi-resolution 16-256 and every contained frame
      decodes.
-  4. The transparent variants have full alpha channels, and the
+  5. The transparent variants have full alpha channels, and the
      transparent SVG master has its background removed relative to the
      opaque one.
-  5. The required names and exact six-digit hex values in palette.json match
+  6. The required names and exact six-digit hex values in palette.json match
      the canonical palette table.
-  6. The generated asset inventory is exactly the 37 documented derived
+  7. The generated asset inventory is exactly the 37 documented derived
      assets plus palette.json.
 
 Run: .venv/bin/python tools/verify_assets.py
@@ -27,6 +29,8 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
+PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
+PLATFORM_MANIFEST_SCHEMA_VERSION = 1
 PALETTE_RELPATH = "palette.json"
 CANONICAL_PALETTE = {
     "Polo Red": "#DC3127",
@@ -132,6 +136,7 @@ EXPECTED_PRESENT = [
     "source/logo.svg",
     "source/logo.png",
     "source/hero.png",
+    "platform-assets.json",
 
     # Transparent variants (README: "Transparent variants")
     "logo/logo-256-transparent.png",
@@ -171,6 +176,291 @@ FILL_RE = re.compile(r'fill="(#[0-9A-Fa-f]{3,8})"')
 # README: favicon.ico is "multi-res 16–256"
 ICO_RELPATH = "favicon/favicon.ico"
 ICO_MIN_SIZE, ICO_MAX_SIZE = 16, 256
+MARKDOWN_ASSET_RE = re.compile(r"`([^`]+)`(?:\s*\(([^)]*)\))?")
+DIMENSION_RE = re.compile(r"(?<!\d)(\d+)\s*[×x]\s*(\d+)")
+
+
+def _readme_section(text, heading, next_heading_pattern=r"^#{1,6}\s+"):
+    """Return one Markdown section, excluding its next heading."""
+    start = text.find(heading)
+    if start == -1:
+        raise ValueError(f"README section missing: {heading}")
+    body_start = start + len(heading)
+    next_heading = re.search(next_heading_pattern, text[body_start:], re.MULTILINE)
+    end = body_start + next_heading.start() if next_heading else len(text)
+    return text[body_start:end]
+
+
+def _expected_source_for_path(path):
+    if path.startswith(("avatars/", "favicon/")):
+        return "source/logo.svg"
+    if path.startswith("banners/"):
+        return "source/hero.png"
+    raise ValueError(f"README platform asset has unknown generated family: {path}")
+
+
+def _table_cells(line):
+    if not line.lstrip().startswith("|"):
+        return None
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _readme_dimensions(annotation, path):
+    matches = [
+        {"width": int(width), "height": int(height)}
+        for width, height in DIMENSION_RE.findall(annotation or "")
+    ]
+    if path == ICO_RELPATH:
+        if not matches:
+            raise ValueError(f"missing favicon dimensions for {path}")
+        return {
+            "width": max(size["width"] for size in matches),
+            "height": max(size["height"] for size in matches),
+            "sizes": matches,
+        }
+    if len(matches) != 1:
+        raise ValueError(f"expected one dimension pair for {path}")
+    return matches[0]
+
+
+def _readme_favicon_assets(text):
+    """Expand the README's concise favicon-set documentation."""
+    section = _readme_section(text, "### Favicons")
+    assets = []
+    for match in MARKDOWN_ASSET_RE.finditer(section):
+        path = match.group(1)
+        if path == "favicon/":
+            continue
+        if not path.startswith("favicon/"):
+            continue
+        assets.append({
+            "role": "favicon",
+            "path": path,
+            "dimensions": _readme_dimensions(match.group(2), path),
+            "source": _expected_source_for_path(path),
+        })
+    if not assets:
+        raise ValueError("README favicon section has no concrete assets")
+    return assets
+
+
+def read_readme_platform_assets():
+    """Parse the README platform table into manifest-shaped asset entries."""
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = _readme_section(text, "## Per-platform assets")
+    favicon_assets = _readme_favicon_assets(text)
+    entries = []
+    saw_header = False
+
+    for line in section.splitlines():
+        cells = _table_cells(line)
+        if not cells:
+            continue
+        if cells[:3] == ["Platform", "Profile picture", "Banner / cover"]:
+            saw_header = True
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+        if len(cells) < 3:
+            raise ValueError("malformed per-platform asset table row")
+        if not saw_header:
+            raise ValueError("per-platform asset table header missing")
+
+        platform = cells[0]
+        for role, cell in (("profile_picture", cells[1]), ("banner", cells[2])):
+            for match in MARKDOWN_ASSET_RE.finditer(cell):
+                path = match.group(1)
+                if path == "favicon/":
+                    if role != "profile_picture":
+                        raise ValueError("favicon set must be in the profile column")
+                    entries.extend(
+                        {
+                            "platform": platform,
+                            **asset,
+                        }
+                        for asset in favicon_assets
+                    )
+                    continue
+                if path.startswith("…"):
+                    raise ValueError(f"README uses an abbreviated asset path: {path}")
+                entries.append({
+                    "platform": platform,
+                    "role": role,
+                    "path": path,
+                    "dimensions": _readme_dimensions(match.group(2), path),
+                    "source": _expected_source_for_path(path),
+                })
+
+    if not saw_header or not entries:
+        raise ValueError("README per-platform asset table has no asset rows")
+    return entries
+
+
+def _manifest_object(pairs):
+    manifest = {}
+    for key, value in pairs:
+        if key in manifest:
+            raise ValueError(f"duplicate manifest key: {key}")
+        manifest[key] = value
+    return manifest
+
+
+def _manifest_dimensions_are_valid(dimensions):
+    if not isinstance(dimensions, dict):
+        return False
+    if not all(
+        isinstance(dimensions.get(key), int) and not isinstance(dimensions.get(key), bool)
+        and dimensions[key] > 0
+        for key in ("width", "height")
+    ):
+        return False
+    sizes = dimensions.get("sizes")
+    if sizes is None:
+        return True
+    return (
+        isinstance(sizes, list)
+        and all(_manifest_dimensions_are_valid(size) and set(size) == {"width", "height"}
+                for size in sizes)
+    )
+
+
+def _committed_dimensions(path):
+    if path == ROOT / ICO_RELPATH:
+        sizes = [
+            {"width": width, "height": height}
+            for width, height in ico_contained_sizes(path)
+        ]
+        return {
+            "width": max(size["width"] for size in sizes),
+            "height": max(size["height"] for size in sizes),
+            "sizes": sizes,
+        }
+    with Image.open(path) as image:
+        width, height = image.size
+    return {"width": width, "height": height}
+
+
+def verify_platform_manifest():
+    """Validate platform-assets.json against README, files, and sources."""
+    path = ROOT / PLATFORM_MANIFEST_RELPATH
+    claim = "README platform table, committed files, and source assets"
+    if not path.exists():
+        return [(PLATFORM_MANIFEST_RELPATH, claim, "MISSING", "file not found")], False
+
+    try:
+        manifest = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_manifest_object
+        )
+    except (OSError, UnicodeError, ValueError) as error:
+        return [(
+            PLATFORM_MANIFEST_RELPATH,
+            claim,
+            "ERROR",
+            f"invalid JSON: {error}",
+        )], False
+
+    if not isinstance(manifest, dict):
+        return [(PLATFORM_MANIFEST_RELPATH, claim, type(manifest).__name__, "✗ not an object")], False
+    if manifest.get("schema_version") != PLATFORM_MANIFEST_SCHEMA_VERSION:
+        return [(
+            PLATFORM_MANIFEST_RELPATH,
+            claim,
+            repr(manifest.get("schema_version")),
+            f"✗ schema_version must be {PLATFORM_MANIFEST_SCHEMA_VERSION}",
+        )], False
+    actual = manifest.get("assets")
+    if not isinstance(actual, list):
+        return [(PLATFORM_MANIFEST_RELPATH, claim, type(actual).__name__, "✗ assets is not a list")], False
+
+    rows = []
+    all_match = True
+    try:
+        expected = read_readme_platform_assets()
+    except (OSError, UnicodeError, ValueError) as error:
+        return [(PLATFORM_MANIFEST_RELPATH, claim, "README ERROR", str(error))], False
+
+    if actual != expected:
+        rows.append((
+            PLATFORM_MANIFEST_RELPATH,
+            "exact entries parsed from README",
+            f"{len(actual)} entries",
+            f"✗ MISMATCH (README has {len(expected)} entries)",
+        ))
+        all_match = False
+
+    seen = set()
+    for index, asset in enumerate(actual):
+        label = f"asset {index}"
+        if not isinstance(asset, dict):
+            rows.append((label, "manifest asset object", type(asset).__name__, "✗ not an object"))
+            all_match = False
+            continue
+        required = {"platform", "role", "path", "dimensions", "source"}
+        if set(asset) != required:
+            rows.append((
+                label,
+                "platform, role, path, dimensions, source",
+                ", ".join(sorted(asset)),
+                "✗ invalid fields",
+            ))
+            all_match = False
+            continue
+        if not all(isinstance(asset[field], str) and asset[field] for field in ("platform", "role", "path", "source")):
+            rows.append((label, "non-empty string fields", repr(asset), "✗ malformed strings"))
+            all_match = False
+            continue
+        identity = (asset["platform"], asset["role"], asset["path"])
+        if identity in seen:
+            rows.append((label, "unique platform role/path", repr(identity), "✗ duplicate"))
+            all_match = False
+        seen.add(identity)
+        if not _manifest_dimensions_are_valid(asset["dimensions"]):
+            rows.append((label, "valid dimensions object", repr(asset["dimensions"]), "✗ malformed dimensions"))
+            all_match = False
+        asset_path = ROOT / asset["path"]
+        source_path = ROOT / asset["source"]
+        if not asset_path.is_file():
+            rows.append((asset["path"], "committed file exists", "MISSING", "✗ missing"))
+            all_match = False
+            continue
+        if not source_path.is_file():
+            rows.append((asset["source"], "source asset exists", "MISSING", "✗ missing"))
+            all_match = False
+        try:
+            expected_source = _expected_source_for_path(asset["path"])
+        except ValueError:
+            expected_source = None
+        if expected_source is None or asset["source"] != expected_source:
+            rows.append((
+                asset["path"],
+                "source matches generated asset family",
+                asset["source"],
+                "✗ wrong source",
+            ))
+            all_match = False
+        try:
+            committed = _committed_dimensions(asset_path)
+        except Exception as error:
+            rows.append((asset["path"], "file dimensions readable", "ERROR", str(error)))
+            all_match = False
+            continue
+        if asset["dimensions"] != committed:
+            rows.append((
+                asset["path"],
+                repr(asset["dimensions"]),
+                repr(committed),
+                "✗ committed dimensions mismatch",
+            ))
+            all_match = False
+
+    if all_match:
+        rows.append((
+            PLATFORM_MANIFEST_RELPATH,
+            claim,
+            f"{len(actual)} entries",
+            "✓",
+        ))
+    return rows, all_match
 
 
 def verify_dimensions():
@@ -559,6 +849,7 @@ def main():
 
     sections = [
         ("PNG dimensions vs README table", verify_dimensions()),
+        ("Platform asset manifest", verify_platform_manifest()),
         ("Generated asset inventory", verify_inventory()),
         ("README-named files present", verify_presence()),
         ("Canonical palette", verify_palette()),

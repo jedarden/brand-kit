@@ -7,6 +7,9 @@ Sources:
   source/hero.png             -- authoritative banner/cover raster.
   source/logo.png             -- original raster copied to logo-original.png.
 
+The generated ``platform-assets.json`` manifest records the platform role,
+path, dimensions, and authoritative source for each upload-ready asset.
+
 Profile pictures + favicons come from the opaque SVG; transparent logo assets
 come from the transparent SVG; banners/covers come from the hero.
 
@@ -28,6 +31,8 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
+PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
+PLATFORM_MANIFEST_SCHEMA_VERSION = 1
 PALETTE = {
     "Polo Red": "#DC3127",
     "Ink": "#0A0A08",
@@ -158,6 +163,94 @@ FAVICON_SIZES = {
     "favicon/favicon-512.png": 512,
     "favicon/apple-touch-icon-180.png": 180,
 }
+FAVICON_ICO_SIZES = ((16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256))
+
+
+def _manifest_dimensions(path):
+    """Return the dimensions recorded for one generated platform asset."""
+    if path in AVATARS:
+        size = AVATARS[path]
+        return {"width": size, "height": size}
+    if path in BANNERS:
+        width, height, _ = BANNERS[path]
+        return {"width": width, "height": height}
+    if path in FAVICON_SIZES:
+        size = FAVICON_SIZES[path]
+        return {"width": size, "height": size}
+    if path == "favicon/favicon.ico":
+        return {
+            "width": 256,
+            "height": 256,
+            "sizes": [
+                {"width": width, "height": height}
+                for width, height in FAVICON_ICO_SIZES
+            ],
+        }
+    raise ValueError(f"unknown platform asset path: {path}")
+
+
+def _manifest_asset(platform, role, path, source):
+    return {
+        "platform": platform,
+        "role": role,
+        "path": path,
+        "dimensions": _manifest_dimensions(path),
+        "source": source,
+    }
+
+
+# Keep this list in the same order as the README table.  It is the build
+# input for platform-assets.json; verify_assets.py independently parses the
+# README so a stale generated manifest cannot make prose drift invisible.
+PLATFORM_ASSETS = [
+    _manifest_asset("X / Twitter", "profile_picture", "avatars/x-400.png", "source/logo.svg"),
+    _manifest_asset("X / Twitter", "banner", "banners/x-header-1500x500.png", "source/hero.png"),
+    _manifest_asset("LinkedIn (personal)", "profile_picture", "avatars/linkedin-400.png", "source/logo.svg"),
+    _manifest_asset("LinkedIn (personal)", "banner", "banners/linkedin-personal-1584x396.png", "source/hero.png"),
+    _manifest_asset("LinkedIn (company)", "profile_picture", "avatars/linkedin-400.png", "source/logo.svg"),
+    _manifest_asset("LinkedIn (company)", "banner", "banners/linkedin-company-1128x191.png", "source/hero.png"),
+    _manifest_asset("GitHub", "profile_picture", "avatars/github-460.png", "source/logo.svg"),
+    _manifest_asset("GitHub", "banner", "banners/github-social-1280x640.png", "source/hero.png"),
+    _manifest_asset("Instagram", "profile_picture", "avatars/instagram-320.png", "source/logo.svg"),
+    _manifest_asset("Threads", "profile_picture", "avatars/threads-320.png", "source/logo.svg"),
+    _manifest_asset("Facebook", "profile_picture", "avatars/facebook-320.png", "source/logo.svg"),
+    _manifest_asset("Facebook", "banner", "banners/facebook-cover-851x315.png", "source/hero.png"),
+    _manifest_asset("Facebook", "banner", "banners/facebook-cover-2x-1702x630.png", "source/hero.png"),
+    _manifest_asset("YouTube", "profile_picture", "avatars/youtube-800.png", "source/logo.svg"),
+    _manifest_asset("YouTube", "banner", "banners/youtube-banner-2560x1440.png", "source/hero.png"),
+    _manifest_asset("TikTok", "profile_picture", "avatars/tiktok-200.png", "source/logo.svg"),
+    _manifest_asset("Mastodon", "profile_picture", "avatars/mastodon-400.png", "source/logo.svg"),
+    _manifest_asset("Mastodon", "banner", "banners/open-graph-1200x630.png", "source/hero.png"),
+    _manifest_asset("Bluesky", "profile_picture", "avatars/bluesky-400.png", "source/logo.svg"),
+    _manifest_asset("Bluesky", "banner", "banners/twitter-card-1200x628.png", "source/hero.png"),
+    _manifest_asset("Discord", "profile_picture", "avatars/discord-512.png", "source/logo.svg"),
+    _manifest_asset("Discord", "banner", "banners/discord-banner-960x540.png", "source/hero.png"),
+    _manifest_asset("Web / Open Graph", "favicon", "favicon/favicon.ico", "source/logo.svg"),
+    _manifest_asset("Web / Open Graph", "favicon", "favicon/favicon-16.png", "source/logo.svg"),
+    _manifest_asset("Web / Open Graph", "favicon", "favicon/favicon-32.png", "source/logo.svg"),
+    _manifest_asset("Web / Open Graph", "favicon", "favicon/favicon-48.png", "source/logo.svg"),
+    _manifest_asset("Web / Open Graph", "favicon", "favicon/favicon-192.png", "source/logo.svg"),
+    _manifest_asset("Web / Open Graph", "favicon", "favicon/favicon-512.png", "source/logo.svg"),
+    _manifest_asset("Web / Open Graph", "favicon", "favicon/apple-touch-icon-180.png", "source/logo.svg"),
+    _manifest_asset("Web / Open Graph", "banner", "banners/open-graph-1200x630.png", "source/hero.png"),
+    _manifest_asset("Web / Open Graph", "banner", "banners/twitter-card-1200x628.png", "source/hero.png"),
+]
+
+
+def save_platform_manifest():
+    out = ROOT / PLATFORM_MANIFEST_RELPATH
+    out.write_text(
+        json.dumps(
+            {
+                "schema_version": PLATFORM_MANIFEST_SCHEMA_VERSION,
+                "assets": PLATFORM_ASSETS,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"  {PLATFORM_MANIFEST_RELPATH}: {len(PLATFORM_ASSETS)} platform assets")
 
 
 def main():
@@ -199,12 +292,15 @@ def main():
         save(logo_at(size, resvg), path)
     ico = ROOT / "favicon/favicon.ico"
     logo_at(256, resvg).save(
-        ico, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+        ico, sizes=FAVICON_ICO_SIZES
     )
     print("  favicon/favicon.ico: multi-res")
 
     print("banners:")
     save_banners(hero)
+
+    print("platform manifest:")
+    save_platform_manifest()
 
     print("done.")
 

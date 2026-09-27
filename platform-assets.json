@@ -1,0 +1,341 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "platform": "X / Twitter",
+      "role": "profile_picture",
+      "path": "avatars/x-400.png",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "X / Twitter",
+      "role": "banner",
+      "path": "banners/x-header-1500x500.png",
+      "dimensions": {
+        "width": 1500,
+        "height": 500
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "LinkedIn (personal)",
+      "role": "profile_picture",
+      "path": "avatars/linkedin-400.png",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "LinkedIn (personal)",
+      "role": "banner",
+      "path": "banners/linkedin-personal-1584x396.png",
+      "dimensions": {
+        "width": 1584,
+        "height": 396
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "LinkedIn (company)",
+      "role": "profile_picture",
+      "path": "avatars/linkedin-400.png",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "LinkedIn (company)",
+      "role": "banner",
+      "path": "banners/linkedin-company-1128x191.png",
+      "dimensions": {
+        "width": 1128,
+        "height": 191
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "GitHub",
+      "role": "profile_picture",
+      "path": "avatars/github-460.png",
+      "dimensions": {
+        "width": 460,
+        "height": 460
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "GitHub",
+      "role": "banner",
+      "path": "banners/github-social-1280x640.png",
+      "dimensions": {
+        "width": 1280,
+        "height": 640
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "Instagram",
+      "role": "profile_picture",
+      "path": "avatars/instagram-320.png",
+      "dimensions": {
+        "width": 320,
+        "height": 320
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Threads",
+      "role": "profile_picture",
+      "path": "avatars/threads-320.png",
+      "dimensions": {
+        "width": 320,
+        "height": 320
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Facebook",
+      "role": "profile_picture",
+      "path": "avatars/facebook-320.png",
+      "dimensions": {
+        "width": 320,
+        "height": 320
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Facebook",
+      "role": "banner",
+      "path": "banners/facebook-cover-851x315.png",
+      "dimensions": {
+        "width": 851,
+        "height": 315
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "Facebook",
+      "role": "banner",
+      "path": "banners/facebook-cover-2x-1702x630.png",
+      "dimensions": {
+        "width": 1702,
+        "height": 630
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "YouTube",
+      "role": "profile_picture",
+      "path": "avatars/youtube-800.png",
+      "dimensions": {
+        "width": 800,
+        "height": 800
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "YouTube",
+      "role": "banner",
+      "path": "banners/youtube-banner-2560x1440.png",
+      "dimensions": {
+        "width": 2560,
+        "height": 1440
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "TikTok",
+      "role": "profile_picture",
+      "path": "avatars/tiktok-200.png",
+      "dimensions": {
+        "width": 200,
+        "height": 200
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Mastodon",
+      "role": "profile_picture",
+      "path": "avatars/mastodon-400.png",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Mastodon",
+      "role": "banner",
+      "path": "banners/open-graph-1200x630.png",
+      "dimensions": {
+        "width": 1200,
+        "height": 630
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "Bluesky",
+      "role": "profile_picture",
+      "path": "avatars/bluesky-400.png",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Bluesky",
+      "role": "banner",
+      "path": "banners/twitter-card-1200x628.png",
+      "dimensions": {
+        "width": 1200,
+        "height": 628
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "Discord",
+      "role": "profile_picture",
+      "path": "avatars/discord-512.png",
+      "dimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Discord",
+      "role": "banner",
+      "path": "banners/discord-banner-960x540.png",
+      "dimensions": {
+        "width": 960,
+        "height": 540
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "path": "favicon/favicon.ico",
+      "dimensions": {
+        "width": 256,
+        "height": 256,
+        "sizes": [
+          {
+            "width": 16,
+            "height": 16
+          },
+          {
+            "width": 32,
+            "height": 32
+          },
+          {
+            "width": 48,
+            "height": 48
+          },
+          {
+            "width": 64,
+            "height": 64
+          },
+          {
+            "width": 128,
+            "height": 128
+          },
+          {
+            "width": 256,
+            "height": 256
+          }
+        ]
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "path": "favicon/favicon-16.png",
+      "dimensions": {
+        "width": 16,
+        "height": 16
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "path": "favicon/favicon-32.png",
+      "dimensions": {
+        "width": 32,
+        "height": 32
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "path": "favicon/favicon-48.png",
+      "dimensions": {
+        "width": 48,
+        "height": 48
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "path": "favicon/favicon-192.png",
+      "dimensions": {
+        "width": 192,
+        "height": 192
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "path": "favicon/favicon-512.png",
+      "dimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "path": "favicon/apple-touch-icon-180.png",
+      "dimensions": {
+        "width": 180,
+        "height": 180
+      },
+      "source": "source/logo.svg"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "banner",
+      "path": "banners/open-graph-1200x630.png",
+      "dimensions": {
+        "width": 1200,
+        "height": 630
+      },
+      "source": "source/hero.png"
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "banner",
+      "path": "banners/twitter-card-1200x628.png",
+      "dimensions": {
+        "width": 1200,
+        "height": 628
+      },
+      "source": "source/hero.png"
+    }
+  ]
+}

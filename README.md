@@ -19,28 +19,33 @@ platform. The logo is SVG-first: `source/logo.svg` is authoritative, while
 ## Per-platform assets
 
 Drop these straight into each platform's upload dialog — they're already at the
-exact required pixel dimensions.
+exact required pixel dimensions. Consumers can use the generated
+[`platform-assets.json`](platform-assets.json) manifest instead of parsing this
+table; it records each platform, role, path, dimensions, and source asset.
 
 | Platform | Profile picture | Banner / cover |
 |---|---|---|
 | X / Twitter | `avatars/x-400.png` (400×400) | `banners/x-header-1500x500.png` (1500×500) |
 | LinkedIn (personal) | `avatars/linkedin-400.png` (400×400) | `banners/linkedin-personal-1584x396.png` (1584×396) |
-| LinkedIn (company) | `avatars/linkedin-400.png` | `banners/linkedin-company-1128x191.png` (1128×191) |
+| LinkedIn (company) | `avatars/linkedin-400.png` (400×400) | `banners/linkedin-company-1128x191.png` (1128×191) |
 | GitHub | `avatars/github-460.png` (460×460) | `banners/github-social-1280x640.png` (1280×640, repo social preview) |
 | Instagram | `avatars/instagram-320.png` (320×320) | — (no banner) |
 | Threads | `avatars/threads-320.png` (320×320) | — |
-| Facebook | `avatars/facebook-320.png` (320×320) | `banners/facebook-cover-851x315.png` (851×315) · 2× `…-2x-1702x630.png` |
+| Facebook | `avatars/facebook-320.png` (320×320) | `banners/facebook-cover-851x315.png` (851×315) · `banners/facebook-cover-2x-1702x630.png` (1702×630) |
 | YouTube | `avatars/youtube-800.png` (800×800) | `banners/youtube-banner-2560x1440.png` (2560×1440, TV-safe) |
 | TikTok | `avatars/tiktok-200.png` (200×200) | — |
-| Mastodon | `avatars/mastodon-400.png` (400×400) | use `banners/open-graph-1200x630.png` |
-| Bluesky | `avatars/bluesky-400.png` (400×400) | use `banners/twitter-card-1200x628.png` |
+| Mastodon | `avatars/mastodon-400.png` (400×400) | use `banners/open-graph-1200x630.png` (1200×630) |
+| Bluesky | `avatars/bluesky-400.png` (400×400) | use `banners/twitter-card-1200x628.png` (1200×628) |
 | Discord | `avatars/discord-512.png` (512×512) | `banners/discord-banner-960x540.png` (960×540) |
-| Web / Open Graph | `favicon/` set | `banners/open-graph-1200x630.png` (1200×630) · `banners/twitter-card-1200x628.png` |
+| Web / Open Graph | `favicon/` set | `banners/open-graph-1200x630.png` (1200×630) · `banners/twitter-card-1200x628.png` (1200×628) |
 
 ### Favicons (`favicon/`)
 
-`favicon.ico` (multi-res 16–256), `favicon-16/32/48/192/512.png`,
-`apple-touch-icon-180.png`.
+`favicon/favicon.ico` (16×16, 32×32, 48×48, 64×64, 128×128, 256×256),
+`favicon/favicon-16.png` (16×16), `favicon/favicon-32.png` (32×32),
+`favicon/favicon-48.png` (48×48), `favicon/favicon-192.png` (192×192),
+`favicon/favicon-512.png` (512×512), and
+`favicon/apple-touch-icon-180.png` (180×180).
 
 ### Logo masters (`logo/`)
 

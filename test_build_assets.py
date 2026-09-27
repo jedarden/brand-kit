@@ -157,6 +157,14 @@ def test_build_generates_from_authoritative_fixture_sources(
     assert (asset_fixture.root / "palette.json").read_text(encoding="utf-8") == (
         json.dumps(build_assets.PALETTE, indent=2) + "\n"
     )
+    assert json.loads(
+        (asset_fixture.root / build_assets.PLATFORM_MANIFEST_RELPATH).read_text(
+            encoding="utf-8"
+        )
+    ) == {
+        "schema_version": build_assets.PLATFORM_MANIFEST_SCHEMA_VERSION,
+        "assets": build_assets.PLATFORM_ASSETS,
+    }
     assert not (asset_fixture.src / "logo.svg.sha256").exists()
     with Image.open(asset_fixture.root / "avatars/avatar.png") as avatar:
         assert avatar.convert("RGB").getpixel((0, 0)) == (220, 49, 39)
