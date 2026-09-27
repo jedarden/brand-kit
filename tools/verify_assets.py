@@ -16,7 +16,8 @@ Eight classes of README-vs-repo drift are checked:
      the canonical palette table.
   7. The generated asset inventory is exactly the 37 documented derived
      assets plus palette.json.
-  8. source/logo.svg.sha256 is a valid digest of the authoritative SVG.
+  8. source/logo.svg.sha256 and source/logo-transparent.svg.sha256 are valid
+     digests of their authoritative SVGs.
 
 Run: .venv/bin/python tools/verify_assets.py
 Exits 1 on any mismatch, 0 if all checks pass.
@@ -45,6 +46,8 @@ HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 LOGO_SVG_RELPATH = "source/logo.svg"
 LOGO_SVG_SHA256_RELPATH = "source/logo.svg.sha256"
+TRANSPARENT_LOGO_SVG_RELPATH = "source/logo-transparent.svg"
+TRANSPARENT_LOGO_SVG_SHA256_RELPATH = "source/logo-transparent.svg.sha256"
 
 # Expected dimensions mirror the README.md table
 # Format: {path: (expected_width, expected_height)}
@@ -704,8 +707,8 @@ def verify_presence():
     return rows, all_match
 
 
-def verify_logo_checksum():
-    """Check the authoritative SVG against its committed SHA-256 sidecar.
+def _verify_svg_checksum(svg_relpath, checksum_relpath):
+    """Check an authoritative SVG against its committed SHA-256 sidecar.
 
     The sidecar is intentionally a bare hexadecimal digest, matching the
     format written by ``trace_logo.py``. Whitespace surrounding the digest is
@@ -715,20 +718,20 @@ def verify_logo_checksum():
     Returns:
         list of tuples: (path, expected, actual, status_message)
     """
-    svg_path = ROOT / LOGO_SVG_RELPATH
-    checksum_path = ROOT / LOGO_SVG_SHA256_RELPATH
-    claim = f"SHA-256 digest of {LOGO_SVG_RELPATH}"
+    svg_path = ROOT / svg_relpath
+    checksum_path = ROOT / checksum_relpath
+    claim = f"SHA-256 digest of {svg_relpath}"
 
     if not svg_path.is_file():
         return [(
-            LOGO_SVG_RELPATH,
+            svg_relpath,
             "authoritative SVG exists",
             "MISSING",
             "file not found",
         )], False
     if not checksum_path.is_file():
         return [(
-            LOGO_SVG_SHA256_RELPATH,
+            checksum_relpath,
             claim,
             "MISSING",
             "file not found",
@@ -737,11 +740,11 @@ def verify_logo_checksum():
     try:
         recorded = checksum_path.read_text(encoding="ascii").strip()
     except (OSError, UnicodeError) as error:
-        return [(LOGO_SVG_SHA256_RELPATH, claim, "ERROR", str(error))], False
+        return [(checksum_relpath, claim, "ERROR", str(error))], False
 
     if not SHA256_RE.fullmatch(recorded):
         return [(
-            LOGO_SVG_SHA256_RELPATH,
+            checksum_relpath,
             "64 hexadecimal characters",
             recorded or "EMPTY",
             "✗ malformed SHA-256 digest",
@@ -750,13 +753,26 @@ def verify_logo_checksum():
     actual = hashlib.sha256(svg_path.read_bytes()).hexdigest()
     if recorded.lower() != actual:
         return [(
-            LOGO_SVG_SHA256_RELPATH,
+            checksum_relpath,
             actual,
             recorded,
             "✗ stale digest",
         )], False
 
-    return [(LOGO_SVG_SHA256_RELPATH, claim, actual, "✓")], True
+    return [(checksum_relpath, claim, actual, "✓")], True
+
+
+def verify_logo_checksum():
+    """Check the opaque authoritative SVG's committed SHA-256 sidecar."""
+    return _verify_svg_checksum(LOGO_SVG_RELPATH, LOGO_SVG_SHA256_RELPATH)
+
+
+def verify_transparent_logo_checksum():
+    """Check the transparent authoritative SVG's committed SHA-256 sidecar."""
+    return _verify_svg_checksum(
+        TRANSPARENT_LOGO_SVG_RELPATH,
+        TRANSPARENT_LOGO_SVG_SHA256_RELPATH,
+    )
 
 
 def ico_contained_sizes(path):
@@ -927,7 +943,8 @@ def main():
         ("Platform asset manifest", verify_platform_manifest()),
         ("Generated asset inventory", verify_inventory()),
         ("README-named files present", verify_presence()),
-        ("Authoritative SVG checksum", verify_logo_checksum()),
+        ("Authoritative opaque SVG checksum", verify_logo_checksum()),
+        ("Authoritative transparent SVG checksum", verify_transparent_logo_checksum()),
         ("Canonical palette", verify_palette()),
         ("favicon.ico container", verify_favicon_ico()),
         ("Transparent variants", verify_transparency()),

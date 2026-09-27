@@ -271,6 +271,59 @@ def test_logo_checksum_reports_stale_sidecar(logo_checksum_fixture):
     ]
 
 
+@pytest.fixture
+def transparent_logo_checksum_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    svg = root / verify_assets.TRANSPARENT_LOGO_SVG_RELPATH
+    svg.parent.mkdir(parents=True, exist_ok=True)
+    svg.write_bytes(b"<svg>transparent authoritative</svg>\n")
+    checksum = root / verify_assets.TRANSPARENT_LOGO_SVG_SHA256_RELPATH
+    checksum.write_text(
+        f"{hashlib.sha256(svg.read_bytes()).hexdigest()}\n",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    return svg, checksum
+
+
+def test_transparent_logo_checksum_accepts_matching_sidecar(
+    transparent_logo_checksum_fixture,
+):
+    _, checksum = transparent_logo_checksum_fixture
+
+    rows, ok = verify_assets.verify_transparent_logo_checksum()
+
+    assert ok
+    assert rows == [
+        (
+            verify_assets.TRANSPARENT_LOGO_SVG_SHA256_RELPATH,
+            f"SHA-256 digest of {verify_assets.TRANSPARENT_LOGO_SVG_RELPATH}",
+            checksum.read_text(encoding="ascii").strip(),
+            "✓",
+        )
+    ]
+
+
+def test_transparent_logo_checksum_reports_stale_sidecar(
+    transparent_logo_checksum_fixture,
+):
+    svg, checksum = transparent_logo_checksum_fixture
+    stale = hashlib.sha256(b"<svg>previous transparent</svg>\n").hexdigest()
+    checksum.write_text(f"{stale}\n", encoding="ascii")
+
+    rows, ok = verify_assets.verify_transparent_logo_checksum()
+
+    assert not ok
+    assert rows == [
+        (
+            verify_assets.TRANSPARENT_LOGO_SVG_SHA256_RELPATH,
+            hashlib.sha256(svg.read_bytes()).hexdigest(),
+            stale,
+            "✗ stale digest",
+        )
+    ]
+
+
 def test_favicon_accepts_valid_layers(favicon_fixture):
     rows, ok = verify_assets.verify_favicon_ico()
 

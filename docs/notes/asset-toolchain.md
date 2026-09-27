@@ -115,11 +115,23 @@ edit—review the SVG and refresh the sidecar in the same commit:
 sha256sum source/logo.svg | awk '{print $1}' > source/logo.svg.sha256
 ```
 
+`source/logo-transparent.svg.sha256` is the matching committed integrity
+sidecar for the independent transparent authoritative SVG. It follows the
+same bare-digest contract, and `verify_assets.py` rejects a missing,
+malformed, or stale sidecar. Because the transparent SVG is hand-maintained,
+refresh it explicitly whenever `source/logo-transparent.svg` changes, in the
+same commit:
+
+```bash
+sha256sum source/logo-transparent.svg | awk '{print $1}' > source/logo-transparent.svg.sha256
+```
+
 `trace_logo.py` writes the refreshed sidecar automatically after a successful
-trace. Do not refresh it merely to hide an unexpected SVG change. Before an
-ordinary trace, `trace_logo.py` fails closed when the digest is missing or
-malformed. It refuses to replace an existing SVG whose digest does not match
-and checks that invariant again immediately before replacement.
+trace of `source/logo.svg`. It does not update the transparent sidecar. Do not
+refresh either sidecar merely to hide an unexpected SVG change. Before an
+ordinary trace, `trace_logo.py` fails closed when the opaque digest is missing
+or malformed. It refuses to replace an existing SVG whose digest does not
+match and checks that invariant again immediately before replacement.
 `trace_logo.py --force` is the explicit escape hatch for deliberately replacing
 a modified SVG from `source/logo.png`.
 
