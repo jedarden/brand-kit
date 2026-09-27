@@ -11,6 +11,10 @@ source.
 ## [Unreleased]
 
 ### Added
+- Versioned, credential-free release evidence records under
+  release-evidence/v1/<tag>.json, with a strict schema and persistence helper
+  covering the release commit, CI attestation, Forgejo publication, mirror
+  agreement, and consumer-drift handoff.
 - Exact-commit `brand-kit-ci` trigger path: `tools/brand_kit_ci_submit.py`
   submits the Argo WorkflowTemplate with a required full `revision` SHA and
   rejects a submission response that drops or changes that revision; the

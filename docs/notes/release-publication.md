@@ -197,6 +197,47 @@ synchronize from `main` or from a lightweight tag.
 The remediation command remains `tools/consumer_sync.py` and is separate from
 the read-only drift submission.
 
+## Persist release evidence
+
+The release evidence is a versioned, credential-free JSON record committed in
+this repository at
+release-evidence/v1/<tag>.json. It is the durable handoff record for the exact
+release identity, not a replacement for the Argo or Forgejo records. The
+record contains:
+
+- the full release commit;
+- the successful brand-kit-ci/<run-name> and its durable attestation URL,
+  workflow UID, phase, and completion time;
+- the published Forgejo Release URL, tag, and target commit;
+- the origin and github peeled tag commits and their agrees result; and
+- the exact consumer-drift tag, submitted workflow name, status, and durable
+  report URL when one has been retained.
+
+After publication and the consumer handoff, create it with the non-secret
+outputs from those commands:
+
+    .venv/bin/python tools/release_evidence.py \
+      --tag "$VERSION" \
+      --commit "$COMMIT" \
+      --ci-run "brand-kit-ci/<workflow-name>" \
+      --ci-attestation-url \
+        "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/<watcher-uid>/attestations.json" \
+      --ci-workflow-uid "<ci-workflow-uid>" \
+      --ci-finished-at "<timezone-qualified-finished-at>" \
+      --forgejo-release-url \
+        "https://git.ardenone.com/jedarden/brand-kit/releases/tag/$VERSION" \
+      --consumer-workflow "<brand-kit-consumer-drift-workflow-name>" \
+      --mirror-commit "$COMMIT" \
+      --consumer-status submitted
+
+When the consumer run has a durable report, rerun the command with its final
+consumer status and report URL before committing the record. The writer
+validates the v1 schema, requires all identity fields to agree, rejects
+credential-shaped fields and values, and refuses to overwrite an existing tag
+record with different contents. Never add FORGEJO_TOKEN, ARGO_TOKEN,
+ARGO_SUBMIT_TOKEN, bearer values, or any other credential to the record;
+credentials remain environment-only inputs to the operational commands.
+
 ## Recovery and release records
 
 Release recovery always keeps the original annotated tag and commit as the

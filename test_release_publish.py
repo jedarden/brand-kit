@@ -931,6 +931,9 @@ def test_workflow_documentation_keeps_forgejo_authoritative():
     assert "force-push" in document
     assert "new annotated tag" in document
     assert "release-token-provisioning.md" in document
+    assert "release-evidence/v1/<tag>.json" in document
+    assert "tools/release_evidence.py" in document
+    assert "credential-shaped fields and values" in document
 
 
 def test_release_token_documentation_defines_secure_provisioning_contract():

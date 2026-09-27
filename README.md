@@ -481,6 +481,18 @@ Non-success runs also invoke the WorkflowTemplate's exit handler, which posts a
 The JSON report is retained as a non-GC'd Garage artifact at the URL included in
 that alert, rather than remaining only under the ephemeral pod's `/tmp`.
 
+### Release evidence record
+
+Every completed release also gets a credential-free record at
+release-evidence/v1/<tag>.json. After the Forgejo publication and
+consumer-drift handoff, tools/release_evidence.py persists the full release
+commit, CI run and durable attestation URL, Forgejo Release,
+canonical/mirror agreement, and consumer workflow handoff. The record is
+versioned with both the v1 storage directory and schema_version: 1; its strict
+contract and operator command are documented in
+release-evidence/v1/README.md. Tokens and other credentials are never fields
+in the record.
+
 ## Usage & rights
 
 These are the personal brand assets of Jed Arden. The repository is public so the

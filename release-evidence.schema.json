@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://git.ardenone.com/jedarden/brand-kit/src/branch/main/release-evidence.schema.json",
+  "title": "Brand Kit release evidence",
+  "description": "The credential-free, versioned evidence retained for one release.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release",
+    "ci",
+    "forgejo",
+    "mirror",
+    "consumer_drift"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "release": {
+      "$ref": "#/$defs/release"
+    },
+    "ci": {
+      "$ref": "#/$defs/ci"
+    },
+    "forgejo": {
+      "$ref": "#/$defs/forgejo"
+    },
+    "mirror": {
+      "$ref": "#/$defs/mirror"
+    },
+    "consumer_drift": {
+      "$ref": "#/$defs/consumer_drift"
+    }
+  },
+  "$defs": {
+    "tag": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "https_url": {
+      "type": "string",
+      "pattern": "^https://[^/?#]+(?:/[^?#]*)?$"
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "commit"],
+      "properties": {
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "commit": {
+          "$ref": "#/$defs/commit"
+        }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_name",
+        "attestation_url",
+        "workflow_uid",
+        "phase",
+        "finished_at",
+        "commit"
+      ],
+      "properties": {
+        "run_name": {
+          "type": "string",
+          "pattern": "^brand-kit-ci/[A-Za-z0-9][A-Za-z0-9.-]{0,62}$"
+        },
+        "attestation_url": {
+          "type": "string",
+          "pattern": "^https://s3\\.ardenone\\.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/[^?#]+\\.json$"
+        },
+        "workflow_uid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "phase": {
+          "const": "Succeeded"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "commit": {
+          "$ref": "#/$defs/commit"
+        }
+      }
+    },
+    "forgejo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "tag",
+        "release_url",
+        "target_commit",
+        "published"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "release_url": {
+          "$ref": "#/$defs/https_url"
+        },
+        "target_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "published": {
+          "const": true
+        }
+      }
+    },
+    "mirror": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag",
+        "canonical_remote",
+        "canonical_commit",
+        "mirror_remote",
+        "mirror_commit",
+        "agrees"
+      ],
+      "properties": {
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "canonical_remote": {
+          "const": "origin"
+        },
+        "canonical_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "mirror_remote": {
+          "const": "github"
+        },
+        "mirror_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "agrees": {
+          "const": true
+        }
+      }
+    },
+    "consumer_drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release_tag",
+        "workflow_name",
+        "submitted",
+        "status",
+        "report_url"
+      ],
+      "properties": {
+        "release_tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "workflow_name": {
+          "type": "string",
+          "pattern": "^brand-kit-consumer-drift-[A-Za-z0-9][A-Za-z0-9.-]{0,62}$"
+        },
+        "submitted": {
+          "const": true
+        },
+        "status": {
+          "enum": [
+            "submitted",
+            "passed",
+            "drift",
+            "indeterminate",
+            "failed"
+          ]
+        },
+        "report_url": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/https_url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
