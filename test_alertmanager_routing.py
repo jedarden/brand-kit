@@ -55,6 +55,14 @@ EXPECTED_ALERTS = {
         "bucket": "brand-kit",
         "workflow_status": "{{workflow.status}}",
     },
+    "automation/brand-kit-platform-requirements-workflowtemplate.yml": {
+        "alertname": "BrandKitPlatformRequirements",
+        "owner": "jedarden",
+        "component": "platform-requirements",
+        "follow_up": "platform-requirements",
+        "bucket": "brand-kit",
+        "workflow_status": "{{workflow.status}}",
+    },
 }
 
 
@@ -110,6 +118,7 @@ def test_documented_route_verification_covers_all_alerts_without_secrets():
     assert "BrandKitReleaseTokenProbe" in procedure
     assert "BrandKitWorkflowLiveness" in procedure
     assert "BrandKitMirrorHealth" in procedure
+    assert "BrandKitPlatformRequirements" in procedure
     assert "alertmanager-config" in procedure
     assert "port-forward svc/alertmanager" in procedure
     assert "ntfy" in procedure

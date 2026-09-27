@@ -188,6 +188,10 @@ def test_readme_documents_requirement_provenance_and_review_check():
     assert "### Platform requirement provenance" in readme
     assert "### Reviewing changed upload requirements" in readme
     assert "python3 tools/check_platform_requirements.py" in readme
+    assert "--check-reachability" in readme
+    assert "HTTP 2xx/3xx" in readme
+    assert "exit `2` as `INDETERMINATE`" in readme
+    assert "180 calendar days" in readme
     assert "--as-of YYYY-MM-DD" in readme
     assert "Do not merely bump the date" in readme
     for requirement in EXPECTED_PLATFORM_REQUIREMENTS:

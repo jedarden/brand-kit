@@ -180,6 +180,8 @@ EXPECTED_PRESENT = [
     "automation/brand-kit-release-token-probe-workflowtemplate.yml",
     "automation/brand-kit-mirror-health-cronworkflow.yml",
     "automation/brand-kit-mirror-health-workflowtemplate.yml",
+    "automation/brand-kit-platform-requirements-cronworkflow.yml",
+    "automation/brand-kit-platform-requirements-workflowtemplate.yml",
     "docs/notes/post-tag-consumer-update.md",
 ]
 

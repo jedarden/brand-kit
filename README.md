@@ -89,27 +89,46 @@ page before treating a dimension as a hard limit.
 
 ### Reviewing changed upload requirements
 
-The freshness check is intentionally local and deterministic; it does not
-silently turn a network failure or a changed web page into a passing build.
-Run it during release review and at least every 180 days:
+The default freshness check is intentionally local and deterministic. The
+expiry policy is 180 calendar days: a record remains current through day 180
+and expires after that. The scheduled Argo check also probes every valid HTTPS
+source once per day; it does not silently turn a network failure or a changed
+web page into a passing result. Run the deterministic check during release
+review and at least every 180 days:
 
 ```bash
 python3 tools/check_platform_requirements.py
 ```
+
+To perform the live source check manually, use the same command as the
+scheduled workflow:
+
+```bash
+python3 tools/check_platform_requirements.py \
+  --check-reachability --max-age-days 180 --timeout-seconds 15
+```
+
+The command exits `0` only when metadata is current and every source returns
+HTTP 2xx/3xx. Metadata errors and HTTP failures exit `1`; DNS, TLS, timeout,
+and connection failures exit `2` as `INDETERMINATE`, so an outage cannot look
+like a pass. The reachability mode is intentionally opt-in so the normal test
+suite remains deterministic.
 
 When it reports an overdue platform, open that platform's linked source and
 compare each applicable profile, banner, cover, or favicon target with the
 current upload guidance. If the page has moved, changed a minimum or
 recommendation, changed a role's surface, or is no longer authoritative:
 
-1. Replace the URL or target dimensions in `tools/build_assets.py` and update
-   the matching README row and generated assets together.
+1. Open the linked first-party source. If it moved, update the URL in
+   `tools/build_assets.py`; if a target changed, update the dimensions there,
+   the matching README row, and generated assets together.
 2. Set that platform's `last_verified` date to the review date only after the
    external comparison is complete. Do not merely bump the date to silence the
    freshness check.
-3. Run `python3 tools/check_platform_requirements.py`,
-   `.venv/bin/python tools/verify_assets.py`, and the full test suite; review
-   the generated-image diff before committing.
+3. Run both checker modes, `.venv/bin/python tools/verify_assets.py`, and the
+   full test suite; review the generated-image diff before committing. If the
+   live mode exits `2`, retry once connectivity is restored rather than
+   recording a new verification date from an indeterminate result.
 
 For a deterministic audit of an older review, pass `--as-of YYYY-MM-DD`; use
 `--max-age-days N` only when the review cadence is intentionally different.

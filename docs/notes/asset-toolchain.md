@@ -181,6 +181,24 @@ Confirmed drift and indeterminate reads both fail the Workflow and invoke the
 `BrandKitMirrorHealth` Alertmanager route, which sends the owner a durable
 report URL before a release or consumer handoff can rely on the mirror.
 
+### Platform requirement source health
+
+The `brand-kit-platform-requirements` WorkflowTemplate runs the local
+`tools/check_platform_requirements.py` freshness/data check and its explicit
+`--check-reachability` mode once per day. It clones the canonical Forgejo
+repository read-only and checks every valid HTTPS source in
+`platform-assets.json`. The policy is a maximum age of **180 calendar days**:
+an entry is current through day 180 and stale after that. A 2xx or 3xx source
+response passes; an HTTP error is a confirmed failure (exit 1), while DNS,
+TLS, timeout, and connection failures are indeterminate (exit 2). The latter
+must never be treated as proof that a source passed.
+
+The sanitized report is retained at
+`https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-platform-requirements/v1/<workflow-uid>/report.json`.
+Both confirmed and indeterminate failures invoke the
+`BrandKitPlatformRequirements` owner route. The workflow is read-only: it
+does not edit the manifest or external sources.
+
 ## Alertmanager route verification
 
 The regression-gate, consumer-drift, and release-token-probe handlers have a
@@ -197,9 +215,10 @@ Alertmanager route.
 | `brand-kit-release-token-probe` | `BrandKitReleaseTokenProbe` | `release-token-probe` | `consumer-drift` | `jedarden` |
 | `brand-kit-workflow-liveness` | `BrandKitWorkflowLiveness` | `brand-kit-workflow-liveness` | `workflow-liveness` | `jedarden` |
 | `brand-kit-mirror-health` | `BrandKitMirrorHealth` | `forgejo-github-mirror` | `mirror-health` | `jedarden` |
+| `brand-kit-platform-requirements` | `BrandKitPlatformRequirements` | `platform-requirements` | `platform-requirements` | `jedarden` |
 
 The complete label payloads also include `bucket: brand-kit` and the
-`workflow_status` template value. All five handlers POST to
+`workflow_status` template value. All six handlers POST to
 `http://alertmanager.monitoring.svc:9093/api/v1/alerts`; their `onExit` steps
 run only for non-successful workflows and use `continueOn` so an Alertmanager
 or ntfy outage cannot change the original failure result.
