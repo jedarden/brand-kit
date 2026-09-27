@@ -25,7 +25,13 @@ def published(tag="v1.1.0", **overrides):
     return record
 
 
-def argo_workflow(run="brand-kit-ci-abc123", phase="Succeeded", commit=COMMIT, **overrides):
+def argo_workflow(
+    run="brand-kit-ci-abc123",
+    phase="Succeeded",
+    commit=COMMIT,
+    output_name="commit",
+    **overrides,
+):
     workflow = {
         "metadata": {
             "name": run,
@@ -35,11 +41,12 @@ def argo_workflow(run="brand-kit-ci-abc123", phase="Succeeded", commit=COMMIT, *
         },
         "status": {
             "phase": phase,
-            "outputs": {
-                "parameters": [{"name": "commit", "value": commit}],
-            },
         },
     }
+    if output_name is not None:
+        workflow["status"]["outputs"] = {
+            "parameters": [{"name": output_name, "value": commit}],
+        }
     workflow.update(overrides)
     return workflow
 
@@ -629,10 +636,7 @@ def test_argo_attestation_reads_one_workflow_and_accepts_exact_succeeded_commit(
     [
         (argo_workflow(phase="Failed"), "only Succeeded is accepted"),
         (argo_workflow(commit="b" * 40), "attests commit"),
-        (
-            argo_workflow(status={"phase": "Succeeded"}),
-            "no structured full-commit attestation",
-        ),
+        (argo_workflow(output_name=None), "no structured full-commit attestation"),
     ],
 )
 def test_argo_attestation_fails_closed_for_phase_commit_or_missing_evidence(
@@ -644,6 +648,18 @@ def test_argo_attestation_fails_closed_for_phase_commit_or_missing_evidence(
         release_publish.attest_argo_ci_run(
             "brand-kit-ci-abc123", COMMIT, token=ARGO_READ_TOKEN
         )
+
+
+def test_argo_attestation_accepts_the_revision_output_alias(monkeypatch):
+    monkeypatch.setattr(
+        release_publish,
+        "request_json",
+        lambda *args, **kwargs: argo_workflow(output_name="revision"),
+    )
+
+    assert release_publish.attest_argo_ci_run(
+        "brand-kit-ci-abc123", COMMIT, token=ARGO_READ_TOKEN
+    )["status"]["phase"] == "Succeeded"
 
 
 def test_failed_argo_attestation_can_be_retried_for_the_same_run(monkeypatch):
