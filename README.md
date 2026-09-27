@@ -376,6 +376,23 @@ Application is correctly wired to the GitHub mirror, `main`, `automation`,
 and `argo-workflows`, and is `Synced` and `Healthy`; it then compares the
 child objects using read-only `kubectl get` calls and never applies resources.
 
+The same watcher archives recent successful runs as durable CI attestations at
+`attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json`. The
+object envelope contains the watcher UID, and every record contains the exact
+`brand-kit-ci` workflow name, workflow UID, full commit, `Succeeded` phase, and
+timezone-qualified completion time. The UID-scoped object address is treated
+as write-once evidence: Argo never garbage-collects it, the retention pass
+only deletes expired unheld objects, and a release-evidence record holds its
+attestation URL indefinitely. Before accepting a fallback URL after Argo
+returns `404`, `tools/release_publish.py` requires the exact HTTPS object path
+(no query, fragment, credentials, alternate filename, or encoded path), checks
+the envelope UID against that path, validates every record, and requires one
+and only one record matching both the requested commit and workflow name.
+Attestations without a release-evidence hold are retained for 30 days, and
+the scheduled watcher runs `tools/prune_ci_attestations.py` before inspection;
+preserve an unheld object in an approved recovery location before that window
+expires if a longer investigation is required.
+
 ### Automation manifest contract
 
 Before deploying any file under `automation/`, run:

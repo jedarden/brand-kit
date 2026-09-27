@@ -27,7 +27,7 @@ spec:
             # fails before the watcher can create its normal report.
             printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"watcher did not reach the Argo API","failures":[]}' \
               > /tmp/brand-kit-ci-failure-report.json
-            printf '%s\n' '{"schema":"brand-kit-ci-attestation/v1","attestations":[]}' \
+            printf '%s\n' '{"schema":"brand-kit-ci-attestation/v1","watcher_workflow_uid":"{{workflow.uid}}","attestations":[]}' \
               > /tmp/brand-kit-ci-attestations.json
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
@@ -45,9 +45,22 @@ spec:
               exit 2
             fi
             set +e
+            python3 /brand-kit/tools/prune_ci_attestations.py \
+              --retention-days 30 \
+              --release-evidence-root /brand-kit/release-evidence/v1
+            ATTESTATION_PRUNE_EXIT=$?
+            set -e
+            if [ "$ATTESTATION_PRUNE_EXIT" -ne 0 ]; then
+              printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"CI attestation retention cleanup did not complete","failures":[]}' \
+                > /tmp/brand-kit-ci-failure-report.json
+              printf '%s\n' '2' > /tmp/brand-kit-ci-failure-watch-exit-code
+              exit 2
+            fi
+            set +e
             python3 /brand-kit/tools/brand_kit_ci_failure_watch.py \
               --report /tmp/brand-kit-ci-failure-report.json \
               --attestations /tmp/brand-kit-ci-attestations.json \
+              --watcher-workflow-uid "{{workflow.uid}}" \
               --lookback-minutes 120
             WATCH_EXIT=$?
             set -e

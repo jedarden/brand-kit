@@ -644,9 +644,11 @@ def test_argo_attestation_uses_the_durable_record_after_workflow_reaping(monkeyp
             raise release_publish.HttpFailure(404, "workflow reaped", service="Argo API")
         return {
             "schema": release_publish.CI_ATTESTATION_SCHEMA,
+            "watcher_workflow_uid": "watcher-uid",
             "attestations": [
                 {
                     "commit": COMMIT.upper(),
+                    "workflow_name": "brand-kit-ci-abc123",
                     "workflow_uid": "brand-kit-ci-uid",
                     "phase": "Succeeded",
                     "finished_at": "2026-09-27T12:30:00Z",
@@ -674,12 +676,77 @@ def test_argo_attestation_uses_the_durable_record_after_workflow_reaping(monkeyp
     assert calls[1][2] is None
 
 
+def test_durable_attestation_requires_the_exact_workflow_when_commits_repeat(monkeypatch):
+    attestation_url = (
+        "https://s3.ardenone.com/needle-ci-artifacts/attestations/"
+        "brand-kit-ci/v1/watcher-uid/attestations.json"
+    )
+
+    def request(method, url, **kwargs):
+        if "/workflows/" in url:
+            raise release_publish.HttpFailure(404, "workflow reaped", service="Argo API")
+        return {
+            "schema": release_publish.CI_ATTESTATION_SCHEMA,
+            "watcher_workflow_uid": "watcher-uid",
+            "attestations": [
+                {
+                    "commit": COMMIT,
+                    "workflow_name": "brand-kit-ci-a-different-run",
+                    "workflow_uid": "brand-kit-ci-uid",
+                    "phase": "Succeeded",
+                    "finished_at": "2026-09-27T12:30:00Z",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="no record.*workflow"):
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci/brand-kit-ci-abc123",
+            COMMIT,
+            api_url="https://argo.example",
+            token=ARGO_READ_TOKEN,
+            attestation_url=attestation_url,
+        )
+
+
+def test_durable_attestation_rejects_an_object_replaced_under_another_watcher_url(
+    monkeypatch,
+):
+    attestation_url = (
+        "https://s3.ardenone.com/needle-ci-artifacts/attestations/"
+        "brand-kit-ci/v1/watcher-uid/attestations.json"
+    )
+
+    def request(method, url, **kwargs):
+        if "/workflows/" in url:
+            raise release_publish.HttpFailure(404, "workflow reaped", service="Argo API")
+        return {
+            "schema": release_publish.CI_ATTESTATION_SCHEMA,
+            "watcher_workflow_uid": "another-watcher-uid",
+            "attestations": [],
+        }
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="does not match its object URL"):
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci/brand-kit-ci-abc123",
+            COMMIT,
+            token=ARGO_READ_TOKEN,
+            attestation_url=attestation_url,
+        )
+
+
 @pytest.mark.parametrize(
     "url",
     (
         "http://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/x.json",
         "https://evil.example/needle-ci-artifacts/attestations/brand-kit-ci/v1/x.json",
         "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/x.json?raw=1",
+        "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/watcher/other.json",
+        "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/watcher%2Fuid/attestations.json",
     ),
 )
 def test_durable_ci_attestation_url_is_scoped_to_the_public_garage_prefix(url):
@@ -914,6 +981,8 @@ def test_workflow_documentation_keeps_forgejo_authoritative():
     assert "full SHA" in document
     assert "--ci-attestation-url" in document
     assert "attestations/brand-kit-ci/v1" in document
+    assert "exact HTTPS `attestations.json` object" in document
+    assert "indefinite hold" in document
     assert "returns `404`" in document
     assert "ARGO_TOKEN" in document
     assert "--verify-only" in document

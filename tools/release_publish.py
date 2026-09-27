@@ -27,6 +27,11 @@ DEFAULT_ARGO_WORKFLOW_TEMPLATE = "brand-kit-ci"
 DEFAULT_CI_ARTIFACT_HOST = "s3.ardenone.com"
 DEFAULT_CI_ARTIFACT_BUCKET = "needle-ci-artifacts"
 CI_ATTESTATION_SCHEMA = "brand-kit-ci-attestation/v1"
+CI_ATTESTATION_PREFIX = "attestations/brand-kit-ci/v1/"
+CI_ATTESTATION_OBJECT_PATTERN = re.compile(
+    rf"^{re.escape(CI_ATTESTATION_PREFIX)}"
+    rf"(?P<watcher_uid>[A-Za-z0-9][A-Za-z0-9._-]{{0,127}})/attestations\.json$"
+)
 TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 CHANGELOG_HEADING_PATTERN = re.compile(
@@ -410,25 +415,21 @@ def get_argo_workflow(
 
 
 def validate_ci_attestation_url(url: str) -> str:
-    """Allow only the public, read-only Garage prefix used for CI evidence."""
+    """Allow only one public, read-only Garage attestation object."""
     if not isinstance(url, str) or url != url.strip() or not url:
         raise ReleaseError("CI attestation URL must not be empty or padded")
-    parsed = urllib.parse.urlparse(url)
+    parsed = urllib.parse.urlsplit(url)
     try:
         parsed_port = parsed.port
     except ValueError as error:
         raise ReleaseError("CI attestation URL has an invalid port") from error
-    expected_prefix = (
-        f"/{DEFAULT_CI_ARTIFACT_BUCKET}/attestations/brand-kit-ci/v1/"
-    )
+    expected_prefix = f"/{DEFAULT_CI_ARTIFACT_BUCKET}/"
     if (
         parsed.scheme != "https"
         or parsed.hostname != DEFAULT_CI_ARTIFACT_HOST
         or parsed_port is not None
         or parsed.username is not None
         or parsed.password is not None
-        or not parsed.path.startswith(expected_prefix)
-        or not parsed.path.endswith(".json")
         or parsed.query
         or parsed.fragment
     ):
@@ -436,7 +437,36 @@ def validate_ci_attestation_url(url: str) -> str:
             "CI attestation URL must be an HTTPS JSON object in the public "
             f"{DEFAULT_CI_ARTIFACT_HOST}/{DEFAULT_CI_ARTIFACT_BUCKET}/attestations/brand-kit-ci/v1/ prefix"
         )
+    if not parsed.path.startswith(expected_prefix):
+        raise ReleaseError(
+            "CI attestation URL must use the configured Garage bucket path"
+        )
+    object_key = parsed.path[len(expected_prefix) :]
+    # Do not accept encoded separators or dot segments.  The object key must
+    # be the exact write-once address emitted by the watcher.
+    if urllib.parse.unquote(object_key) != object_key or not CI_ATTESTATION_OBJECT_PATTERN.fullmatch(
+        object_key
+    ):
+        raise ReleaseError(
+            "CI attestation URL must name one attestations.json object under "
+            f"{CI_ATTESTATION_PREFIX}<watcher-uid>/"
+        )
     return url
+
+
+def ci_attestation_object_key(url: str) -> str:
+    """Return the validated bucket-relative key for one CI attestation URL."""
+    validate_ci_attestation_url(url)
+    parsed = urllib.parse.urlsplit(url)
+    bucket_prefix = f"/{DEFAULT_CI_ARTIFACT_BUCKET}/"
+    return parsed.path[len(bucket_prefix) :]
+
+
+def ci_attestation_watcher_uid(url: str) -> str:
+    """Return the watcher UID encoded by a validated attestation URL."""
+    match = CI_ATTESTATION_OBJECT_PATTERN.fullmatch(ci_attestation_object_key(url))
+    assert match is not None
+    return match.group("watcher_uid")
 
 
 def _attestation_timestamp(value: Any) -> str:
@@ -464,6 +494,19 @@ def validate_ci_attestation(
         raise ReleaseError(f"release commit is not a full object ID: {release_commit!r}")
     if not isinstance(record, dict):
         raise ReleaseError("CI attestation is not an object")
+    allowed_fields = {
+        "commit",
+        "workflow_name",
+        "workflow_uid",
+        "phase",
+        "finished_at",
+        "schema",
+    }
+    unexpected_fields = sorted(set(record) - allowed_fields)
+    if unexpected_fields:
+        raise ReleaseError(
+            "CI attestation has unexpected fields: " + ", ".join(unexpected_fields)
+        )
     schema = record.get("schema")
     if schema is not None and schema != CI_ATTESTATION_SCHEMA:
         raise ReleaseError(f"CI attestation schema is not {CI_ATTESTATION_SCHEMA!r}")
@@ -477,18 +520,25 @@ def validate_ci_attestation(
     workflow_uid = record.get("workflow_uid")
     if not isinstance(workflow_uid, str) or not WORKFLOW_UID_PATTERN.fullmatch(workflow_uid):
         raise ReleaseError("CI attestation workflow_uid is malformed")
+    workflow_name = record.get("workflow_name")
+    if not isinstance(workflow_name, str):
+        raise ReleaseError("CI attestation workflow_name is missing")
+    try:
+        normalized_workflow_name = argo_run_name(workflow_name)
+    except ReleaseError as error:
+        raise ReleaseError(f"CI attestation workflow_name is malformed: {error}") from error
     if record.get("phase") != "Succeeded":
         raise ReleaseError("CI attestation phase is not Succeeded")
     finished_at = _attestation_timestamp(record.get("finished_at"))
     if ci_run is not None:
         run_name = argo_run_name(ci_run)
-        workflow_name = record.get("workflow_name")
-        if workflow_name is not None and workflow_name != run_name:
+        if normalized_workflow_name != run_name:
             raise ReleaseError(
-                f"CI attestation names workflow {workflow_name!r}, expected {run_name!r}"
+                f"CI attestation names workflow {normalized_workflow_name!r}, expected {run_name!r}"
             )
     validated = dict(record)
     validated["commit"] = commit.lower()
+    validated["workflow_name"] = normalized_workflow_name
     validated["phase"] = "Succeeded"
     validated["finished_at"] = finished_at
     return validated
@@ -514,24 +564,57 @@ def get_ci_attestation(
     except ReleaseError as error:
         raise ReleaseError(f"cannot read CI attestation artifact: {error}") from error
 
-    if isinstance(record, dict) and isinstance(record.get("attestations"), list):
-        matches = [
-            candidate
-            for candidate in record["attestations"]
-            if isinstance(candidate, dict)
-            and isinstance(candidate.get("commit"), str)
-            and candidate["commit"].lower() == release_commit.lower()
-        ]
-        if len(matches) == 0:
-            raise ReleaseError(
-                f"CI attestation artifact has no record for release commit {release_commit.lower()}"
+    if not isinstance(record, dict) or record.get("schema") != CI_ATTESTATION_SCHEMA:
+        raise ReleaseError(f"CI attestation artifact schema is not {CI_ATTESTATION_SCHEMA!r}")
+    if set(record) != {"schema", "watcher_workflow_uid", "attestations"}:
+        raise ReleaseError(
+            "CI attestation artifact must contain only schema, watcher_workflow_uid, and attestations"
+        )
+    candidates = record.get("attestations")
+    if not isinstance(candidates, list):
+        raise ReleaseError("CI attestation artifact has no attestations list")
+    try:
+        watcher_uid = ci_attestation_watcher_uid(url)
+    except ReleaseError as error:
+        raise ReleaseError(f"cannot validate CI attestation object URL: {error}") from error
+    artifact_watcher_uid = record.get("watcher_workflow_uid")
+    if artifact_watcher_uid != watcher_uid:
+        raise ReleaseError(
+            "CI attestation artifact watcher UID does not match its object URL"
+        )
+
+    validated_candidates: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates):
+        try:
+            candidate_commit = candidate.get("commit") if isinstance(candidate, dict) else None
+            validated_candidates.append(
+                validate_ci_attestation(candidate, release_commit=candidate_commit)
             )
-        if len(matches) != 1:
+        except ReleaseError as error:
+            # Validate every entry so malformed or conflicting records cannot
+            # be hidden beside an otherwise matching commit.
             raise ReleaseError(
-                f"CI attestation artifact has multiple records for release commit {release_commit.lower()}"
-            )
-        record = matches[0]
-    return validate_ci_attestation(record, release_commit, ci_run=ci_run)
+                f"CI attestation artifact record {index} is invalid: {error}"
+            ) from error
+    run_name = argo_run_name(ci_run) if ci_run is not None else None
+    matches = [
+        candidate
+        for candidate in validated_candidates
+        if candidate["commit"] == release_commit.lower()
+        and (run_name is None or candidate["workflow_name"] == run_name)
+    ]
+    if len(matches) == 0:
+        detail = f" and workflow {run_name!r}" if run_name is not None else ""
+        raise ReleaseError(
+            f"CI attestation artifact has no record for release commit {release_commit.lower()}"
+            f"{detail}"
+        )
+    if len(matches) != 1:
+        raise ReleaseError(
+            f"CI attestation artifact has multiple records for release commit {release_commit.lower()}"
+            + (f" and workflow {run_name!r}" if run_name is not None else "")
+        )
+    return validate_ci_attestation(matches[0], release_commit, ci_run=ci_run)
 
 
 def _normalized_parameter_name(name: Any) -> str:

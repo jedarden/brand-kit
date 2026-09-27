@@ -238,6 +238,7 @@ def test_run_watch_extracts_recent_successes_into_minimal_durable_attestations()
     assert report["attestations"] == [
         {
             "commit": COMMIT,
+            "workflow_name": "brand-kit-ci-success",
             "workflow_uid": "uid-brand-kit-ci-success",
             "phase": "Succeeded",
             "finished_at": "2026-09-27T12:45:00Z",
@@ -263,6 +264,7 @@ def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch):
             "attestations": [
                 {
                     "commit": "a" * 40,
+                    "workflow_name": "brand-kit-ci-success",
                     "workflow_uid": "uid-success",
                     "phase": "Succeeded",
                     "finished_at": "2026-09-27T12:45:00Z",
@@ -272,15 +274,24 @@ def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch):
     )
 
     assert brand_kit_ci_failure_watch.main(
-        ["--report", str(report_path), "--attestations", str(attestations_path)]
+        [
+            "--report",
+            str(report_path),
+            "--attestations",
+            str(attestations_path),
+            "--watcher-workflow-uid",
+            "watcher-uid",
+        ]
     ) == 0
 
     durable = json.loads(attestations_path.read_text(encoding="utf-8"))
     assert durable == {
         "schema": brand_kit_ci_failure_watch.ATTESTATION_SCHEMA,
+        "watcher_workflow_uid": "watcher-uid",
         "attestations": [
             {
                 "commit": "a" * 40,
+                "workflow_name": "brand-kit-ci-success",
                 "workflow_uid": "uid-success",
                 "phase": "Succeeded",
                 "finished_at": "2026-09-27T12:45:00Z",
@@ -478,7 +489,9 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "brand-kit-release-tokens" in workflow
     assert "key: ARGO_TOKEN" in workflow
     assert "tools/prune_ci_failure_watch_reports.py" in workflow
+    assert "tools/prune_ci_attestations.py" in workflow
     assert "--retention-days 30" in workflow
+    assert "--release-evidence-root /brand-kit/release-evidence/v1" in workflow
     assert 'brand-kit.ardenone.com/argo-failure-retention-seconds: "7200"' in workflow
     assert 'brand-kit.ardenone.com/failure-watch-lookback-minutes: "120"' in workflow
     assert "name: needle-ci-artifact-reader" in workflow
@@ -487,6 +500,8 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json" in workflow
     assert "attestations/brand-kit-ci/v1/{{workflow.uid}}/attestations.json" in workflow
     assert "brand-kit-ci-attestation/v1" in workflow
+    assert '"watcher_workflow_uid":"{{workflow.uid}}"' in workflow
+    assert "--watcher-workflow-uid \"{{workflow.uid}}\"" in workflow
     assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow
     assert '"alertname": "BrandKitCIRegressionGate"' in workflow
     assert '"owner": "jedarden"' in workflow

@@ -300,7 +300,7 @@ def _success_attestation(
     *,
     cutoff: datetime,
 ) -> dict[str, Any] | None:
-    """Return only the four fields needed to prove one successful CI run."""
+    """Return the exact fields needed to prove one successful CI run."""
     if not isinstance(workflow, dict):
         return None
     metadata = workflow.get("metadata")
@@ -315,15 +315,19 @@ def _success_attestation(
     if observed_at is None or observed_at < cutoff:
         return None
     workflow_uid = metadata.get("uid")
+    workflow_name = metadata.get("name")
     commit = _commit_from_workflow(workflow)
     if (
-        not isinstance(workflow_uid, str)
+        not isinstance(workflow_name, str)
+        or not release_publish.WORKFLOW_NAME_PATTERN.fullmatch(workflow_name)
+        or not isinstance(workflow_uid, str)
         or not release_publish.WORKFLOW_UID_PATTERN.fullmatch(workflow_uid)
         or commit is None
     ):
         return None
     return {
         "commit": commit,
+        "workflow_name": workflow_name,
         "workflow_uid": workflow_uid,
         "phase": "Succeeded",
         "finished_at": observed_at.isoformat().replace("+00:00", "Z"),
@@ -414,16 +418,30 @@ def write_report(report: dict[str, Any], path: Path) -> None:
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def write_attestations(report: dict[str, Any], path: Path) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "schema": ATTESTATION_SCHEMA,
-                "attestations": report.get("attestations", []),
-            },
-            indent=2,
-            sort_keys=True,
+def write_attestations(
+    report: dict[str, Any],
+    path: Path,
+    *,
+    watcher_workflow_uid: str | None = None,
+) -> None:
+    if watcher_workflow_uid is not None and not release_publish.WORKFLOW_UID_PATTERN.fullmatch(
+        watcher_workflow_uid
+    ):
+        raise release_publish.ReleaseError("watcher workflow UID is malformed")
+    document: dict[str, Any] = {
+        "schema": ATTESTATION_SCHEMA,
+        "attestations": report.get("attestations", []),
+    }
+    if watcher_workflow_uid is not None:
+        # The UID is part of the object envelope so a copied or replaced
+        # object cannot be accepted under another watcher's immutable URL.
+        document["watcher_workflow_uid"] = watcher_workflow_uid
+    elif "attestations" in report:
+        raise release_publish.ReleaseError(
+            "durable attestation output requires the watcher workflow UID"
         )
+    path.write_text(
+        json.dumps(document, indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
@@ -442,6 +460,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lookback-minutes", type=int, default=DEFAULT_LOOKBACK_MINUTES)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--attestations", type=Path)
+    parser.add_argument(
+        "--watcher-workflow-uid",
+        help="UID of this watcher Workflow, embedded in the durable object envelope",
+    )
     return parser
 
 
@@ -472,8 +494,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         write_report(report, args.report)
         if args.attestations is not None:
-            write_attestations(report, args.attestations)
-    except OSError as error:
+            write_attestations(
+                report,
+                args.attestations,
+                watcher_workflow_uid=args.watcher_workflow_uid,
+            )
+    except (OSError, release_publish.ReleaseError) as error:
         print(f"error: cannot write failure-watch evidence: {error}", file=sys.stderr)
         return 2
 

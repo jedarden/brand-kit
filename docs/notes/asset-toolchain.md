@@ -144,6 +144,41 @@ not a guarantee that its durable report still exists. Preserve any report
 needed for a longer investigation outside this rolling prefix before the
 window expires.
 
+### Durable CI attestations
+
+The watcher also writes successful-run attestations to a separate prefix:
+
+```text
+https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json
+```
+
+The watcher UID is embedded in the JSON envelope and in the object key. Each
+entry includes the exact CI workflow name and UID, full commit, `Succeeded`
+phase, and timezone-qualified `finished_at`. This makes the UID-scoped object
+address a write-once evidence identity: a later watcher has a different UID,
+and the cleanup job only deletes objects, never rewrites or repoints them.
+`artifactGC: Never` prevents Argo from deleting the object with the watcher
+Workflow, but does not make it permanent.
+
+Before each Argo inspection, the same WorkflowTemplate runs
+`tools/prune_ci_attestations.py`. It lists only
+`attestations/brand-kit-ci/v1/` with the Garage reader credential and deletes
+only `attestations.json` objects older than **30 days** with the publisher
+credential. An object exactly at the cutoff remains until the next pass. Every
+`ci.attestation_url` in every valid `release-evidence/v1/*.json` record is an
+indefinite retention hold. The pruner validates all evidence and the exact
+endpoint, bucket, and object-key shape before listing or deleting; malformed,
+missing, or out-of-prefix evidence fails closed and causes an indeterminate
+watcher report.
+
+If the named Argo Workflow has already been garbage-collected, pass the exact
+attestation URL to `tools/release_publish.py`. The publisher uses this fallback
+only after an Argo `404`; it rejects live failed workflows, malformed or
+inaccessible objects, mismatched envelope UIDs, malformed records, duplicate
+matches, and records for another workflow or commit. An unheld object may
+return `404` after the 30-day window, so copy it to an approved recovery
+location before expiry when release recovery or investigation may take longer.
+
 Consumer-drift reports use a separate cleanup policy. The consumer-drift
 WorkflowTemplate runs `tools/prune_consumer_drift_reports.py` before the
 detector with the Garage reader and publisher credentials. It lists only

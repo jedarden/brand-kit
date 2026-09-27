@@ -77,6 +77,9 @@ source.
   release/commit, transform metadata, and per-file SHA-256 digests while
   reporting stale manifests; the registration contract is documented in
   `docs/notes/post-tag-consumer-update.md`
+- Durable CI attestation retention: successful `brand-kit-ci` records are
+  archived under the UID-scoped `attestations/brand-kit-ci/v1/` prefix, held
+  by release evidence, and pruned safely after 30 days when unreferenced
 
 ### Changed
 - Documented the SemVer release policy and canonical `VERSION` source in
@@ -89,6 +92,9 @@ source.
 - `tools/consumer_drift.py` reports exit `1` for confirmed stale consumers and
   exit `2` for indeterminate checks, so scheduled runs never turn an unavailable
   release record or live fetch into a green result
+- CI attestation recovery validates the exact object URL, watcher envelope,
+  workflow name, commit, phase, and unique retrieval match after Argo Workflow
+  garbage collection; cleanup fails closed on malformed release evidence
 
 ### Verified
 - 2026-09-15 — first executed consumer sync (ADR-2 workflow): refreshed

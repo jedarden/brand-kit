@@ -192,6 +192,7 @@ def test_failure_watch_flow_lists_publishes_prunes_and_alerts_without_leaking_cr
     assert report["attestations"] == [
         {
             "commit": COMMIT,
+            "workflow_name": "brand-kit-ci-success",
             "workflow_uid": "uid-brand-kit-ci-success",
             "phase": "Succeeded",
             "finished_at": "2026-09-27T12:50:00Z",

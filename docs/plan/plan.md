@@ -538,14 +538,22 @@ describe behavior that is easy to mistake for optional ceremony.
    performs a read-only Argo attestation of the named `brand-kit-ci` run: the
    run must be `Succeeded` and expose a structured full commit SHA matching
    the release commit. The application-owned failure watcher retains the same
-   run's minimal commit/UID/phase/finished-time record in Garage, and the
+   run's exact name, commit/UID/phase/finished-time record in Garage, and the
    publisher may use its explicit `--ci-attestation-url` only after Argo
-   returns `404` for a reaped run. Missing, failed, malformed, mismatched, or
-   inaccessible tag, mirror, Argo, attestation, or Forgejo state blocks
-   publication. The publisher reuses an exact existing record or publishes an
+   returns `404` for a reaped run. The URL must identify one HTTPS
+   `attestations.json` object under the UID-scoped v1 prefix; the envelope UID,
+   schema, every entry, and the unique workflow-name/commit match are checked.
+   Missing, failed, malformed, mismatched, or inaccessible tag, mirror, Argo,
+   attestation, or Forgejo state blocks publication. The publisher reuses an
+   exact existing record or publishes an
    exact matching draft, accepts a create race only after an exact reread, and
    verifies the record and both remotes again after the write. It never calls
    the GitHub Releases API or pushes the mirror itself.
+   `artifactGC: Never` is only the handoff from Argo to Garage: the watcher
+   separately retains unheld attestations for 30 days, runs a prefix-scoped
+   pruner, and treats every attestation URL in release evidence as an
+   indefinite hold. The pruner validates all evidence and fails closed before
+   deleting an object.
 3. **The consumer handoff uses the same identity and propagation gates.**
    `tools/consumer_drift_submit.py` first requires a published Forgejo record
    with a verifiable full target commit, then waits for the canonical and

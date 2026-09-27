@@ -40,6 +40,15 @@ follow-up. The writer refuses credential-shaped fields and values, rejects
 URLs containing credentials or query data, and will not overwrite a record
 with different contents.
 
+The CI attestation URL is also a retention hold. It must name exactly one
+HTTPS object at
+`attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json`; the
+publisher validates that object after an Argo `404` and requires the envelope
+UID plus one exact workflow-name/commit match. The attestation pruner retains
+held objects indefinitely and keeps unheld objects for 30 days. It validates
+all release evidence before deleting anything, so malformed or unavailable
+evidence stops cleanup rather than risking a held object.
+
 The contract is declared in release-evidence.schema.json and enforced by
 tools/release_evidence.py and test_release_evidence.py. Release credentials
 are loaded only by the publication or submission commands; they are never

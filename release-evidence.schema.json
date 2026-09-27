@@ -77,7 +77,7 @@
         },
         "attestation_url": {
           "type": "string",
-          "pattern": "^https://s3\\.ardenone\\.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/[^?#]+\\.json$"
+          "pattern": "^https://s3\\.ardenone\\.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/attestations\\.json$"
         },
         "workflow_uid": {
           "type": "string",
