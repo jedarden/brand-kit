@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import date
 import json
 from pathlib import Path
@@ -94,7 +95,60 @@ class _Response:
 def _one_requirement_manifest():
     manifest = _manifest()
     manifest["platform_requirements"] = manifest["platform_requirements"][:1]
+    platform = manifest["platform_requirements"][0]["platform"]
+    manifest["assets"] = [
+        asset for asset in manifest["assets"] if asset["platform"] == platform
+    ]
     return manifest
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    (
+        "http://example.test/requirements",
+        "https://user:password@example.test/requirements",
+        "https://example.test/requirements with spaces",
+    ),
+)
+def test_invalid_requirement_urls_fail_without_mutating_manifest(source_url):
+    manifest = _one_requirement_manifest()
+    manifest["platform_requirements"][0]["source_url"] = source_url
+    before = deepcopy(manifest)
+
+    assert check_platform_requirements.check_platform_requirements(
+        manifest, as_of=date(2026, 9, 27)
+    ) == ["X / Twitter: source_url must be an HTTPS URL"]
+    assert manifest == before
+
+
+@pytest.mark.parametrize(
+    ("last_verified", "expected"),
+    (
+        (
+            "2026-02-30",
+            "X / Twitter: last_verified is not an ISO date: '2026-02-30'",
+        ),
+        (
+            "2026-09-28",
+            "X / Twitter: last_verified 2026-09-28 is in the future",
+        ),
+        (
+            "2025-01-01",
+            "X / Twitter: last_verified 2025-01-01 is 634 days old (maximum 180)",
+        ),
+    ),
+)
+def test_verification_date_failures_are_reported_without_mutating_manifest(
+    last_verified, expected
+):
+    manifest = _one_requirement_manifest()
+    manifest["platform_requirements"][0]["last_verified"] = last_verified
+    before = deepcopy(manifest)
+
+    assert check_platform_requirements.check_platform_requirements(
+        manifest, as_of=date(2026, 9, 27), max_age_days=180
+    ) == [expected]
+    assert manifest == before
 
 
 def test_source_reachability_uses_injected_opener_and_accepts_success():
@@ -117,6 +171,22 @@ def test_source_reachability_uses_injected_opener_and_accepts_success():
     )
     assert calls[0][1] == 3
     assert response.closed
+
+
+def test_source_reachability_accepts_redirects_without_mutating_manifest():
+    manifest = _one_requirement_manifest()
+    before = deepcopy(manifest)
+    response = _Response(302)
+
+    checks = check_platform_requirements.check_platform_requirement_sources(
+        manifest, opener=lambda request, timeout: response
+    )
+
+    assert [(check.status, check.detail) for check in checks] == [
+        (check_platform_requirements.REACHABILITY_PASS, "HTTP 302")
+    ]
+    assert response.closed
+    assert manifest == before
 
 
 def test_source_reachability_distinguishes_http_failure_from_network_failure():
@@ -167,6 +237,63 @@ def test_main_returns_indeterminate_for_network_failure(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "INDETERMINATE platform requirement sources (network failure):" in output
     assert "PASS platform requirement metadata and sources" not in output
+
+
+def test_main_reports_unreachable_source_and_preserves_manifest(
+    monkeypatch, capsys, tmp_path
+):
+    manifest = _one_requirement_manifest()
+    manifest_path = tmp_path / "platform-assets.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    before = manifest_path.read_bytes()
+    report = tmp_path / "platform-requirements.json"
+    monkeypatch.setattr(check_platform_requirements, "MANIFEST_PATH", manifest_path)
+
+    def offline(request, timeout):
+        raise urllib.error.URLError("DNS unavailable")
+
+    monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", offline)
+
+    assert check_platform_requirements.main(
+        [
+            "--check-reachability",
+            "--as-of",
+            "2026-09-27",
+            "--report",
+            str(report),
+        ]
+    ) == 2
+    assert "INDETERMINATE platform requirement sources (network failure):" in capsys.readouterr().out
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["status"] == "indeterminate"
+    assert payload["summary"][check_platform_requirements.REACHABILITY_NETWORK_FAILURE] == 1
+    assert manifest_path.read_bytes() == before
+
+
+def test_main_reports_stale_provenance_and_preserves_manifest(monkeypatch, capsys, tmp_path):
+    manifest = _one_requirement_manifest()
+    manifest["platform_requirements"][0]["last_verified"] = "2025-01-01"
+    manifest_path = tmp_path / "platform-assets.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    before = manifest_path.read_bytes()
+    report = tmp_path / "platform-requirements.json"
+    monkeypatch.setattr(check_platform_requirements, "MANIFEST_PATH", manifest_path)
+
+    assert check_platform_requirements.main(
+        [
+            "--as-of",
+            "2026-09-27",
+            "--report",
+            str(report),
+        ]
+    ) == 1
+    output = capsys.readouterr().out
+    assert "FAIL platform requirement metadata:" in output
+    assert "X / Twitter: last_verified 2025-01-01 is 634 days old (maximum 180)" in output
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["status"] == "fail"
+    assert payload["summary"]["metadata_failures"] == 1
+    assert manifest_path.read_bytes() == before
 
 
 def test_main_returns_pass_when_all_sources_are_reachable(monkeypatch, capsys):
