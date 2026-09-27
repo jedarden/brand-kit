@@ -19,15 +19,33 @@ byte-for-byte to `logo/logo-original.png`, and may explicitly replace the
 opaque SVG through
 `tools/trace_logo.py`; it is not the source used for normal vector rendering
 and there is no raster fallback. The build produces 37 asset files plus
-`palette.json`. There is no running service, API, or k8s workload; the
-"deployment" surface is: (1) the files as committed to this repo, referenced
-directly by consumers, and (2) copies hand-placed into downstream repos
-(confirmed: `jedarden.com/public/brand/` — `logo.svg` and `logo-512.png` are
-currently byte-identical to this repo's `logo/` output; `hero.jpg`/`og.jpg` are
-manually recompressed derivatives). The GitHub profile avatar for `jedarden`
-is confirmed live-serving this repo's `avatars/github-460.png` (verified
-2026-07-20 by diffing the live `avatars.githubusercontent.com` image against
-the committed file — same pixels, GitHub-recompressed).
+`palette.json`. This repository ships two related surfaces: (1) the static
+brand package as committed here, referenced directly by consumers or copied
+into downstream repos, and (2) Argo automation that validates and observes
+the package. The `brand-kit-ci` WorkflowTemplate is maintained in
+`declarative-config`; this repository owns the reusable
+`automation/` WorkflowTemplates and CronWorkflows for CI failure-watch,
+consumer-drift, Forgejo-to-GitHub mirror health, release-token probing, and
+scheduled-workflow liveness. These definitions create short-lived Argo
+workflow pods, but they do not serve the assets. There is no serving API,
+Deployment, Service, or Ingress in this repository.
+
+### Ownership and deployment boundary
+
+The distinction between application content and cluster automation is part of
+the contract:
+
+| Surface | Owner | Deployment boundary |
+| --- | --- | --- |
+| Authoritative artwork, generated assets, tools, and tests | `brand-kit` | Committed files are the distribution surface; consumers copy or reference them and own how they serve them. |
+| `automation/` Argo WorkflowTemplates and CronWorkflows | `brand-kit` | The `brand-kit-automation-iad-ci` ArgoCD child Application in `declarative-config` reconciles only this directory into the shared `argo-workflows` namespace. |
+| `brand-kit-ci` WorkflowTemplate, ArgoCD Application, and cluster placement | `declarative-config` | GitOps owns the CI template and reconciliation boundary; the resulting workflows run as ephemeral jobs in the shared Argo installation. |
+| Consumer repositories and profile/platform uploads | Each consumer/platform | Consumer deployment and any remediation remain outside this repository; consumer-drift is read-only and reports drift rather than pushing changes. |
+
+Thus “no k8s workload” is too broad: this repo participates in Kubernetes
+through Argo workflow workloads. The precise statement is that it has no
+long-running serving workload or API; its Kubernetes-facing resources are
+ephemeral CI and read-only operational automation.
 
 ## ADR-1: 2026-07-20 — CI-verified regeneration and versioned releases as the distribution contract
 
