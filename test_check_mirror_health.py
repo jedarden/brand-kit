@@ -122,6 +122,24 @@ def test_unrelated_refs_are_divergent(kind, ref, canonical_id, mirror_id):
     assert checks[0]["reason"] == "canonical and mirror refs have unrelated history"
 
 
+@pytest.mark.parametrize(
+    ("kind", "ref", "canonical_id", "mirror_id"),
+    (
+        ("branch", "refs/heads/main", CANONICAL_MAIN, MIRROR_MAIN),
+        ("tag", "refs/tags/v1.0.0", CANONICAL_TAG, MIRROR_TAG),
+    ),
+)
+def test_ahead_refs_are_divergent(kind, ref, canonical_id, mirror_id):
+    checks = check_mirror_health.compare_ref_sets(
+        refs(**{"branches" if kind == "branch" else "tags": {ref: canonical_id}}),
+        refs(**{"branches" if kind == "branch" else "tags": {ref: mirror_id}}),
+        is_ancestor=lambda older, newer, *_: (older, newer) == (canonical_id, mirror_id),
+    )
+
+    assert checks[0]["status"] == "divergent"
+    assert checks[0]["reason"] == "mirror ref is ahead of the canonical ref"
+
+
 def test_mirror_only_ref_is_divergent():
     checks = check_mirror_health.compare_ref_sets(
         refs(),
@@ -210,6 +228,159 @@ def test_remote_ref_fetch_is_read_only():
     )
     assert [call[0][0] for call in calls] == ["ls-remote", "ls-remote"]
     assert all("push" not in call[0] for call in calls)
+    assert all("commit" not in call[0] for call in calls)
+    assert all(call[1] is None for call in calls)
+    assert all(call[2] is True for call in calls)
+
+
+def test_available_but_delayed_mirror_reports_missing_refs_without_ancestry_fetch():
+    canonical_repository = "https://forgejo.example/brand-kit.git"
+    mirror_repository = "https://github.example/brand-kit.git"
+    calls = []
+
+    def execute(arguments, cwd, check):
+        calls.append((arguments, cwd, check))
+        if arguments[:2] == ["ls-remote", "--heads"]:
+            output = (
+                f"{CANONICAL_MAIN}\trefs/heads/main\n"
+                if arguments[2] == canonical_repository
+                else ""
+            )
+            return subprocess.CompletedProcess(arguments, 0, output, "")
+        if arguments[:2] == ["ls-remote", "--tags"]:
+            output = (
+                f"{CANONICAL_TAG}\trefs/tags/v1.0.0\n"
+                if arguments[2] == canonical_repository
+                else ""
+            )
+            return subprocess.CompletedProcess(arguments, 0, output, "")
+        if arguments[:2] == ["init", "--bare"]:
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        raise AssertionError(arguments)
+
+    report = check_mirror_health.run_check(
+        canonical_repository,
+        mirror_repository,
+        now=NOW,
+        execute=execute,
+    )
+
+    assert report["status"] == "unhealthy"
+    assert report["observed_at"] == "2026-09-27T17:00:00Z"
+    assert report["summary"] == {
+        "match": 0,
+        "missing": 2,
+        "stale": 0,
+        "divergent": 0,
+        "indeterminate": 0,
+    }
+    assert {(check["kind"], check["status"]) for check in report["checks"]} == {
+        ("branch", "missing"),
+        ("tag", "missing"),
+    }
+    assert not any(arguments[0] in {"fetch", "merge-base"} for arguments, _, _ in calls)
+
+
+def test_main_records_remote_failure_as_indeterminate_report(monkeypatch, tmp_path, capsys):
+    report_path = tmp_path / "mirror-health.json"
+
+    def fail(*args, **kwargs):
+        raise check_mirror_health.MirrorHealthError("Forgejo API unavailable")
+
+    monkeypatch.setattr(check_mirror_health, "run_check", fail)
+
+    exit_code = check_mirror_health.main(
+        [
+            "--canonical-repository",
+            "https://forgejo.example/brand-kit.git",
+            "--mirror-repository",
+            "https://github.example/brand-kit.git",
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 2
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "indeterminate"
+    assert report["summary"] == {
+        "match": 0,
+        "missing": 0,
+        "stale": 0,
+        "divergent": 0,
+        "indeterminate": 1,
+    }
+    assert report["checks"] == []
+    assert report["error"] == "Forgejo API unavailable"
+    assert "INDETERMINATE" in capsys.readouterr().err
+
+
+def test_main_persists_unhealthy_failure_report_and_returns_failure(monkeypatch, tmp_path, capsys):
+    report_path = tmp_path / "mirror-health.json"
+    expected = {
+        "schema": check_mirror_health.REPORT_SCHEMA,
+        "status": "unhealthy",
+        "observed_at": "2026-09-27T17:00:00Z",
+        "canonical_repository": "https://forgejo.example/brand-kit.git",
+        "mirror_repository": "https://github.example/brand-kit.git",
+        "summary": {
+            "match": 1,
+            "missing": 1,
+            "stale": 1,
+            "divergent": 1,
+            "indeterminate": 0,
+        },
+        "checks": [],
+    }
+    monkeypatch.setattr(check_mirror_health, "run_check", lambda *args, **kwargs: expected)
+
+    exit_code = check_mirror_health.main(
+        [
+            "--canonical-repository",
+            expected["canonical_repository"],
+            "--mirror-repository",
+            expected["mirror_repository"],
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert json.loads(report_path.read_text(encoding="utf-8")) == expected
+    assert "UNHEALTHY" in capsys.readouterr().err
+
+
+def test_execute_git_redacts_provider_credentials_from_failure(monkeypatch):
+    def failed_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args[0],
+            128,
+            "",
+            "fatal: repository 'https://user:secret@example.test/brand-kit.git' unavailable",
+        )
+
+    monkeypatch.setattr(check_mirror_health.subprocess, "run", failed_run)
+
+    with pytest.raises(check_mirror_health.MirrorHealthError) as error:
+        check_mirror_health.execute_git(
+            ["ls-remote", "--heads", "https://user:secret@example.test/brand-kit.git"]
+        )
+
+    assert "secret" not in str(error.value)
+    assert "https://[REDACTED]@example.test/brand-kit.git" in str(error.value)
+
+
+def test_workflow_bootstraps_indeterminate_report_before_setup_failure():
+    template = Path(
+        "automation/brand-kit-mirror-health-workflowtemplate.yml"
+    ).read_text(encoding="utf-8")
+
+    assert 'printf \'%s\\n\' \'{"schema":"brand-kit-mirror-health/v1","status":"indeterminate"' in template
+    assert "printf '2\\n' > /tmp/brand-kit-mirror-health-exit-code" in template
+    assert "default: \"2\"" in template
+    assert 'exit "$CHECK_EXIT"' in template
+    assert "artifactGC:\n                strategy: Never" in template
+    assert 'when: "{{workflow.status}} != Succeeded"' in template
 
 
 def test_workflow_contract_is_scheduled_read_only_and_alerts_owner():
