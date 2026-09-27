@@ -967,13 +967,61 @@ def test_release_checklist_runs_site_favicon_generator_before_commit():
     assert workflow.index(commit) < workflow.index(push) < workflow.index(detect)
 
 
-def test_scheduled_workflow_source_is_read_only_and_resolves_a_release():
+def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     workflow = Path("automation/brand-kit-consumer-drift-cronworkflow.yml").read_text(
         encoding="utf-8"
     )
+    config = json.loads(Path("consumer-drift.json").read_text(encoding="utf-8"))
+    release = config["release"]
+
     assert "kind: CronWorkflow" in workflow
-    assert "--print-release-tag" in workflow
-    assert "--source-root /release" in workflow
-    assert "--report /tmp/consumer-drift-report.json" in workflow
+    assert release["minimum_age_hours"] == 24
+    assert release["tag_pattern"] == r"^v\d+\.\d+\.\d+$"
+    assert 'name: release-tag\n          value: ""' in workflow
+
+    tag_parameter = 'TAG="{{workflow.parameters.release-tag}}"'
+    resolve_tag = (
+        'TAG="$(python3 tools/consumer_drift.py '
+        '--config consumer-drift.json --print-release-tag)"'
+    )
+    assert tag_parameter in workflow
+    assert 'if [ -z "$TAG" ]; then' in workflow
+    assert resolve_tag in workflow
+    assert workflow.index(tag_parameter) < workflow.index(resolve_tag)
+    assert workflow.index(resolve_tag) < workflow.index('git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /release')
+
+    # The release checkout must be populated from and detached at the selected
+    # tag, rather than auditing whichever branch the mirror happens to serve.
+    assert (
+        'git -C /release fetch --depth=1 origin '
+        '"refs/tags/${TAG}:refs/tags/${TAG}"'
+    ) in workflow
+    assert 'git -C /release checkout --detach --quiet "$TAG"' in workflow
+    assert '--source-root /release' in workflow
+    assert '--release-tag "$TAG"' in workflow
+
+    # Both repositories are public GitHub mirrors; the site clone is pinned to
+    # its read-only main branch and no write-capable GitHub credential is used.
+    assert (
+        'value: https://github.com/jedarden/brand-kit.git' in workflow
+        and 'value: https://github.com/jedarden/jedarden.com.git' in workflow
+    )
+    assert (
+        'git clone --filter=blob:none --depth=1 --branch main '
+        '"{{workflow.parameters.site-repository}}" /jedarden.com'
+    ) in workflow
     assert "git push" not in workflow
+    assert "git commit" not in workflow
+    assert "consumer_sync.py" not in workflow
+    assert "--apply" not in workflow
+    assert "GITHUB_TOKEN" not in workflow
+    assert "GH_TOKEN" not in workflow
+    assert "WRITE_TOKEN" not in workflow
+    assert "FORGEJO_WRITE" not in workflow
     assert "FORGEJO_TOKEN" in workflow
+    assert "- name: FORGEJO_TOKEN" in workflow
+
+    # --json writes the report to the Argo log and --report preserves the same
+    # result as a machine-readable artifact for later inspection.
+    assert "--json" in workflow
+    assert "--report /tmp/consumer-drift-report.json" in workflow
