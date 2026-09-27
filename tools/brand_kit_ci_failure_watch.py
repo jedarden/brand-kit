@@ -39,6 +39,17 @@ COMMIT_PARAMETER_NAMES = frozenset(
 )
 
 
+def _redact_text(value: Any, *secrets: str) -> Any:
+    """Keep untrusted Argo messages from copying credentials into evidence."""
+    if not isinstance(value, str):
+        return value
+    redacted = value
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
 def argo_api_path(api_url: str, path: str) -> str:
     base = api_url.rstrip("/")
     if not base.endswith("/api/v1"):
@@ -134,6 +145,7 @@ def _failure_summary(
     cutoff: datetime,
     api_url: str,
     namespace: str,
+    redact_secrets: tuple[str, ...] = (),
 ) -> dict[str, Any] | None:
     if not isinstance(workflow, dict):
         return None
@@ -166,7 +178,7 @@ def _failure_summary(
         "name": name,
         "uid": metadata.get("uid"),
         "phase": phase,
-        "message": status.get("message"),
+        "message": _redact_text(status.get("message"), *redact_secrets),
         "creation_timestamp": created_at,
         "started_at": started_at,
         "finished_at": finished_at,
@@ -253,6 +265,7 @@ def run_watch(
             cutoff=cutoff,
             api_url=api_url,
             namespace=namespace,
+            redact_secrets=(token,),
         ))
         is not None
     ]
