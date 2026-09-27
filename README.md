@@ -581,7 +581,18 @@ GitHub avatar re-upload (no API for it), release-gate failure behavior, and what
 Non-success runs also invoke the WorkflowTemplate's exit handler, which posts a
 `BrandKitConsumerDrift` alert to the iad-ci Alertmanager/ntfy owner channel.
 The JSON report is retained as a non-GC'd Garage artifact at the URL included in
-that alert, rather than remaining only under the ephemeral pod's `/tmp`.
+that alert, rather than remaining only under the ephemeral pod's `/tmp`. The
+same WorkflowTemplate runs `tools/prune_consumer_drift_reports.py` before each
+audit. Unreferenced reports are retained for 30 days (the exact cutoff remains
+for the next pass); a report URL committed in `release-evidence/v1/*.json` is
+an explicit retention hold and is never removed by this pass. The pruner
+validates every release-evidence record before listing or deleting anything and
+fails closed when evidence is missing, malformed, or points outside the
+configured report prefix. A cleanup failure produces an indeterminate durable
+report and owner alert, so an operator repairs the evidence or storage read
+path and reruns the audit. Reports without a release-evidence hold may return
+`404` after the 30-day window; copy one to an approved recovery location before
+that window expires when a longer investigation needs it.
 
 ### Release evidence record
 

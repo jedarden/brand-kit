@@ -582,7 +582,13 @@ describe behavior that is easy to mistake for optional ceremony.
    under `failures/brand-kit-consumer-drift/v1/<workflow-uid>/report.json` with
    `artifactGC: Never`, and the alert links to its public S3 URL. The report
    therefore remains available after the pod and short-lived Argo Workflow are
-   removed.
+   removed. The same WorkflowTemplate runs a separate 30-day pruner for
+   unreferenced consumer reports. Every non-null `consumer_drift.report_url`
+   in `release-evidence/v1/*.json` is a retention hold; the pruner validates
+   all evidence before listing or deleting and fails closed on incomplete
+   evidence, so a held report remains recoverable. Unheld reports may be
+   copied to an approved recovery location before expiry when longer
+   investigation is required.
 
 ### Alternatives Considered
 

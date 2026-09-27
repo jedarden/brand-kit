@@ -43,4 +43,8 @@ with different contents.
 The contract is declared in release-evidence.schema.json and enforced by
 tools/release_evidence.py and test_release_evidence.py. Release credentials
 are loaded only by the publication or submission commands; they are never
-fields in this record.
+fields in this record. A non-null `consumer_drift.report_url` is also a
+retention hold: the consumer-drift pruner validates this record before
+deletion and never removes the referenced report. Unheld consumer-drift
+reports are retained for 30 days; copy a report to an approved recovery
+location before that window expires if an investigation needs it longer.

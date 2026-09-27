@@ -40,6 +40,18 @@ spec:
             apt-get install -y --no-install-recommends ca-certificates git
             python3 -m pip install --no-cache-dir --only-binary=:all: Pillow==12.1.1
             git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /brand-kit
+            set +e
+            python3 /brand-kit/tools/prune_consumer_drift_reports.py \
+              --retention-days 30 \
+              --release-evidence-root /brand-kit/release-evidence/v1
+            PRUNE_EXIT=$?
+            set -e
+            if [ "$PRUNE_EXIT" -ne 0 ]; then
+              printf '%s\n' '{"schema":"brand-kit-consumer-drift/v1","status":"indeterminate","errors":["consumer-drift report retention cleanup did not complete"],"checks":[]}' \
+                > /tmp/consumer-drift-report.json
+              printf '%s\n' '2' > /tmp/consumer-drift-exit-code
+              exit 2
+            fi
             cd /brand-kit
             TAG="{{workflow.parameters.release-tag}}"
             if [ -z "$TAG" ]; then
@@ -116,6 +128,30 @@ spec:
               secretKeyRef:
                 name: brand-kit-consumer-drift
                 key: token
+          - name: S3_READER_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-reader
+                key: access-key
+          - name: S3_READER_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-reader
+                key: secret-key
+          - name: S3_PUBLISHER_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-publisher
+                key: access-key
+          - name: S3_PUBLISHER_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-publisher
+                key: secret-key
+          - name: S3_ENDPOINT
+            value: https://s3.ardenone.com
+          - name: S3_REGION
+            value: garage
         resources:
           requests:
             cpu: 250m

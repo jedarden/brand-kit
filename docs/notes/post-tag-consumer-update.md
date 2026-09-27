@@ -106,10 +106,21 @@ https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1
 ```
 
 The selected release tag and all check results remain in that JSON object. The
-`needle-ci-artifacts` bucket has no lifecycle rule for this prefix, so reports
-remain available for owner follow-up until they are deliberately cleaned up
-under the bucket's quota/retention policy. The report is therefore not lost
-when the failed CronWorkflow disappears from the Argo UI.
+`needle-ci-artifacts` bucket has no lifecycle rule for this prefix, so the
+consumer WorkflowTemplate runs the repository-owned
+`tools/prune_consumer_drift_reports.py` policy before each audit. Reports that
+are not referenced by committed `release-evidence/v1/*.json` records are kept
+for 30 days; the exact cutoff is retained until the next pass. A report URL in
+release evidence is a retention hold and is never deleted by this cleanup.
+The pruner validates every evidence record before it lists objects and fails
+closed on a missing, malformed, or unresolvable evidence directory, so an
+operator can repair the checkout or storage access and rerun without losing a
+held report. The workflow turns a cleanup failure into an indeterminate report
+and owner alert. Unheld reports may return `404` after the bounded window;
+copy one to an approved recovery location before then if a longer
+investigation needs it. The report is therefore not lost when the failed
+CronWorkflow disappears from the Argo UI, while the prefix still has bounded
+storage growth.
 
 ## Consumer inventory (verified 2026-09-15)
 

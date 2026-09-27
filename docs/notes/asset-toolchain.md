@@ -144,6 +144,20 @@ not a guarantee that its durable report still exists. Preserve any report
 needed for a longer investigation outside this rolling prefix before the
 window expires.
 
+Consumer-drift reports use a separate cleanup policy. The consumer-drift
+WorkflowTemplate runs `tools/prune_consumer_drift_reports.py` before the
+detector with the Garage reader and publisher credentials. It lists only
+`failures/brand-kit-consumer-drift/v1/` and deletes only `report.json` objects
+older than **30 days**. The cleanup loads and validates every
+`release-evidence/v1/*.json` record first; any `consumer_drift.report_url`
+matching this prefix protects that object indefinitely from automated pruning.
+Missing or malformed evidence, an endpoint/bucket mismatch, and storage
+access failures all fail closed before deletion. The workflow writes an
+indeterminate report and alerts the owner when cleanup cannot complete, so the
+operator repairs the evidence or storage path and reruns the audit. An
+unheld report can return `404` after the 30-day window; copy it to an approved
+recovery location before then if it is needed for longer-term investigation.
+
 The release-triggered consumer-drift handoff and its scheduled CronWorkflow
 fallback share the `brand-kit-consumer-drift` WorkflowTemplate. For confirmed
 drift (exit `1`), an indeterminate audit (exit `2`), or a setup failure before

@@ -1246,6 +1246,12 @@ def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     assert '--source-root /release' in workflow
     assert '--release-tag "$TAG"' in workflow
     assert 'python3 /brand-kit/tools/consumer_drift.py' in workflow
+    assert "python3 /brand-kit/tools/prune_consumer_drift_reports.py" in workflow
+    assert "--retention-days 30" in workflow
+    assert "--release-evidence-root /brand-kit/release-evidence/v1" in workflow
+    assert workflow.index("prune_consumer_drift_reports.py") < workflow.index(
+        "python3 /brand-kit/tools/consumer_drift.py"
+    )
 
     # Both repositories are public GitHub mirrors; the site clone is pinned to
     # its read-only main branch and no write-capable GitHub credential is used.
@@ -1303,6 +1309,10 @@ def test_scheduled_workflow_routes_failures_and_retains_report():
     assert "                name: needle-ci-artifact-publisher" in workflow
     assert "                key: access-key" in workflow
     assert "                key: secret-key" in workflow
+    assert "          - name: S3_READER_ACCESS_KEY" in workflow
+    assert "          - name: S3_READER_SECRET_KEY" in workflow
+    assert "          - name: S3_PUBLISHER_ACCESS_KEY" in workflow
+    assert "          - name: S3_PUBLISHER_SECRET_KEY" in workflow
 
     assert "        image: curlimages/curl:8.12.1" in workflow
     assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow
