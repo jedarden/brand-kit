@@ -1,0 +1,118 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: brand-kit-release-token-probe
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Read-only validity probe for the brand-kit release credentials"
+spec:
+  entrypoint: probe
+  onExit: route-token-probe
+  serviceAccountName: argo-workflow
+  activeDeadlineSeconds: 600
+  templates:
+    - name: probe
+      container:
+        image: python:3.13.5-slim-bookworm
+        command: [bash, -c]
+        args:
+          - |
+            set -euo pipefail
+            printf '%s\n' '{"schema":"brand-kit-release-token-probe/v1","status":"fail","checks":[],"error":"workflow did not reach the probe"}' \
+              > /tmp/release-token-probe-report.json
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git
+            git clone --filter=blob:none --no-tags --depth=1 --branch main \
+              https://github.com/jedarden/brand-kit.git /brand-kit
+            set +e
+            python3 /brand-kit/tools/release_token_probe.py \
+              --report /tmp/release-token-probe-report.json
+            PROBE_EXIT=$?
+            set -e
+            printf '%s\n' "$PROBE_EXIT" > /tmp/release-token-probe-exit-code
+            exit "$PROBE_EXIT"
+        env:
+          - name: FORGEJO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: brand-kit-release-tokens
+                key: FORGEJO_TOKEN
+          - name: ARGO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: brand-kit-release-tokens
+                key: ARGO_TOKEN
+          - name: ARGO_SUBMIT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: brand-kit-release-tokens
+                key: ARGO_SUBMIT_TOKEN
+        outputs:
+          parameters:
+            - name: probe-exit-code
+              valueFrom:
+                path: /tmp/release-token-probe-exit-code
+                default: "2"
+          artifacts:
+            - name: release-token-probe-report
+              path: /tmp/release-token-probe-report.json
+              archive:
+                none: {}
+              artifactGC:
+                strategy: Never
+              s3:
+                endpoint: s3.ardenone.com
+                bucket: needle-ci-artifacts
+                region: garage
+                insecure: false
+                key: failures/brand-kit-release-token-probe/v1/{{workflow.uid}}/report.json
+                accessKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: access-key
+                secretKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: secret-key
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+    - name: route-token-probe
+      steps:
+        - - name: notify-owner
+            template: notify-owner
+            when: "{{workflow.status}} != Succeeded"
+            continueOn:
+              failed: true
+              error: true
+    - name: notify-owner
+      container:
+        image: curlimages/curl:8.12.1
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            REPORT_URL="https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-release-token-probe/v1/{{workflow.uid}}/report.json"
+            curl --fail --silent --show-error --retry 3 --retry-delay 5 \
+              -H 'Content-Type: application/json' \
+              --data-binary @- \
+              http://alertmanager.monitoring.svc:9093/api/v1/alerts <<EOF
+            [{
+              "labels": {
+                "alertname": "BrandKitReleaseTokenProbe",
+                "owner": "jedarden",
+                "component": "release-token-probe",
+                "follow_up": "consumer-drift",
+                "bucket": "brand-kit",
+                "workflow_status": "{{workflow.status}}"
+              },
+              "annotations": {
+                "summary": "brand-kit release-token probe needs follow-up",
+                "description": "Workflow {{workflow.name}} ended {{workflow.status}}; inspect the durable report and follow the release-token rotation/recovery checklist.",
+                "report_url": "${REPORT_URL}"
+              }
+            }]
+            EOF
+            echo "Release-token probe owner alert sent: ${REPORT_URL}"

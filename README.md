@@ -236,6 +236,17 @@ Wait for its `READY` result and run the read-only `--verify-only` form before
 starting the consumer workflow below. Forgejo remains the sole release
 authority; the mirrored Git tag is only a distribution path.
 
+The same token contract is checked before release day by the daily
+`brand-kit-release-token-probe` Argo `CronWorkflow`, sourced from
+`automation/brand-kit-release-token-probe-cronworkflow.yml`. Its
+`tools/release_token_probe.py` checks Forgejo authentication/read access, Argo
+read access, and the consumer-template submit permission with Argo server
+dry-run; it never publishes a release or creates a workflow. Failures use the
+same Alertmanager/ntfy owner follow-up path as the consumer-drift alert and
+retain a sanitized report. The rotation and deployment-secret requirements
+are documented in
+[`release-token-provisioning.md`](docs/notes/release-token-provisioning.md).
+
 ## Downstream consumers (post-tag sync)
 
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`

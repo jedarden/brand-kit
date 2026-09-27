@@ -84,9 +84,10 @@ Rotation order is:
 
 1. Create the replacement credential with the same narrow scope.
 2. Write it as a new version at the same path using CAS.
-3. Start a fresh release process so it reads the new version and run the
-   read-only publisher gate. A `READY` result is the success signal; the token
-   itself must not be recorded.
+3. Start a fresh release process so it reads the new version, run the
+   scheduled probe (or `tools/release_token_probe.py` directly), and run the
+   read-only publisher gate. All three probe checks and a `READY` result are
+   success signals; token values themselves must not be recorded.
 4. Revoke the old provider credential only after the fresh process succeeds,
    then let the old process exit and clear its environment.
 
@@ -95,6 +96,45 @@ repair the OpenBao/provider entry, and retry. Do not delete the OpenBao path or
 revoke the old credential first. Workload `ExternalSecret` refresh is separate
 from this operator flow; a consumer-audit rotation must wait for its
 `SecretSynced=True` status before treating a new workflow run as covered.
+
+## Scheduled validity probe
+
+The one-time path and policy check does not detect a provider-side expiry or a
+later scope change. The repository therefore ships the daily
+`brand-kit-release-token-probe` CronWorkflow, whose source is
+[`automation/brand-kit-release-token-probe-cronworkflow.yml`](../../automation/brand-kit-release-token-probe-cronworkflow.yml)
+and whose reusable template is
+[`automation/brand-kit-release-token-probe-workflowtemplate.yml`](../../automation/brand-kit-release-token-probe-workflowtemplate.yml).
+It runs at 06:07 UTC, before the 06:17 UTC consumer-drift fallback, and reads
+the three values from the Kubernetes Secret `brand-kit-release-tokens`. That
+Secret must be materialized by the deployment's ExternalSecret from the three
+OpenBao paths above, with keys named exactly `FORGEJO_TOKEN`, `ARGO_TOKEN`, and
+`ARGO_SUBMIT_TOKEN`; it must not be committed to this repository.
+
+The probe runs `tools/release_token_probe.py` and records only credential names,
+pass/fail status, and sanitized provider errors in a durable report. It checks:
+
+- `FORGEJO_TOKEN`: Forgejo `GET /user` self-lookup and the repository release
+  list endpoint used by the publisher.
+- `ARGO_TOKEN`: a read-only list request for the `brand-kit-ci` workflow runs
+  in namespace `argo-workflows`.
+- `ARGO_SUBMIT_TOKEN`: the exact `brand-kit-consumer-drift` WorkflowTemplate
+  submit endpoint with Argo's `serverDryRun` flag. Argo validates the token's
+  submit authorization and the template without creating a Workflow.
+
+Forgejo does not expose a non-mutating authorization check for the release
+creation verb, so the probe intentionally never attempts a release write. The
+publisher's `--verify-only` gate remains the required read-only pre-release
+check, and a real publication remains the only controlled check of the
+Forgejo create/publish permission. A probe failure still blocks follow-up
+release work until the credential or provider policy is repaired.
+
+Any non-success probe run invokes the same in-cluster Alertmanager endpoint and
+owner notification path as `BrandKitConsumerDrift`, and retains its sanitized
+report at the alert's artifact URL. Follow the rotation order above: provision
+the replacement, run the probe until all three checks pass, run the publisher's
+read-only gate, then revoke the old credential. Do not put a token in a report,
+workflow parameter, URL, command argument, or log.
 
 ## Failure and observability rules
 
@@ -106,6 +146,9 @@ from this operator flow; a consumer-audit rotation must wait for its
   broader scope is attempted, and release/mirror gates remain closed.
 - A failed Argo attestation always blocks Forgejo publication. A failed
   Forgejo release read or mirror gate always blocks consumer submission.
+- A failed scheduled release-token probe is an owner-facing follow-up event;
+  repair or rotate the affected credential and rerun the probe before a
+  release or consumer-drift handoff.
 - HTTP error bodies and transport errors are sanitized before reaching the
   CLI's stderr. Token values are not logged, printed, embedded in URLs, or
   passed through `argv`; diagnostics contain only the service, status, and

@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: brand-kit-release-token-probe
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Daily read-only validity probe for all brand-kit release credentials"
+spec:
+  # Run before the consumer-drift fallback so token failures are visible ahead
+  # of a release or the daily downstream audit.
+  schedules:
+    - "7 6 * * *"
+  timezone: UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    workflowTemplateRef:
+      name: brand-kit-release-token-probe

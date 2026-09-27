@@ -150,9 +150,12 @@ EXPECTED_PRESENT = [
     "tools/consumer_sync.py",
     "tools/consumer_drift.py",
     "tools/consumer_drift_submit.py",
+    "tools/release_token_probe.py",
     "consumer-drift.json",
     "automation/brand-kit-consumer-drift-cronworkflow.yml",
     "automation/brand-kit-consumer-drift-workflowtemplate.yml",
+    "automation/brand-kit-release-token-probe-cronworkflow.yml",
+    "automation/brand-kit-release-token-probe-workflowtemplate.yml",
     "docs/notes/post-tag-consumer-update.md",
 ]
 

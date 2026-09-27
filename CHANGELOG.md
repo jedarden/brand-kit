@@ -11,6 +11,10 @@ source.
 ## [Unreleased]
 
 ### Added
+- Scheduled release-token validity probe: the daily Argo workflow checks the
+  Forgejo and Argo credentials (including a server-side dry-run consumer
+  submission), retains a sanitized report, and routes failures to the owner
+  follow-up path used by consumer-drift alerts.
 - Release publication now fails closed unless the unique, well-formed
   `CHANGELOG.md` section, annotated `vX.Y.Z` tag, Forgejo release tag, full
   target commit, and release body agree exactly; mismatched existing releases
