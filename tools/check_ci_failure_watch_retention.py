@@ -11,6 +11,7 @@ template, and (when supplied) the external controller Application.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 import re
 import sys
@@ -53,6 +54,8 @@ def _strings(value: Any):
 
 def _annotation_integer(annotations: dict[str, Any], name: str) -> int:
     value = annotations.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f"annotation {name!r} must be an integer")
     try:
         parsed = int(value)
     except (TypeError, ValueError) as error:
@@ -60,6 +63,24 @@ def _annotation_integer(annotations: dict[str, Any], name: str) -> int:
     if parsed < 1:
         raise ValueError(f"annotation {name!r} must be positive")
     return parsed
+
+
+def _validate_lookback_coverage(lookback_minutes: int, retention_seconds: int) -> None:
+    """Reject a lookback that cannot cover the configured retention window."""
+    if not isinstance(lookback_minutes, int) or isinstance(lookback_minutes, bool):
+        raise brand_kit_ci_failure_watch.release_publish.ReleaseError(
+            "lookback minutes must be an integer"
+        )
+    if not 1 <= lookback_minutes <= 24 * 60:
+        raise brand_kit_ci_failure_watch.release_publish.ReleaseError(
+            "lookback minutes must be between 1 and 1440"
+        )
+    if lookback_minutes * 60 < retention_seconds:
+        required_minutes = math.ceil(retention_seconds / 60)
+        raise brand_kit_ci_failure_watch.release_publish.ReleaseError(
+            "lookback minutes must cover configured Argo failure retention: "
+            f"{lookback_minutes} < {required_minutes}"
+        )
 
 
 def _declared_controller_retention(path: Path) -> int:
@@ -83,6 +104,8 @@ def _declared_controller_retention(path: Path) -> int:
         retention = values_document["controller"]["workflowDefaults"]["spec"][
             "ttlStrategy"
         ]["secondsAfterFailure"]
+        if isinstance(retention, bool) or not isinstance(retention, (int, str)):
+            raise ValueError("controller failure retention must be an integer")
         retention = int(retention)
         if retention < 1:
             raise ValueError("controller failure retention must be positive")
@@ -121,15 +144,29 @@ def check_configuration(
         errors.append(str(error))
         declared_lookback = None
 
+    configured_retention = declared_retention
+    if argo_config is not None:
+        try:
+            actual_retention = _declared_controller_retention(argo_config)
+        except ValueError as error:
+            errors.append(str(error))
+        else:
+            configured_retention = actual_retention
+            if actual_retention != declared_retention:
+                errors.append(
+                    "declarative-config Argo failure retention differs from the "
+                    f"watcher contract: {actual_retention} != {declared_retention}"
+                )
+
     if declared_retention != brand_kit_ci_failure_watch.ARGO_FAILURE_RETENTION_SECONDS:
         errors.append(
             "manifest retention annotation does not match watcher contract: "
             f"{declared_retention!r} != "
             f"{brand_kit_ci_failure_watch.ARGO_FAILURE_RETENTION_SECONDS}"
         )
-    if declared_lookback is not None:
+    if declared_lookback is not None and configured_retention is not None:
         try:
-            brand_kit_ci_failure_watch.validate_lookback_coverage(declared_lookback)
+            _validate_lookback_coverage(declared_lookback, configured_retention)
         except brand_kit_ci_failure_watch.release_publish.ReleaseError as error:
             errors.append(f"manifest lookback is unsafe: {error}")
 
@@ -144,27 +181,16 @@ def check_configuration(
         )
     else:
         command_lookback = command_lookbacks[0]
-        try:
-            brand_kit_ci_failure_watch.validate_lookback_coverage(command_lookback)
-        except brand_kit_ci_failure_watch.release_publish.ReleaseError as error:
-            errors.append(f"WorkflowTemplate lookback is unsafe: {error}")
+        if configured_retention is not None:
+            try:
+                _validate_lookback_coverage(command_lookback, configured_retention)
+            except brand_kit_ci_failure_watch.release_publish.ReleaseError as error:
+                errors.append(f"WorkflowTemplate lookback is unsafe: {error}")
         if declared_lookback is not None and command_lookback != declared_lookback:
             errors.append(
                 "WorkflowTemplate command and lookback annotation differ: "
                 f"{command_lookback} != {declared_lookback}"
             )
-
-    if argo_config is not None:
-        try:
-            actual_retention = _declared_controller_retention(argo_config)
-        except ValueError as error:
-            errors.append(str(error))
-        else:
-            if actual_retention != declared_retention:
-                errors.append(
-                    "declarative-config Argo failure retention differs from the "
-                    f"watcher contract: {actual_retention} != {declared_retention}"
-                )
 
     return errors
 
