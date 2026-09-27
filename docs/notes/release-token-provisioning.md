@@ -29,26 +29,14 @@ does not authorize Forgejo release publication or Argo workflow submission.
 ## Injection
 
 Load credentials from OpenBao directly into shell variables immediately before
-the one operation that needs them. The following helper passes only the path
-as an argument; the secret value is captured by the shell and is never printed
-or placed in an argument:
+the one operation that needs them. From the repository root, source the tested
+[`tools/load_release_tokens.sh`](../../tools/load_release_tokens.sh) helper.
+It passes only the path as an argument; the secret value is captured by the
+shell and is never printed or placed in an argument. Sourcing the helper also
+installs its exit and signal traps to unset all three release-token variables:
 
 ```bash
-set +x
-load_release_token() {
-  local env_name="$1" path="$2" value
-  value="$(bao-as rs-manager bao kv get -field=token "$path")" || {
-    printf '%s\n' "token lookup failed for ${env_name}" >&2
-    return 1
-  }
-  [ -n "$value" ] || {
-    printf '%s\n' "empty token for ${env_name}" >&2
-    return 1
-  }
-  printf -v "$env_name" '%s' "$value"
-  export "$env_name"
-  unset value
-}
+source tools/load_release_tokens.sh
 
 # For tools/release_publish.py, load only these two variables in its shell:
 load_release_token FORGEJO_TOKEN \
@@ -58,7 +46,6 @@ load_release_token ARGO_TOKEN \
 # In a separate handoff shell, load ARGO_SUBMIT_TOKEN instead of ARGO_TOKEN:
 # load_release_token ARGO_SUBMIT_TOKEN \
 #   secret/rs-manager/brand-kit/release/argo-submit
-trap 'unset FORGEJO_TOKEN ARGO_TOKEN ARGO_SUBMIT_TOKEN' EXIT HUP INT TERM
 ```
 
 Use only the variables required by the command:
