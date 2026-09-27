@@ -35,16 +35,28 @@ checklist and is intended for a scheduler or a release event:
 The detector resolves the exact published release, checks that the brand-kit
 checkout is at that tag, hashes the canonical inputs, and compares the
 jedarden.com logo copies, both hero JPEGs, the four site favicon outputs, the
-live `https://jedarden.com/brand/og.jpg`, and the known live GitHub profile
-avatar. The favicon checks make a stale regenerated output fail the audit; the
-live comparisons use the release source directly rather than trusting the
-site checkout, so a stale local copy cannot make a stale deployed image look
-current. Exit `0` means every check is current, `1` reports confirmed drift, and
-`2` reports an indeterminate audit; network failures and skipped checks are
-never reported as a pass. The command has no apply, commit, or push operation.
-When the detector is newer than the release being audited, pass
+live `https://jedarden.com/brand/og.jpg`, the known live GitHub profile avatar,
+and the public X and LinkedIn profile media registered in
+`consumer-drift.json`. For X and LinkedIn it fetches the stable profile page,
+discovers the current public CDN media URL, and compares that media to the
+release asset; the CDN URL is not pinned because uploads rotate it. The favicon
+checks make a stale regenerated output fail the audit; the live comparisons use
+the release source directly rather than trusting the site checkout, so a stale
+local copy cannot make a stale deployed image look current. Exit `0` means every
+configured check is current, `1` reports confirmed drift, and `2` reports an
+indeterminate audit; network failures and skipped checks are never reported as
+a pass. The command has no apply, commit, or push operation. When the detector
+is newer than the release being audited, pass
 `--source-root <checkout-of-the-release-tag>` while keeping the detector itself
 on the current checkout; this is what the scheduled workflow does.
+
+This is deliberately not full platform coverage. Instagram, Threads, TikTok,
+Facebook, YouTube, Mastodon, Bluesky, Discord, and the GitHub repository social
+preview remain out of scope because their documented uploads do not have a
+stable unauthenticated public media endpoint (or, for Mastodon/Bluesky, no
+account/instance URL is documented). The exact exclusion reasons are retained
+in the inventory's `out_of_scope` section and in JSON audit reports; a green
+audit means only that all configured checks passed.
 
 `automation/brand-kit-consumer-drift-workflowtemplate.yml` is the reusable Argo
 source artifact for a release-triggered read-only run. Run

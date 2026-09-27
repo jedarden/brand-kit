@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import io
 import json
 import os
@@ -65,6 +66,18 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     for section in ("source_assets", "site_assets", "live_assets"):
         if not isinstance(value[section], list) or not value[section]:
             raise ConfigError(f"{section} must be a non-empty array")
+    out_of_scope = value.get("out_of_scope", [])
+    if not isinstance(out_of_scope, list):
+        raise ConfigError("out_of_scope must be an array")
+    for index, entry in enumerate(out_of_scope):
+        if not isinstance(entry, dict):
+            raise ConfigError(f"out_of_scope[{index}] must be an object")
+        if not isinstance(entry.get("platform"), str) or not entry["platform"]:
+            raise ConfigError(f"out_of_scope[{index}] requires a platform")
+        if not isinstance(entry.get("surfaces"), list) or not entry["surfaces"]:
+            raise ConfigError(f"out_of_scope[{index}] requires surfaces")
+        if not isinstance(entry.get("reason"), str) or not entry["reason"]:
+            raise ConfigError(f"out_of_scope[{index}] requires a reason")
     return value
 
 
@@ -440,6 +453,40 @@ def _rule_name(rule: dict[str, Any], fallback: str) -> str:
     return value if isinstance(value, str) and value else fallback
 
 
+def _media_url_from_page(
+    page_url: str,
+    page: bytes,
+    pattern_value: Any,
+    label: str,
+) -> str:
+    """Extract a current public media URL from a stable profile page."""
+    if not isinstance(pattern_value, str) or not pattern_value:
+        raise ConfigError(f"live asset {label!r} has an invalid media URL pattern")
+    try:
+        pattern = re.compile(pattern_value)
+    except re.error as exc:
+        raise ConfigError(
+            f"live asset {label!r} has an invalid media URL pattern"
+        ) from exc
+    try:
+        document = html.unescape(page.decode("utf-8")).replace("\\/", "/")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"public page for live asset {label!r} is not UTF-8") from exc
+    match = pattern.search(document)
+    if match is None:
+        raise ValueError(
+            f"public page did not expose media for live asset {label!r}"
+        )
+    media_url = match.group(1) if match.lastindex else match.group(0)
+    media_url = urllib.parse.urljoin(page_url, media_url)
+    parsed = urllib.parse.urlparse(media_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError(
+            f"public page exposed a non-HTTPS media URL for live asset {label!r}"
+        )
+    return media_url
+
+
 def audit_site_assets(
     root: Path,
     site: Path,
@@ -540,8 +587,21 @@ def audit_live_assets(
             expected_path = _relative_path(root, source, f"live asset {name} source")
             if not expected_path.is_file():
                 raise FileNotFoundError(expected_path)
+            observed_url = url
+            media_pattern = rule.get("media_url_pattern")
+            if media_pattern is not None:
+                try:
+                    page = _call_fetcher(fetcher, url, None)
+                except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                    result.update(status="unavailable", reason=f"fetch failed: {exc}")
+                    checks.append(result)
+                    continue
+                observed_url = _media_url_from_page(
+                    url, page, media_pattern, name
+                )
+                result["media_url"] = observed_url
             try:
-                observed = _call_fetcher(fetcher, url, None)
+                observed = _call_fetcher(fetcher, observed_url, None)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 result.update(status="unavailable", reason=f"fetch failed: {exc}")
                 checks.append(result)
@@ -599,6 +659,7 @@ def _base_report(
         "source_digests": [],
         "checks": [],
         "consumers": {},
+        "coverage": {"out_of_scope": []},
         "errors": [],
     }
 
@@ -640,6 +701,7 @@ def run_audit(
     root = root.expanduser().resolve()
     site = site.expanduser().resolve()
     report = _base_report(root, site, release_tag)
+    report["coverage"] = {"out_of_scope": config.get("out_of_scope", [])}
     errors: list[str] = []
     record: dict[str, Any] | None = None
     try:
@@ -702,8 +764,14 @@ def _render_human(report: dict[str, Any]) -> None:
         print(f"{status:11} {label} @ {location}{suffix}")
     for error in report.get("errors", []):
         print(f"ERROR       {error}")
+    out_of_scope = report.get("coverage", {}).get("out_of_scope", [])
+    if out_of_scope:
+        print(
+            f"coverage: {len(report.get('checks', []))} configured checks; "
+            f"{len(out_of_scope)} documented platform groups are out of scope"
+        )
     if report.get("status") == "current":
-        print("All known consumers match the selected release.")
+        print("All configured consumers match the selected release.")
     elif report.get("status") == "stale":
         print("Stale consumers were found; no consumer files were changed.")
     else:

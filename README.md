@@ -286,8 +286,9 @@ are documented in
 
 Copies of these assets live outside this repo — `jedarden.com/public/brand/`
 (logo copies + recompressed hero JPEGs), jedarden.com's site-owned favicon
-outputs, and the GitHub profile avatar. CI here can't see them go stale, so the
-repository now ships a read-only detector as well as the remediation helper.
+outputs, the GitHub profile avatar, and the hand-placed platform profiles listed
+in the table above. CI here can't see them go stale, so the repository ships a
+read-only detector as well as the remediation helper.
 After publishing a Forgejo Release, check out
 its exact tag and run:
 
@@ -300,15 +301,46 @@ VERSION=vX.Y.Z
 `tools/consumer_drift.py` uses the published Forgejo release record, reports
 SHA-256 digests for canonical inputs, compares the eight documented
 jedarden.com outputs (two logos, two hero JPEGs, and four favicon outputs), and
-compares the live OG image and GitHub profile avatar directly with the selected
-release. It never applies changes, commits, or pushes. Exit `0` means current,
-`1` means confirmed stale consumers, and `2` means the audit was
-indeterminate (for example, a network or release-record failure). Set
+compares live media for the OG card, GitHub avatar, X profile avatar/header, and
+LinkedIn personal/company profile media. X and LinkedIn rules fetch each stable
+public profile URL and extract the current CDN media URL before comparing it;
+the CDN URL itself is intentionally not pinned because it changes after an
+upload. It never applies changes, commits, or pushes. Exit `0` means every
+configured check is current, `1` means confirmed stale consumers, and `2` means
+the audit was indeterminate (for example, a network or release-record failure).
+Set
 `FORGEJO_TOKEN` to a read-only Forgejo API token when the instance requires
 authentication. `--print-release-tag` resolves the newest stable published
 release for a scheduler. If the detector is newer than the tag under audit, use
 `--source-root <release-checkout>` so the tool code stays current while the
-compared inputs come from the published tag.
+compared inputs come from the published tag. A green result is not a claim that
+every upload in the per-platform table was checked: the machine-readable
+`consumer-drift.json` `out_of_scope` list is part of the audit contract and is
+also included in JSON reports.
+
+### Platform coverage boundary
+
+The detector checks only surfaces that expose a stable public profile page and
+retrievable media without credentials: X (`x.com/jedardencodes`) and LinkedIn
+(`linkedin.com/in/jed-arden` and `linkedin.com/company/runsybil`). The profile
+page is the stable locator; its current media URL is discovered at audit time.
+The existing checks cover the public jedarden.com OG card and GitHub avatar.
+
+The following documented uploads remain manual and deliberately out of scope:
+
+| Platform surface | Why the detector does not check it |
+|---|---|
+| Instagram, Threads, and TikTok profile pictures | No stable unauthenticated media URL is exposed. |
+| Facebook profile picture and covers | No registered public page URL; cover media is dynamic or login-gated. |
+| YouTube profile picture and TV-safe banner | No documented channel URL; public pages are consent/client dependent. |
+| Mastodon profile picture/banner | No documented instance and account URL. |
+| Bluesky profile picture/banner | No documented handle; public API media URLs are instance-specific blobs. |
+| Discord profile picture/banner | User media requires an authenticated API or client session. |
+| GitHub repository social preview banner | The upload has no stable public URL that can be compared to the source. |
+
+These exclusions are not silent: each reason is represented in
+`consumer-drift.json`, and the detector reports the count of excluded platform
+groups alongside its configured checks.
 
 Machine-readable consumer registration lives in
 [`consumer_registry.json`](consumer_registry.json). It names each consumer's

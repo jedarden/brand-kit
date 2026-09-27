@@ -374,8 +374,10 @@ The detector:
    SHA-256 digests for canonical inputs.
 3. Byte-compares jedarden.com's logo copies and `favicon.svg`, compares its
    three favicon PNGs and two hero JPEGs against release-generated reference
-   assets, compares the live OG image directly against the release crop, and
-   perceptually compares the known live GitHub avatar with the release avatar.
+   assets, compares the live OG image directly against the release crop,
+   perceptually compares the known live GitHub avatar with the release avatar,
+   and audits the public X and LinkedIn profile media by resolving each stable
+   profile page to its current CDN image.
 4. Emits human-readable output and a JSON report, returning `0` only for a
    fully current audit, `1` for confirmed stale consumers, and `2` for any
    indeterminate check. Network failures and unavailable live assets cannot be
@@ -396,6 +398,12 @@ GitHub avatar upload.
   registering its relative copies and provenance path in
   `consumer_registry.json`. Neither expands the remediation authority of this
   repository beyond the explicitly registered checkout.
+- Platform coverage is intentionally bounded. `consumer-drift.json` records
+  documented uploads that remain out of scope when a platform has no stable
+  unauthenticated media endpoint, no documented account URL, or only a
+  manually configured upload with no public comparison URL. A current audit is
+  therefore a pass for configured checks, not a claim that every platform row
+  in the README was verified.
 - A failed or indeterminate run is visible as a failed Argo workflow. The
   manifest is reconciled through the shared `declarative-config` ArgoCD
   application, while this repository remains the owner of the detector and its

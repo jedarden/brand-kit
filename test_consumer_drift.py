@@ -32,6 +32,66 @@ def test_image_check_rejects_color_drift_with_equal_red_channel():
     assert result["mean_luma"] > 1.0
 
 
+def test_live_asset_can_extract_rotating_media_from_a_stable_public_page(tmp_path):
+    root = make_root(tmp_path)
+    observed = io.BytesIO()
+    consumer_drift.hero_crop(root, 20, 20, 0.5).save(observed, "JPEG", quality=88)
+    page_url = "https://profile.example/jed"
+    media_url = "https://cdn.example/jed/banner-current.jpg"
+    config = {
+        "live_assets": [
+            {
+                "name": "profile banner",
+                "consumer": "profile.example/jed",
+                "source": "source/hero.png",
+                "url": page_url,
+                "media_url_pattern": r"https://cdn\.example/[^\" ]+",
+                "comparison": "crop",
+                "crop": {"width": 20, "height": 20, "fy": 0.5},
+                "tolerance": 3.0,
+            }
+        ]
+    }
+    responses = {
+        page_url: f'<meta content="{media_url}">'.encode(),
+        media_url: observed.getvalue(),
+    }
+
+    checks = consumer_drift.audit_live_assets(
+        root, config, fetcher=lambda url, headers=None: responses[url]
+    )
+
+    assert checks[0]["status"] == "current"
+    assert checks[0]["url"] == page_url
+    assert checks[0]["media_url"] == media_url
+
+
+def test_live_asset_page_without_media_is_indeterminate(tmp_path):
+    root = make_root(tmp_path)
+    config = {
+        "live_assets": [
+            {
+                "name": "profile banner",
+                "consumer": "profile.example/jed",
+                "source": "source/hero.png",
+                "url": "https://profile.example/jed",
+                "media_url_pattern": r"https://cdn\.example/[^\" ]+",
+                "comparison": "crop",
+                "crop": {"width": 20, "height": 20, "fy": 0.5},
+            }
+        ]
+    }
+
+    checks = consumer_drift.audit_live_assets(
+        root,
+        config,
+        fetcher=lambda url, headers=None: b"<html>no media here</html>",
+    )
+
+    assert checks[0]["status"] == "unavailable"
+    assert "did not expose media" in checks[0]["reason"]
+
+
 def make_root(tmp_path):
     root = tmp_path / "brand-kit"
     (root / "source").mkdir(parents=True)
@@ -1029,11 +1089,84 @@ def test_inventory_config_matches_documented_consumer_inventory():
             "tolerance": 3.0,
             "crop": {"width": 1200, "height": 630, "fy": 0.45},
         },
+        {
+            "name": "X profile avatar",
+            "consumer": "x.com/jedardencodes",
+            "source": "avatars/x-400.png",
+            "url": "https://x.com/jedardencodes",
+            "media_url_pattern": r"https://pbs\.twimg\.com/profile_images/[^\"'\\ ]+_400x400\.jpg",
+            "comparison": "image",
+            "tolerance": 8.0,
+            "resize_reference": True,
+        },
+        {
+            "name": "X profile header",
+            "consumer": "x.com/jedardencodes",
+            "source": "banners/x-header-1500x500.png",
+            "url": "https://x.com/jedardencodes",
+            "media_url_pattern": r"https://pbs\.twimg\.com/profile_banners/[^\"'\\ ]+/1500x500",
+            "comparison": "image",
+            "tolerance": 8.0,
+        },
+        {
+            "name": "LinkedIn personal profile picture",
+            "consumer": "linkedin.com/in/jed-arden",
+            "source": "avatars/linkedin-400.png",
+            "url": "https://www.linkedin.com/in/jed-arden/",
+            "media_url_pattern": r"https://media\.licdn\.com/[^\"'\\ ]+/profile-displayphoto-(?:shrink|scale)_[^\"'\\ ]+",
+            "comparison": "image",
+            "tolerance": 8.0,
+            "resize_reference": True,
+        },
+        {
+            "name": "LinkedIn personal banner",
+            "consumer": "linkedin.com/in/jed-arden",
+            "source": "banners/linkedin-personal-1584x396.png",
+            "url": "https://www.linkedin.com/in/jed-arden/",
+            "media_url_pattern": r"https://media\.licdn\.com/[^\"'\\ ]+/profile-displaybackgroundimage-[^\"'\\ ]+",
+            "comparison": "image",
+            "tolerance": 8.0,
+            "resize_reference": True,
+        },
+        {
+            "name": "LinkedIn company profile picture",
+            "consumer": "linkedin.com/company/runsybil",
+            "source": "avatars/linkedin-400.png",
+            "url": "https://www.linkedin.com/company/runsybil/",
+            "media_url_pattern": r"https://media\.licdn\.com/[^\"'\\ ]+/company-logo_(?:100|200)_[^\"'\\ ]+",
+            "comparison": "image",
+            "tolerance": 8.0,
+            "resize_reference": True,
+        },
+        {
+            "name": "LinkedIn company banner",
+            "consumer": "linkedin.com/company/runsybil",
+            "source": "banners/linkedin-company-1128x191.png",
+            "url": "https://www.linkedin.com/company/runsybil/",
+            "media_url_pattern": r"https://media\.licdn\.com/[^\"'\\ ]+/image-scale_191_1128/[^\"'\\ ]+",
+            "comparison": "image",
+            "tolerance": 8.0,
+        },
     ]
     assert config["site"]["repository"] == "https://github.com/jedarden/jedarden.com.git"
     assert config["live"] == {
         "og_url": "https://jedarden.com/brand/og.jpg",
         "avatar_url": "https://avatars.githubusercontent.com/jedarden",
+        "x_profile_url": "https://x.com/jedardencodes",
+        "linkedin_personal_url": "https://www.linkedin.com/in/jed-arden/",
+        "linkedin_company_url": "https://www.linkedin.com/company/runsybil/",
+    }
+
+    assert {entry["platform"] for entry in config["out_of_scope"]} == {
+        "Instagram",
+        "Threads",
+        "Facebook",
+        "YouTube",
+        "TikTok",
+        "Mastodon",
+        "Bluesky",
+        "Discord",
+        "GitHub",
     }
 
     source_paths = {entry["path"] for entry in config["source_assets"]}
@@ -1050,6 +1183,8 @@ def test_inventory_config_matches_documented_consumer_inventory():
         assert url.scheme == "https"
         assert url.netloc
         assert entry["comparison"] in {"image", "crop"}
+        if "media_url_pattern" in entry:
+            assert entry["media_url_pattern"]
     assert Path("consumer-drift.json").read_text(encoding="utf-8").endswith("\n")
 
 

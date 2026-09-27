@@ -16,7 +16,10 @@
   },
   "live": {
     "og_url": "https://jedarden.com/brand/og.jpg",
-    "avatar_url": "https://avatars.githubusercontent.com/jedarden"
+    "avatar_url": "https://avatars.githubusercontent.com/jedarden",
+    "x_profile_url": "https://x.com/jedardencodes",
+    "linkedin_personal_url": "https://www.linkedin.com/in/jed-arden/",
+    "linkedin_company_url": "https://www.linkedin.com/company/runsybil/"
   },
   "source_assets": [
     {
@@ -30,6 +33,26 @@
     {
       "path": "avatars/github-460.png",
       "role": "known live profile asset"
+    },
+    {
+      "path": "avatars/x-400.png",
+      "role": "known live X profile asset"
+    },
+    {
+      "path": "avatars/linkedin-400.png",
+      "role": "known live LinkedIn profile asset"
+    },
+    {
+      "path": "banners/x-header-1500x500.png",
+      "role": "known live X header asset"
+    },
+    {
+      "path": "banners/linkedin-personal-1584x396.png",
+      "role": "known live LinkedIn personal banner"
+    },
+    {
+      "path": "banners/linkedin-company-1128x191.png",
+      "role": "known live LinkedIn company banner"
     },
     {
       "path": "logo/logo-512.png",
@@ -139,6 +162,111 @@
         "height": 630,
         "fy": 0.45
       }
+    },
+    {
+      "name": "X profile avatar",
+      "consumer": "x.com/jedardencodes",
+      "source": "avatars/x-400.png",
+      "url": "https://x.com/jedardencodes",
+      "media_url_pattern": "https://pbs\\.twimg\\.com/profile_images/[^\\\"'\\\\ ]+_400x400\\.jpg",
+      "comparison": "image",
+      "tolerance": 8.0,
+      "resize_reference": true
+    },
+    {
+      "name": "X profile header",
+      "consumer": "x.com/jedardencodes",
+      "source": "banners/x-header-1500x500.png",
+      "url": "https://x.com/jedardencodes",
+      "media_url_pattern": "https://pbs\\.twimg\\.com/profile_banners/[^\\\"'\\\\ ]+/1500x500",
+      "comparison": "image",
+      "tolerance": 8.0
+    },
+    {
+      "name": "LinkedIn personal profile picture",
+      "consumer": "linkedin.com/in/jed-arden",
+      "source": "avatars/linkedin-400.png",
+      "url": "https://www.linkedin.com/in/jed-arden/",
+      "media_url_pattern": "https://media\\.licdn\\.com/[^\\\"'\\\\ ]+/profile-displayphoto-(?:shrink|scale)_[^\\\"'\\\\ ]+",
+      "comparison": "image",
+      "tolerance": 8.0,
+      "resize_reference": true
+    },
+    {
+      "name": "LinkedIn personal banner",
+      "consumer": "linkedin.com/in/jed-arden",
+      "source": "banners/linkedin-personal-1584x396.png",
+      "url": "https://www.linkedin.com/in/jed-arden/",
+      "media_url_pattern": "https://media\\.licdn\\.com/[^\\\"'\\\\ ]+/profile-displaybackgroundimage-[^\\\"'\\\\ ]+",
+      "comparison": "image",
+      "tolerance": 8.0,
+      "resize_reference": true
+    },
+    {
+      "name": "LinkedIn company profile picture",
+      "consumer": "linkedin.com/company/runsybil",
+      "source": "avatars/linkedin-400.png",
+      "url": "https://www.linkedin.com/company/runsybil/",
+      "media_url_pattern": "https://media\\.licdn\\.com/[^\\\"'\\\\ ]+/company-logo_(?:100|200)_[^\\\"'\\\\ ]+",
+      "comparison": "image",
+      "tolerance": 8.0,
+      "resize_reference": true
+    },
+    {
+      "name": "LinkedIn company banner",
+      "consumer": "linkedin.com/company/runsybil",
+      "source": "banners/linkedin-company-1128x191.png",
+      "url": "https://www.linkedin.com/company/runsybil/",
+      "media_url_pattern": "https://media\\.licdn\\.com/[^\\\"'\\\\ ]+/image-scale_191_1128/[^\\\"'\\\\ ]+",
+      "comparison": "image",
+      "tolerance": 8.0
+    }
+  ],
+  "out_of_scope": [
+    {
+      "platform": "Instagram",
+      "surfaces": ["profile picture"],
+      "reason": "The public profile does not expose a stable unauthenticated media URL; Instagram CDN URLs and page markup are session- and cache-dependent."
+    },
+    {
+      "platform": "Threads",
+      "surfaces": ["profile picture"],
+      "reason": "The public profile does not expose a stable unauthenticated media URL that can be audited without a platform API credential."
+    },
+    {
+      "platform": "Facebook",
+      "surfaces": ["profile picture", "cover"],
+      "reason": "No public account/page URL is registered, and Facebook cover media is delivered through dynamic or login-gated CDN responses."
+    },
+    {
+      "platform": "YouTube",
+      "surfaces": ["profile picture", "TV-safe banner"],
+      "reason": "No stable channel URL is documented for this brand, and YouTube's public page is consent- or client-dependent rather than a stable media endpoint."
+    },
+    {
+      "platform": "TikTok",
+      "surfaces": ["profile picture"],
+      "reason": "The public profile does not expose a stable unauthenticated media URL; profile media requires a supported API or dynamic page scraping."
+    },
+    {
+      "platform": "Mastodon",
+      "surfaces": ["profile picture", "banner"],
+      "reason": "No Mastodon instance/account URL is documented, so there is no stable public endpoint from which to retrieve the hand-placed assets."
+    },
+    {
+      "platform": "Bluesky",
+      "surfaces": ["profile picture", "banner"],
+      "reason": "No Bluesky handle is documented, and the public profile API returns instance-specific blob URLs rather than a configured stable consumer surface."
+    },
+    {
+      "platform": "Discord",
+      "surfaces": ["profile picture", "banner"],
+      "reason": "Discord user profile media is not available from a stable unauthenticated public URL; retrieval requires an authenticated API or client session."
+    },
+    {
+      "platform": "GitHub",
+      "surfaces": ["repository social preview banner"],
+      "reason": "The README asset is a manually configured repository social-preview upload, but GitHub does not expose a stable public URL for comparing that upload to the source file."
     }
   ]
 }
