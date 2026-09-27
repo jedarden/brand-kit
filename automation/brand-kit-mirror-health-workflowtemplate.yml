@@ -4,7 +4,7 @@ metadata:
   name: brand-kit-mirror-health
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/description: "Read-only Forgejo-to-GitHub branch and tag parity report with owner alerting"
+    workflows.argoproj.io/description: "Read-only Forgejo-to-GitHub branch and tag parity report with owner alerting; release tags use check_release_mirror.py and remain Forgejo-only"
 spec:
   entrypoint: check
   onExit: route-mirror-health
@@ -28,6 +28,10 @@ spec:
             git clone --filter=blob:none --no-tags --depth=1 --branch main \
               https://git.ardenone.com/jedarden/brand-kit.git /brand-kit
             cd /brand-kit
+            # This scheduled parity audit is read-only. Release publication
+            # additionally runs tools/check_release_mirror.py for the exact
+            # expected tag; transient GitHub mirror lag is indeterminate, and
+            # no GitHub Release object is queried or created.
             set +e
             python3 tools/check_mirror_health.py \
               --canonical-repository https://git.ardenone.com/jedarden/brand-kit.git \

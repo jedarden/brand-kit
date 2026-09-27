@@ -4,7 +4,7 @@ metadata:
   name: brand-kit-mirror-health
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/description: "Every-six-hour read-only Forgejo-to-GitHub branch and tag mirror health check"
+    workflows.argoproj.io/description: "Every-six-hour read-only Forgejo-to-GitHub branch and tag mirror health check; exact release-tag audits remain Forgejo-only"
 spec:
   # Run several times per day so a mirror outage is visible well before the
   # next release or consumer-drift handoff.

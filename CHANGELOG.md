@@ -23,6 +23,10 @@ source.
   `brand-kit-mirror-health` workflow compares every branch and tag, distinguishes
   missing, stale, and divergent refs, retains a durable report, and alerts the
   owner before release or consumer processing relies on the mirror.
+- Exact release-tag mirror audit: `tools/check_release_mirror.py` reads the
+  peeled Forgejo and GitHub refs only, reports transient mirror lag as
+  indeterminate, and preserves Forgejo as the sole release authority without
+  consulting or creating a duplicate GitHub Release.
 - Scheduled release-token validity probe: the daily Argo workflow checks the
   Forgejo and Argo credentials (including a server-side dry-run consumer
   submission), retains a sanitized report, and routes failures to the owner

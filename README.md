@@ -436,6 +436,11 @@ channel. A healthy report requires exact parity for all branches and tags;
 an unavailable remote or inconclusive ancestry comparison is indeterminate and
 also fails closed.
 
+The release handoff has an additional exact-tag audit in
+`tools/check_release_mirror.py`. It reads only the peeled Forgejo and GitHub
+tag refs, treats transient mirror lag as indeterminate, and never queries or
+creates a GitHub Release; Forgejo remains the only release authority.
+
 ## Forgejo release publication
 
 A pushed tag is not a release. After the Argo `brand-kit-ci` run for the exact

@@ -155,6 +155,26 @@ pushes the tag to the mirror. The API base defaults to
 `--api-url` and `--repository` exist only for an explicitly reviewed Forgejo
 instance.
 
+For a standalone, credential-free exact-tag audit of the release handoff, run
+the read-only mirror checker after the publisher (or when investigating a
+mirror alert):
+
+```bash
+.venv/bin/python tools/check_release_mirror.py \
+  --tag "$VERSION" \
+  --commit "$COMMIT" \
+  --report /tmp/brand-kit-release-mirror.json
+```
+
+The audit reads only the peeled tag from Forgejo and GitHub with
+`git ls-remote`. It records Forgejo as the release authority and deliberately
+does not query, accept, update, or create a GitHub Release. A missing GitHub
+tag is transient mirror lag: it is `INDETERMINATE` while the server-side
+mirror catches up; retry the audit and keep the release tag fixed. A matching
+tag is `HEALTHY`, while a tag that points at a different commit is
+`UNHEALTHY`. A canonical Forgejo tag that is absent or points at a different
+commit is also `UNHEALTHY`.
+
 ## Verify the handoff
 
 Use the read-only form after publication, or as a separate audit before a
