@@ -74,6 +74,45 @@ def test_submit_waits_for_mirror_before_posting_the_exact_tag(monkeypatch):
     }
 
 
+def test_submit_retries_until_canonical_and_mirror_tags_agree(monkeypatch):
+    events = []
+    observed_commits = iter([COMMIT, None, COMMIT, COMMIT])
+
+    monkeypatch.setattr(
+        release_publish,
+        "get_release",
+        lambda *args, **kwargs: published(),
+    )
+
+    def remote_tag_commit(remote, tag, root=release_publish.ROOT):
+        events.append((remote, tag))
+        return next(observed_commits)
+
+    monkeypatch.setattr(release_publish, "remote_tag_commit", remote_tag_commit)
+
+    def request(method, url, payload=None, **kwargs):
+        events.append(("submit", method, payload))
+        return {"metadata": {"name": "brand-kit-consumer-drift-release-abc"}}
+
+    result = consumer_drift_submit.submit_consumer_drift(
+        "v1.1.0",
+        timeout=1,
+        interval=0,
+        sleep=lambda delay: events.append(("sleep", delay)),
+        request=request,
+    )
+
+    assert result["metadata"]["name"] == "brand-kit-consumer-drift-release-abc"
+    assert events[:5] == [
+        ("origin", "v1.1.0"),
+        ("github", "v1.1.0"),
+        ("sleep", 0),
+        ("origin", "v1.1.0"),
+        ("github", "v1.1.0"),
+    ]
+    assert events[5][0:2] == ("submit", "POST")
+
+
 @pytest.mark.parametrize(
     ("record", "message"),
     [
@@ -81,6 +120,7 @@ def test_submit_waits_for_mirror_before_posting_the_exact_tag(monkeypatch):
         (published(draft=True), "not published"),
         (published(prerelease=True), "stable published release"),
         (published(target_commitish="main"), "no verifiable target commit"),
+        (published(tag_name="v1.0.0"), "names"),
     ],
 )
 def test_failed_or_unverifiable_release_never_submits(
@@ -107,6 +147,124 @@ def test_failed_or_unverifiable_release_never_submits(
         )
 
     assert submits == []
+
+
+def test_forgejo_api_failure_never_checks_tags_or_submits(monkeypatch):
+    submits = []
+
+    def request_json(*args, **kwargs):
+        raise release_publish.HttpFailure(503, "temporarily unavailable")
+
+    monkeypatch.setattr(release_publish, "request_json", request_json)
+    monkeypatch.setattr(
+        release_publish,
+        "wait_for_mirror",
+        lambda *args, **kwargs: pytest.fail("mirror must not be checked"),
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="cannot read Forgejo release"):
+        consumer_drift_submit.submit_consumer_drift(
+            "v1.1.0",
+            request=lambda *args, **kwargs: submits.append(args),
+        )
+
+    assert submits == []
+
+
+def test_canonical_tag_mismatch_never_submits(monkeypatch):
+    submits = []
+    monkeypatch.setattr(
+        release_publish,
+        "get_release",
+        lambda *args, **kwargs: published(),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "remote_tag_commit",
+        lambda *args, **kwargs: "b" * 40,
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="origin .* expected"):
+        consumer_drift_submit.submit_consumer_drift(
+            "v1.1.0",
+            request=lambda *args, **kwargs: submits.append(args),
+        )
+
+    assert submits == []
+
+
+def test_mirror_timeout_never_submits(monkeypatch):
+    submits = []
+    observed = iter([COMMIT, None])
+    monkeypatch.setattr(
+        release_publish,
+        "get_release",
+        lambda *args, **kwargs: published(),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "remote_tag_commit",
+        lambda *args, **kwargs: next(observed),
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="has not caught up"):
+        consumer_drift_submit.submit_consumer_drift(
+            "v1.1.0",
+            timeout=0,
+            interval=0,
+            request=lambda *args, **kwargs: submits.append(args),
+        )
+
+    assert submits == []
+
+
+def test_argo_api_failure_is_reported_after_all_read_only_gates(monkeypatch):
+    submits = []
+    monkeypatch.setattr(
+        release_publish,
+        "get_release",
+        lambda *args, **kwargs: published(),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "wait_for_mirror",
+        lambda *args, **kwargs: None,
+    )
+
+    def request(*args, **kwargs):
+        submits.append((args, kwargs))
+        raise release_publish.HttpFailure(
+            502,
+            "upstream unavailable",
+            service="Argo API",
+        )
+
+    with pytest.raises(
+        release_publish.ReleaseError,
+        match=r"cannot submit consumer-drift workflow for v1\.1\.0.*HTTP 502",
+    ):
+        consumer_drift_submit.submit_consumer_drift("v1.1.0", request=request)
+
+    assert len(submits) == 1
+
+
+def test_malformed_argo_success_response_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        release_publish,
+        "get_release",
+        lambda *args, **kwargs: published(),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "wait_for_mirror",
+        lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="no workflow name"):
+        consumer_drift_submit.submit_consumer_drift(
+            "v1.1.0",
+            request=lambda *args, **kwargs: {"metadata": {}},
+        )
 
 
 def test_mirror_failure_never_submits(monkeypatch):
