@@ -19,6 +19,25 @@ def published(tag="v1.1.0", **overrides):
     return record
 
 
+def argo_workflow(run="brand-kit-ci-abc123", phase="Succeeded", commit=COMMIT, **overrides):
+    workflow = {
+        "metadata": {
+            "name": run,
+            "labels": {
+                "workflows.argoproj.io/workflow-template": "brand-kit-ci",
+            },
+        },
+        "status": {
+            "phase": phase,
+            "outputs": {
+                "parameters": [{"name": "commit", "value": commit}],
+            },
+        },
+    }
+    workflow.update(overrides)
+    return workflow
+
+
 def test_tag_validation_requires_an_exact_stable_tag():
     assert release_publish.validate_tag("v1.1.0") == "v1.1.0"
     for tag in ("v1.1", "v1.1.0-rc1", "1.1.0", " v1.1.0", "v1.1.0\n"):
@@ -159,12 +178,79 @@ def test_mirror_gate_requires_exact_peeled_refs(monkeypatch):
         )
 
 
+def test_argo_attestation_reads_one_workflow_and_accepts_exact_succeeded_commit(monkeypatch):
+    calls = []
+
+    def request(method, url, payload=None, token=None, timeout=20.0, **kwargs):
+        calls.append((method, url, payload, token, kwargs))
+        return argo_workflow()
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    result = release_publish.attest_argo_ci_run(
+        "brand-kit-ci/brand-kit-ci-abc123",
+        COMMIT,
+        api_url="https://argo.example",
+        token="argo-read-only",
+    )
+
+    assert result["status"]["phase"] == "Succeeded"
+    assert calls == [
+        (
+            "GET",
+            "https://argo.example/api/v1/workflows/argo-workflows/brand-kit-ci-abc123",
+            None,
+            "argo-read-only",
+            {"authorization_scheme": "Bearer", "service": "Argo API"},
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("workflow", "message"),
+    [
+        (argo_workflow(phase="Failed"), "only Succeeded is accepted"),
+        (argo_workflow(commit="b" * 40), "attests commit"),
+        (
+            argo_workflow(status={"phase": "Succeeded"}),
+            "no structured full-commit attestation",
+        ),
+    ],
+)
+def test_argo_attestation_fails_closed_for_phase_commit_or_missing_evidence(
+    monkeypatch, workflow, message
+):
+    monkeypatch.setattr(release_publish, "request_json", lambda *args, **kwargs: workflow)
+
+    with pytest.raises(release_publish.ReleaseError, match=message):
+        release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+
+
+def test_argo_attestation_rejects_conflicting_structured_commits(monkeypatch):
+    workflow = argo_workflow()
+    workflow["status"]["nodes"] = {
+        "ci": {
+            "outputs": {
+                "parameters": [{"name": "revision", "value": "b" * 40}],
+            }
+        }
+    }
+    monkeypatch.setattr(release_publish, "request_json", lambda *args, **kwargs: workflow)
+
+    with pytest.raises(release_publish.ReleaseError, match="conflicting commit attestations"):
+        release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+
+
 def test_workflow_documentation_keeps_forgejo_authoritative():
     document = Path("docs/notes/release-publication.md").read_text(encoding="utf-8")
     assert "git tag -a" in document
     assert 'git push origin "refs/tags/$VERSION"' in document
     assert "brand-kit-ci" in document
     assert "tools/release_publish.py" in document
+    assert "read-only Argo API" in document
+    assert "structured" in document
+    assert "full SHA" in document
+    assert "ARGO_TOKEN" in document
     assert "--verify-only" in document
     assert "READY" in document
     assert "GitHub Releases API" in document

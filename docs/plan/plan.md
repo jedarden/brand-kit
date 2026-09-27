@@ -84,7 +84,10 @@ a reason to notice when a new one exists.
 server-side push mirror. The repeatable operator procedure is
 [`docs/notes/release-publication.md`](notes/release-publication.md), backed by
 `tools/release_publish.py`. It runs only after the `brand-kit-ci` Argo run for
-the exact release commit has succeeded and records that run identifier.
+the exact release commit has succeeded. The publisher performs a read-only
+Argo API attestation of that run: it requires `Succeeded` plus a structured
+full-SHA commit output matching the release commit, and fails closed when the
+run is failed, missing, malformed, or for another commit.
 
 First create and push the annotated tag:
 

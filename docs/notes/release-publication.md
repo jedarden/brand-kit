@@ -13,10 +13,14 @@ verified and left unchanged.
 ## Preconditions
 
 1. Start from a clean brand-kit checkout at the commit that will be released.
-2. Confirm the Argo `brand-kit-ci` workflow for that exact commit reached
+2. Confirm that the Argo `brand-kit-ci` workflow for that exact commit reached
    `Succeeded`, including the asset verifier, full pytest suite, regeneration,
-   and no-drift checks. Copy its run identifier; the publisher records that
-   identifier but cannot query Argo on your behalf.
+   and no-drift checks. Copy the workflow run name. The publisher performs a
+   read-only `GET` against Argo and will accept the run only when its status is
+   `Succeeded` and a structured `commit`, `revision`, or equivalent full SHA
+   output matches the release commit. A log line or a branch name is not an
+   attestation; the WorkflowTemplate must expose the checked-out SHA as a
+   structured output before this release gate can pass.
 3. Make sure `origin` is the canonical Forgejo remote and `github` is the
    read-only tag mirror. The publisher reads both remotes and never pushes to
    either remote.
@@ -26,6 +30,13 @@ verified and left unchanged.
 
    ```bash
    export FORGEJO_TOKEN='...'
+   ```
+
+   If the Argo server requires authentication, export its read-only token
+   separately. The publisher uses it only for the workflow `GET`:
+
+   ```bash
+   export ARGO_TOKEN='...'
    ```
 
 ## Create the exact tag
@@ -53,7 +64,7 @@ when the release notes intentionally come from another reviewed file.
 ```bash
 .venv/bin/python tools/release_publish.py \
   --tag "$VERSION" \
-  --ci-run "brand-kit-ci/<successful-run-id>"
+  --ci-run "brand-kit-ci/<workflow-run-name>"
 ```
 
 The publisher performs these checks in order:
@@ -61,7 +72,10 @@ The publisher performs these checks in order:
 1. `v1.1.0` is an annotated tag at the current `HEAD`.
 2. The canonical `origin` and read-only `github` remotes advertise the same
    peeled commit for that exact tag.
-3. The successful CI run identifier is supplied by the operator.
+3. The read-only Argo API confirms that the named run is `Succeeded` and
+   carries the exact release commit in a structured output. A failed run,
+   missing output, mismatched SHA, malformed response, or API error fails
+   closed.
 4. Forgejo's release-by-tag endpoint either finds the matching published
    record, publishes an existing matching draft, or creates a non-draft stable
    release with `tag_name` and `target_commitish` set to the exact tag and
@@ -69,10 +83,12 @@ The publisher performs these checks in order:
 5. Forgejo is queried again after the write, and both remotes are checked again
    for the tag.
 
-A missing or mismatched tag, an inaccessible API, a wrong release tag, a
+A missing or mismatched tag, an inaccessible Argo or Forgejo API, a
+non-`Succeeded` run, missing or mismatched run commit, wrong release tag, a
 prerelease, or a draft record fails closed. A `409` response is treated as a
 race and is accepted only when a subsequent read returns the exact published
-record. A failed run does not authorize consumer synchronization.
+record. A failed or unverifiable run does not authorize publication or
+consumer synchronization.
 
 The command never calls the GitHub Releases API, creates a GitHub Release, or
 pushes the tag to the mirror. The API base defaults to
@@ -92,8 +108,10 @@ consumer run:
   --verify-only
 ```
 
-A successful verification prints `READY` only after the Forgejo record is
-published and the canonical and mirror refs still point to the same commit.
+A successful verification prints `READY` only after the Argo attestation, the
+Forgejo record is published, and the canonical and mirror refs still point to
+the same commit. `--verify-only` still performs the Argo check, but does not
+write to Forgejo.
 The command prints the next consumer check, but does not run it:
 
 ```bash

@@ -20,7 +20,23 @@ DEFAULT_API_URL = "https://git.ardenone.com/api/v1"
 DEFAULT_REPOSITORY = "jedarden/brand-kit"
 DEFAULT_ORIGIN_REMOTE = "origin"
 DEFAULT_MIRROR_REMOTE = "github"
+DEFAULT_ARGO_API_URL = "https://argo-ci.ardenone.com"
+DEFAULT_ARGO_NAMESPACE = "argo-workflows"
+DEFAULT_ARGO_WORKFLOW_TEMPLATE = "brand-kit-ci"
 TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+OBJECT_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
+WORKFLOW_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
+WORKFLOW_RUN_PREFIX = f"{DEFAULT_ARGO_WORKFLOW_TEMPLATE}/"
+COMMIT_PARAMETER_NAMES = {
+    "commit",
+    "revision",
+    "sha",
+    "gitcommit",
+    "gitsha",
+    "headcommit",
+    "headsha",
+    "releasecommit",
+}
 
 
 class ReleaseError(RuntimeError):
@@ -30,10 +46,11 @@ class ReleaseError(RuntimeError):
 class HttpFailure(ReleaseError):
     """An HTTP request failed with a response from the Forgejo API."""
 
-    def __init__(self, status: int, detail: str):
+    def __init__(self, status: int, detail: str, service: str = "Forgejo API"):
         self.status = status
         self.detail = detail
-        super().__init__(f"Forgejo API returned HTTP {status}: {detail}")
+        self.service = service
+        super().__init__(f"{service} returned HTTP {status}: {detail}")
 
 
 def validate_tag(tag: str) -> str:
@@ -199,10 +216,12 @@ def request_json(
     payload: dict[str, Any] | None = None,
     token: str | None = None,
     timeout: float = 20.0,
+    authorization_scheme: str = "token",
+    service: str = "Forgejo API",
 ) -> Any:
     headers = {"Accept": "application/json", "User-Agent": "brand-kit-release-publisher"}
     if token:
-        headers["Authorization"] = f"token {token}"
+        headers["Authorization"] = f"{authorization_scheme} {token}"
     data = None
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
@@ -213,13 +232,17 @@ def request_json(
             body = response.read()
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:300]
-        raise HttpFailure(error.code, detail or error.reason or "request failed") from error
+        raise HttpFailure(
+            error.code,
+            detail or error.reason or f"{service} request failed",
+            service=service,
+        ) from error
     except urllib.error.URLError as error:
-        raise ReleaseError(f"cannot reach Forgejo API: {error.reason}") from error
+        raise ReleaseError(f"cannot reach {service}: {error.reason}") from error
     try:
         return json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ReleaseError(f"Forgejo API returned invalid JSON: {error}") from error
+        raise ReleaseError(f"{service} returned invalid JSON: {error}") from error
 
 
 def validate_release_record(record: Any, tag: str, allow_draft: bool = False) -> dict[str, Any]:
@@ -252,6 +275,208 @@ def get_release(
             return None
         raise ReleaseError(f"cannot read Forgejo release {tag}: {error}") from error
     return validate_release_record(record, tag, allow_draft=allow_draft)
+
+
+def argo_run_name(ci_run: str) -> str:
+    """Validate and normalize the operator-supplied Argo workflow name."""
+    if not isinstance(ci_run, str) or ci_run != ci_run.strip() or not ci_run:
+        raise ReleaseError("Argo CI run identifier must not be empty or padded")
+    if ci_run.startswith(WORKFLOW_RUN_PREFIX):
+        ci_run = ci_run[len(WORKFLOW_RUN_PREFIX) :]
+    elif "/" in ci_run:
+        raise ReleaseError(
+            "Argo CI run identifier must be a workflow name or brand-kit-ci/<workflow-name>"
+        )
+    if not WORKFLOW_NAME_PATTERN.fullmatch(ci_run):
+        raise ReleaseError(f"Argo CI workflow name is malformed: {ci_run!r}")
+    return ci_run
+
+
+def argo_workflow_url(api_url: str, namespace: str, ci_run: str) -> str:
+    """Build the read-only Argo Workflow API URL for a run."""
+    run_name = argo_run_name(ci_run)
+    if not isinstance(namespace, str) or not WORKFLOW_NAME_PATTERN.fullmatch(namespace):
+        raise ReleaseError(f"Argo namespace is malformed: {namespace!r}")
+    base = api_url.rstrip("/")
+    if not base.endswith("/api/v1"):
+        base = f"{base}/api/v1"
+    return (
+        f"{base}/workflows/{urllib.parse.quote(namespace, safe='')}/"
+        f"{urllib.parse.quote(run_name, safe='')}"
+    )
+
+
+def get_argo_workflow(
+    ci_run: str,
+    api_url: str = DEFAULT_ARGO_API_URL,
+    namespace: str = DEFAULT_ARGO_NAMESPACE,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Read one Argo Workflow record without submitting or mutating a run."""
+    run_name = argo_run_name(ci_run)
+    try:
+        workflow = request_json(
+            "GET",
+            argo_workflow_url(api_url, namespace, run_name),
+            token=token,
+            authorization_scheme="Bearer",
+            service="Argo API",
+        )
+    except HttpFailure as error:
+        if error.status == 404:
+            raise ReleaseError(f"Argo CI run {ci_run} was not found") from error
+        raise ReleaseError(f"cannot read Argo CI run {ci_run}: {error}") from error
+    except ReleaseError as error:
+        raise ReleaseError(f"cannot read Argo CI run {ci_run}: {error}") from error
+    if not isinstance(workflow, dict):
+        raise ReleaseError(f"Argo CI run {ci_run} returned a non-object record")
+    return workflow
+
+
+def _normalized_parameter_name(name: Any) -> str:
+    if not isinstance(name, str):
+        return ""
+    return re.sub(r"[-_]", "", name).lower()
+
+
+def _named_values(value: Any) -> list[tuple[str, Any]]:
+    """Read Argo's list-shaped or map-shaped parameter representation."""
+    if isinstance(value, list):
+        return [
+            (item.get("name", ""), item.get("value"))
+            for item in value
+            if isinstance(item, dict)
+        ]
+    if isinstance(value, dict):
+        named: list[tuple[str, Any]] = []
+        for key, item in value.items():
+            if isinstance(item, dict):
+                named.append((item.get("name", key), item.get("value")))
+            else:
+                named.append((key, item))
+        return named
+    return []
+
+
+def _attested_commit_candidates(workflow: dict[str, Any]) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+
+    def collect(location: str, parameters: Any) -> None:
+        for name, value in _named_values(parameters):
+            if _normalized_parameter_name(name) not in COMMIT_PARAMETER_NAMES:
+                continue
+            if not isinstance(value, str) or not OBJECT_ID_PATTERN.fullmatch(value):
+                raise ReleaseError(
+                    f"Argo CI attestation field {location}.{name or '<unnamed>'} "
+                    "is not a full commit object ID"
+                )
+            candidates.append((f"{location}.{name}", value.lower()))
+
+    status = workflow.get("status")
+    if isinstance(status, dict):
+        outputs = status.get("outputs")
+        if isinstance(outputs, dict):
+            collect("status.outputs.parameters", outputs.get("parameters"))
+        collect("status.parameters", status.get("parameters"))
+        nodes = status.get("nodes")
+        if isinstance(nodes, dict):
+            for node_name, node in nodes.items():
+                if not isinstance(node, dict):
+                    continue
+                node_outputs = node.get("outputs")
+                node_inputs = node.get("inputs")
+                output_parameters = (
+                    node_outputs.get("parameters")
+                    if isinstance(node_outputs, dict)
+                    else None
+                )
+                input_parameters = (
+                    node_inputs.get("parameters")
+                    if isinstance(node_inputs, dict)
+                    else None
+                )
+                collect(
+                    f"status.nodes.{node_name}.outputs.parameters",
+                    output_parameters,
+                )
+                collect(
+                    f"status.nodes.{node_name}.inputs.parameters",
+                    input_parameters,
+                )
+
+    spec = workflow.get("spec")
+    if isinstance(spec, dict):
+        arguments = spec.get("arguments")
+        if isinstance(arguments, dict):
+            collect("spec.arguments.parameters", arguments.get("parameters"))
+
+    metadata = workflow.get("metadata")
+    if isinstance(metadata, dict):
+        collect("metadata.labels", metadata.get("labels"))
+        collect("metadata.annotations", metadata.get("annotations"))
+
+    return candidates
+
+
+def attest_argo_ci_run(
+    ci_run: str,
+    release_commit: str,
+    api_url: str = DEFAULT_ARGO_API_URL,
+    namespace: str = DEFAULT_ARGO_NAMESPACE,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Require a read-only, successful Argo attestation for ``release_commit``."""
+    run_name = argo_run_name(ci_run)
+    if not isinstance(release_commit, str) or not OBJECT_ID_PATTERN.fullmatch(release_commit):
+        raise ReleaseError(f"release commit is not a full object ID: {release_commit!r}")
+    workflow = get_argo_workflow(
+        run_name,
+        api_url=api_url,
+        namespace=namespace,
+        token=token,
+    )
+
+    metadata = workflow.get("metadata")
+    if isinstance(metadata, dict):
+        returned_name = metadata.get("name")
+        if returned_name is not None and returned_name != run_name:
+            raise ReleaseError(
+                f"Argo returned workflow {returned_name!r}, expected {run_name!r}"
+            )
+        labels = metadata.get("labels")
+        if isinstance(labels, dict):
+            template = labels.get("workflows.argoproj.io/workflow-template")
+            if template is not None and template != DEFAULT_ARGO_WORKFLOW_TEMPLATE:
+                raise ReleaseError(
+                    f"Argo run {ci_run} uses workflow template {template!r}, "
+                    f"expected {DEFAULT_ARGO_WORKFLOW_TEMPLATE!r}"
+                )
+
+    status = workflow.get("status")
+    if not isinstance(status, dict):
+        raise ReleaseError(f"Argo CI run {ci_run} has no status record")
+    phase = status.get("phase")
+    if phase != "Succeeded":
+        raise ReleaseError(
+            f"Argo CI run {ci_run} has phase {phase!r}; only Succeeded is accepted"
+        )
+
+    candidates = _attested_commit_candidates(workflow)
+    observed = {commit for _, commit in candidates}
+    if not observed:
+        raise ReleaseError(
+            f"Argo CI run {ci_run} has no structured full-commit attestation"
+        )
+    if len(observed) != 1:
+        details = ", ".join(f"{location}={commit}" for location, commit in candidates)
+        raise ReleaseError(f"Argo CI run {ci_run} has conflicting commit attestations: {details}")
+    attested_commit = next(iter(observed))
+    if attested_commit != release_commit.lower():
+        raise ReleaseError(
+            f"Argo CI run {ci_run} attests commit {attested_commit}, "
+            f"expected release commit {release_commit.lower()}"
+        )
+    return workflow
 
 
 def release_notes_from_changelog(path: Path, tag: str) -> str:
@@ -365,7 +590,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ci-run",
         required=True,
-        help="successful brand-kit-ci Argo run identifier; the operator must verify it",
+        help="brand-kit-ci Argo workflow name (or brand-kit-ci/<workflow-name>)",
+    )
+    parser.add_argument(
+        "--argo-api-url",
+        default=DEFAULT_ARGO_API_URL,
+        help=f"Argo Workflows API base URL (default: {DEFAULT_ARGO_API_URL})",
+    )
+    parser.add_argument(
+        "--argo-namespace",
+        default=DEFAULT_ARGO_NAMESPACE,
+        help=f"Argo namespace (default: {DEFAULT_ARGO_NAMESPACE})",
     )
     parser.add_argument(
         "--verify-only",
@@ -421,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     token = os.environ.get("FORGEJO_TOKEN") or os.environ.get("FORGEJO_API_TOKEN")
+    argo_token = os.environ.get("ARGO_TOKEN") or os.environ.get("ARGO_API_TOKEN")
     try:
         notes = args.notes
         if notes is None:
@@ -432,7 +668,14 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.mirror_timeout,
             interval=args.mirror_interval,
         )
-        print(f"CI evidence supplied: {args.ci_run}")
+        attest_argo_ci_run(
+            args.ci_run,
+            commit,
+            api_url=args.argo_api_url,
+            namespace=args.argo_namespace,
+            token=argo_token,
+        )
+        print(f"PASS  Argo CI run {args.ci_run} succeeded for commit {commit}")
         print(f"PASS  exact annotated tag {args.tag} at {commit}")
         print("PASS  origin and mirror advertise the same peeled tag")
 

@@ -5,6 +5,10 @@ All notable changes to the brand kit are documented in this file.
 ## [Unreleased]
 
 ### Added
+- The Forgejo release publisher now performs a read-only Argo `brand-kit-ci`
+  attestation before publication, requiring a `Succeeded` run with a
+  structured full-SHA output for the exact release commit; mismatches,
+  failures, missing evidence, and API errors fail closed.
 - Repeatable Forgejo release-publication workflow: `tools/release_publish.py`
   creates or verifies the exact annotated tag after a successful CI run,
   confirms canonical and mirror tag readiness, and records Forgejo as the sole

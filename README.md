@@ -218,13 +218,16 @@ release commit succeeds, use the repeatable publisher documented in
   --ci-run "brand-kit-ci/<successful-run-id>"
 ```
 
-The publisher requires the exact annotated `vX.Y.Z` tag at `HEAD`, creates or
-reuses the non-draft Forgejo Release, and confirms that the canonical Forgejo
-tag and the read-only GitHub mirror advertise the same peeled commit. It is
-idempotent and never creates a GitHub Release. Wait for its `READY` result and
-run the read-only `--verify-only` form before starting the consumer workflow
-below. Forgejo remains the sole release authority; the mirrored Git tag is only
-a distribution path.
+The publisher performs a read-only Argo API attestation before any Forgejo
+write: the named run must be `Succeeded` and expose the exact release commit as
+a structured full-SHA output. It then requires the exact annotated `vX.Y.Z` tag
+at `HEAD`, creates or reuses the non-draft Forgejo Release, and confirms that
+the canonical Forgejo tag and the read-only GitHub mirror advertise the same
+peeled commit. It is idempotent and never creates a GitHub Release. Set
+`ARGO_TOKEN` to a read-only Argo token when the server requires authentication.
+Wait for its `READY` result and run the read-only `--verify-only` form before
+starting the consumer workflow below. Forgejo remains the sole release
+authority; the mirrored Git tag is only a distribution path.
 
 ## Downstream consumers (post-tag sync)
 
