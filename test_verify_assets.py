@@ -1,8 +1,243 @@
 import json
 
 import pytest
+from PIL import Image
 
 from tools import verify_assets
+
+
+@pytest.fixture
+def dimension_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    dimensions = {
+        "avatars/avatar.png": (4, 4),
+        "banners/banner.png": (6, 3),
+    }
+    for relpath, size in dimensions.items():
+        path = root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", size, "#DC3127").save(path)
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    monkeypatch.setattr(verify_assets, "EXPECTED_DIMENSIONS", dimensions)
+    return root
+
+
+@pytest.fixture
+def presence_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    expected_present = ("source/logo.svg", "tools/verify_assets.py")
+    expected_absent = ("source/hero-alt.png",)
+    for relpath in expected_present:
+        path = root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    monkeypatch.setattr(verify_assets, "EXPECTED_PRESENT", expected_present)
+    monkeypatch.setattr(verify_assets, "EXPECTED_ABSENT", expected_absent)
+    return root
+
+
+def _write_ico(path, sizes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", (256, 256), (220, 49, 39, 255)).save(path, sizes=sizes)
+
+
+@pytest.fixture
+def favicon_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    path = root / verify_assets.ICO_RELPATH
+    _write_ico(path, [(16, 16), (32, 32), (256, 256)])
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    return path
+
+
+@pytest.fixture
+def transparency_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    for relpath in verify_assets.TRANSPARENT_PNGS:
+        path = root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.new("RGBA", (2, 2), (220, 49, 39, 255))
+        image.putpixel((0, 0), (220, 49, 39, 0))
+        image.save(path)
+
+    (root / verify_assets.OPAQUE_MASTER_SVG).write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<rect fill="#EFDECC"/><path fill="#DC3127"/></svg>',
+        encoding="utf-8",
+    )
+    (root / verify_assets.TRANSPARENT_MASTER_SVG).write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<path fill="#DC3127"/></svg>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    return root
+
+
+def test_dimensions_accept_valid_fixture(dimension_fixture):
+    rows, ok = verify_assets.verify_dimensions()
+
+    assert ok
+    assert rows == [
+        ("avatars/avatar.png", "4×4", "4×4", "✓"),
+        ("banners/banner.png", "6×3", "6×3", "✓"),
+    ]
+
+
+def test_dimensions_report_missing_file(dimension_fixture):
+    (dimension_fixture / "avatars/avatar.png").unlink()
+
+    rows, ok = verify_assets.verify_dimensions()
+
+    assert not ok
+    assert rows[0] == ("avatars/avatar.png", "4×4", "MISSING", "file not found")
+
+
+def test_dimensions_report_incorrect_dimensions(dimension_fixture):
+    Image.new("RGB", (5, 4), "#DC3127").save(
+        dimension_fixture / "avatars/avatar.png"
+    )
+
+    rows, ok = verify_assets.verify_dimensions()
+
+    assert not ok
+    assert rows[0] == ("avatars/avatar.png", "4×4", "5×4", "✗ MISMATCH")
+
+
+def test_presence_accepts_valid_fixture(presence_fixture):
+    rows, ok = verify_assets.verify_presence()
+
+    assert ok
+    assert rows == [
+        ("source/logo.svg", "exists", "found", "✓"),
+        ("tools/verify_assets.py", "exists", "found", "✓"),
+        ("source/hero-alt.png", "absent (documented removed)", "not found", "✓"),
+    ]
+
+
+def test_presence_reports_missing_file(presence_fixture):
+    (presence_fixture / "source/logo.svg").unlink()
+
+    rows, ok = verify_assets.verify_presence()
+
+    assert not ok
+    assert rows[0] == (
+        "source/logo.svg",
+        "exists",
+        "MISSING",
+        "README names this path",
+    )
+
+
+def test_favicon_accepts_valid_layers(favicon_fixture):
+    rows, ok = verify_assets.verify_favicon_ico()
+
+    assert ok
+    assert rows[0][3] == "✓"
+    assert rows[1][3] == "✓"
+    assert rows[2][3] == "✓"
+    assert all(row[3] == "✓" for row in rows[3:])
+
+
+@pytest.mark.parametrize(
+    "sizes, expected_status",
+    [
+        ([(16, 16)], "✗ single-resolution"),
+        ([(16, 16), (32, 32)], "✗ MISMATCH"),
+    ],
+)
+def test_favicon_reports_layer_mismatch(favicon_fixture, sizes, expected_status):
+    _write_ico(favicon_fixture, sizes)
+
+    rows, ok = verify_assets.verify_favicon_ico()
+
+    assert not ok
+    assert any(row[3] == expected_status for row in rows)
+
+
+def test_favicon_reports_malformed_container(favicon_fixture):
+    favicon_fixture.write_bytes(b"not an ico")
+
+    rows, ok = verify_assets.verify_favicon_ico()
+
+    assert not ok
+    assert rows[0][:3] == ("favicon/favicon.ico", "multi-res 16-256", "ERROR")
+    assert "not a valid .ico container" in rows[0][3]
+
+
+def test_transparency_accepts_valid_fixture(transparency_fixture):
+    rows, ok = verify_assets.verify_transparency()
+
+    assert ok
+    assert len(rows) == 5
+    assert all(row[3] == "✓" for row in rows)
+
+
+def test_transparency_reports_missing_alpha_channel(transparency_fixture):
+    path = transparency_fixture / verify_assets.TRANSPARENT_PNGS[0]
+    Image.new("RGB", (2, 2), "#DC3127").save(path)
+
+    rows, ok = verify_assets.verify_transparency()
+
+    assert not ok
+    assert rows[0] == (
+        verify_assets.TRANSPARENT_PNGS[0],
+        "full alpha channel",
+        "mode RGB",
+        "✗ no alpha band",
+    )
+
+
+def test_transparency_reports_fully_opaque_alpha_channel(transparency_fixture):
+    path = transparency_fixture / verify_assets.TRANSPARENT_PNGS[0]
+    Image.new("RGBA", (2, 2), (220, 49, 39, 255)).save(path)
+
+    rows, ok = verify_assets.verify_transparency()
+
+    assert not ok
+    assert rows[0][3] == "✗ fully opaque"
+
+
+def test_transparency_reports_alpha_without_opaque_pixels(transparency_fixture):
+    path = transparency_fixture / verify_assets.TRANSPARENT_PNGS[0]
+    Image.new("RGBA", (2, 2), (220, 49, 39, 0)).save(path)
+
+    rows, ok = verify_assets.verify_transparency()
+
+    assert not ok
+    assert rows[0][3] == "✗ never fully opaque"
+
+
+@pytest.mark.parametrize("svg_name", [
+    verify_assets.OPAQUE_MASTER_SVG,
+    verify_assets.TRANSPARENT_MASTER_SVG,
+])
+def test_transparency_reports_invalid_svg(transparency_fixture, svg_name):
+    (transparency_fixture / svg_name).write_text("<svg>", encoding="utf-8")
+
+    rows, ok = verify_assets.verify_transparency()
+
+    assert not ok
+    assert rows[-1][0] == verify_assets.TRANSPARENT_MASTER_SVG
+    assert rows[-1][2] == "ERROR"
+
+
+def test_transparency_reports_baked_in_svg_background(transparency_fixture):
+    (transparency_fixture / verify_assets.TRANSPARENT_MASTER_SVG).write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<rect fill="#EFDECC"/><path fill="#DC3127"/></svg>',
+        encoding="utf-8",
+    )
+
+    rows, ok = verify_assets.verify_transparency()
+
+    assert not ok
+    assert rows[-1][3] == "✗ background baked in"
 
 
 def test_palette_matches_readme_table():
@@ -23,6 +258,62 @@ def _write_canonical_palette(root, palette):
         encoding="utf-8",
     )
     (root / "palette.json").write_text(json.dumps(palette), encoding="utf-8")
+
+
+def test_palette_accepts_valid_fixture(monkeypatch, tmp_path):
+    _write_canonical_palette(tmp_path, verify_assets.CANONICAL_PALETTE)
+    monkeypatch.setattr(verify_assets, "ROOT", tmp_path)
+
+    rows, ok = verify_assets.verify_palette()
+
+    assert ok
+    assert rows == [
+        (
+            "palette.json",
+            "names and exact hexes match the canonical palette",
+            "5 colors",
+            "✓",
+        )
+    ]
+
+
+def test_palette_reports_missing_file(monkeypatch, tmp_path):
+    _write_canonical_palette(tmp_path, verify_assets.CANONICAL_PALETTE)
+    (tmp_path / "palette.json").unlink()
+    monkeypatch.setattr(verify_assets, "ROOT", tmp_path)
+
+    rows, ok = verify_assets.verify_palette()
+
+    assert not ok
+    assert rows == [
+        (
+            "palette.json",
+            "names and exact hexes match the canonical palette",
+            "MISSING",
+            "file not found",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload, expected_actual, expected_detail",
+    [
+        ("{", "ERROR", "invalid JSON:"),
+        ("[]", "list", "✗ not an object"),
+    ],
+)
+def test_palette_reports_malformed_json_data(
+    monkeypatch, tmp_path, payload, expected_actual, expected_detail
+):
+    _write_canonical_palette(tmp_path, verify_assets.CANONICAL_PALETTE)
+    (tmp_path / "palette.json").write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(verify_assets, "ROOT", tmp_path)
+
+    rows, ok = verify_assets.verify_palette()
+
+    assert not ok
+    assert rows[0][2] == expected_actual
+    assert expected_detail in rows[0][3]
 
 
 def test_palette_mismatch_is_reported(monkeypatch, tmp_path):
@@ -128,7 +419,10 @@ def _write_expected_inventory(root):
         path.write_bytes(b"")
 
 
-def test_generated_inventory_matches_documented_assets():
+def test_generated_inventory_matches_documented_assets(monkeypatch, tmp_path):
+    _write_expected_inventory(tmp_path)
+    monkeypatch.setattr(verify_assets, "ROOT", tmp_path)
+
     rows, ok = verify_assets.verify_inventory()
 
     assert len(verify_assets.EXPECTED_ASSETS) == 37
