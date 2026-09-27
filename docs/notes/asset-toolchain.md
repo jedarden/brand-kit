@@ -96,6 +96,28 @@ a distro/system Pillow, even at the pinned version number. The setup command
 below uses `--only-binary=:all:` so pip fails instead of silently building an
 unpinned source distribution.
 
+## Resvg clean-cache rebuild check
+
+Verified 2026-09-27 with Rust `1.97.1` and Cargo `1.97.1`: two independent
+`cargo install resvg@0.47.0` runs used separate empty `CARGO_HOME` directories
+and separate target directories. Both installs resolved the same 63-package
+dependency graph and installed resvg `0.47.0`. The installed executable bytes
+were not identical, so the executable itself is not used as the determinism
+criterion.
+
+Each renderer then regenerated a clean `git archive HEAD` copy with Pillow
+`12.1.1` (the pinned PyPI wheel version). `diff -qr` reported identical trees,
+and the normalized SHA-256 list for all 39 generated files was identical:
+`5ba92cb6753d4f905a0a38a5f583a59c5173ac8a8f0cf8a1a869ba2bc79d35e7`.
+Therefore, independent clean-cache rebuilds of the currently resolved resvg
+dependency graph render the committed assets byte-for-byte identically.
+
+This is empirical evidence for the current resolution, not a Cargo lock: the
+`cargo install` command can select different compatible transitive versions
+after a future crates.io index change. If a later clean-cache check diverges,
+replace this floating install with a committed/vendored lock and a pinned
+toolchain image before accepting regenerated assets.
+
 ## Regenerating
 
 Run the one-time setup (or repeat it after a pin bump):
