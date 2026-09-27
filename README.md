@@ -223,6 +223,27 @@ Argo phase of `Succeeded` plus logs showing the verifier, full pytest, build,
 and final no-drift check all reached exit `0`. A local test pass or the mere
 presence of the WorkflowTemplate is not CI acceptance evidence.
 
+The application-owned `brand-kit-ci-failure-watch` companion in
+`automation/` checks the Argo API every 15 minutes for `Failed` or `Error`
+`brand-kit-ci` runs from the preceding two hours. That lookback covers the
+cluster's short failure-log/workflow retention window, so the gate failure is
+reported before Argo reaps its record. The watcher uses the existing read-only
+`ARGO_TOKEN` from `brand-kit-release-tokens`, keeps a sanitized report at
+`failures/brand-kit-ci-failure-watch/v1/<workflow-uid>/report.json` with
+`artifactGC: Never`, and its exit handler posts a `BrandKitCIRegressionGate`
+alert to the iad-ci Alertmanager. Alertmanager's configured ntfy receiver
+delivers that alert to the `jedarden` owner channel. A watcher run is
+non-success when it finds a failed gate or cannot inspect Argo; both cases
+require follow-up, and the durable report is the first place to look.
+
+For a failed gate, inspect the report and the referenced workflow, identify the
+exact commit and failed stage, correct the pin/install contract, test/assets,
+unexpected generated file, or regeneration drift, and push a new commit.
+Rerun the gate for that commit and wait for `Succeeded` before release
+publication. If the report says the watcher could not inspect Argo, repair the
+API/credential or cluster condition and rerun the same check; do not treat a
+missing report as a passing gate.
+
 ## Forgejo release publication
 
 A pushed tag is not a release. After the Argo `brand-kit-ci` run for the exact

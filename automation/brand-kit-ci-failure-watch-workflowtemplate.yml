@@ -1,0 +1,121 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: brand-kit-ci-failure-watch
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Read-only owner alert for failed brand-kit-ci regression-gate runs"
+spec:
+  entrypoint: watch
+  onExit: route-ci-failure-watch
+  serviceAccountName: argo-workflow
+  activeDeadlineSeconds: 600
+  templates:
+    - name: watch
+      container:
+        image: python:3.13.5-slim-bookworm
+        command: [bash, -c]
+        args:
+          - |
+            set -euo pipefail
+            # Keep evidence even when installation, cloning, or the API call
+            # fails before the watcher can create its normal report.
+            printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"watcher did not reach the Argo API","failures":[]}' \
+              > /tmp/brand-kit-ci-failure-report.json
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git
+            git clone --filter=blob:none --no-tags --depth=1 --branch main \
+              https://github.com/jedarden/brand-kit.git /brand-kit
+            set +e
+            python3 /brand-kit/tools/brand_kit_ci_failure_watch.py \
+              --report /tmp/brand-kit-ci-failure-report.json \
+              --lookback-minutes 120
+            WATCH_EXIT=$?
+            set -e
+            printf '%s\n' "$WATCH_EXIT" > /tmp/brand-kit-ci-failure-watch-exit-code
+            exit "$WATCH_EXIT"
+        env:
+          - name: ARGO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: brand-kit-release-tokens
+                key: ARGO_TOKEN
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      outputs:
+        parameters:
+          - name: watcher-exit-code
+            valueFrom:
+              path: /tmp/brand-kit-ci-failure-watch-exit-code
+              default: "2"
+        artifacts:
+          - name: brand-kit-ci-failure-report
+            path: /tmp/brand-kit-ci-failure-report.json
+            archive:
+              none: {}
+            artifactGC:
+              strategy: Never
+            s3:
+              endpoint: s3.ardenone.com
+              bucket: needle-ci-artifacts
+              region: garage
+              insecure: false
+              key: failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json
+              accessKeySecret:
+                name: needle-ci-artifact-publisher
+                key: access-key
+              secretKeySecret:
+                name: needle-ci-artifact-publisher
+                key: secret-key
+    # A non-success watcher run means either that it found a failed/error
+    # brand-kit-ci run or that it could not inspect Argo.  Alertmanager's
+    # configured ntfy receiver routes the event to the brand-kit owner.
+    - name: route-ci-failure-watch
+      steps:
+        - - name: notify-owner
+            template: notify-owner
+            when: "{{workflow.status}} != Succeeded"
+            continueOn:
+              failed: true
+              error: true
+    - name: notify-owner
+      container:
+        image: curlimages/curl:8.12.1
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            REPORT_URL="https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json"
+            curl --fail --silent --show-error --retry 3 --retry-delay 5 \
+              -H 'Content-Type: application/json' \
+              --data-binary @- \
+              http://alertmanager.monitoring.svc:9093/api/v1/alerts <<EOF
+            [{
+              "labels": {
+                "alertname": "BrandKitCIRegressionGate",
+                "owner": "jedarden",
+                "component": "brand-kit-ci",
+                "follow_up": "regression-gate",
+                "bucket": "brand-kit",
+                "workflow_status": "{{workflow.status}}"
+              },
+              "annotations": {
+                "summary": "brand-kit-ci regression gate needs follow-up",
+                "description": "The scheduled read-only watcher found a failed/error brand-kit-ci run or could not inspect Argo. Inspect the durable report before publishing any release.",
+                "report_url": "${REPORT_URL}"
+              }
+            }]
+            EOF
+            echo "brand-kit-ci owner alert sent: ${REPORT_URL}"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

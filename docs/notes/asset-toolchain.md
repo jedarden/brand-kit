@@ -12,6 +12,38 @@ broken commit.
 The ordered commands and required Argo log evidence are documented under
 [CI regression gate](../README.md#ci-regression-gate).
 
+## CI failure routing and owner follow-up
+
+The gate has an application-owned companion check in
+`automation/brand-kit-ci-failure-watch-workflowtemplate.yml`, scheduled by
+`automation/brand-kit-ci-failure-watch-cronworkflow.yml`. Every 15 minutes it
+uses the existing read-only `ARGO_TOKEN` to list `brand-kit-ci` Workflow records
+and retains `Failed`/`Error` runs from the preceding two hours. The lookback is
+intentional: it spans the Argo failure-log/workflow retention window, so a
+short-lived failed run is still detected after its logs or Workflow object are
+reaped.
+
+The watcher writes a sanitized JSON report and uploads it to the
+Garage-backed `needle-ci-artifacts` bucket with `artifactGC: Never`:
+
+```text
+https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-ci-failure-watch/v1/<watcher-workflow-uid>/report.json
+```
+
+When the watcher finds a failed gate — or cannot inspect Argo — its workflow
+exit handler posts a `BrandKitCIRegressionGate` alert to
+`alertmanager.monitoring.svc:9093/api/v1/alerts`. Alertmanager's configured
+ntfy receiver routes the alert to the `jedarden` owner channel. This is the
+owner path for pin/install drift, test failures, unexpected generated files,
+regenerated diffs, and watcher/API errors; it is intentionally best-effort and
+cannot turn the underlying gate result green.
+
+The owner follows the durable report to the failed `brand-kit-ci` run, fixes
+the exact commit's toolchain or asset defect, and pushes a new commit. The
+gate must be rerun for that commit and reach `Succeeded` before release
+publication. A watcher/API error is an operational failure, not evidence that
+the asset commit passed, so repair the read path and rerun the check first.
+
 ## Pinned versions (canonical)
 
 | Tool | Pin | Install command | Notes |

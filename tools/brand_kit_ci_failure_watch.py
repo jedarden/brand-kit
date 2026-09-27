@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Find recent failed brand-kit-ci runs for the scheduled owner alert.
+
+The watcher is deliberately read-only.  It lists Workflow records through the
+Argo API, keeps only recent ``Failed``/``Error`` runs, and writes a small
+sanitized report for the WorkflowTemplate's durable artifact.  Alert delivery
+is owned by the companion WorkflowTemplate exit handler so an Alertmanager
+outage cannot change the observed CI result.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.parse
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+ROOT = Path(__file__).resolve().parent.parent
+if __package__ in (None, ""):
+    sys.path.insert(0, str(ROOT))
+
+from tools import release_publish
+
+DEFAULT_ARGO_API_URL = release_publish.DEFAULT_ARGO_API_URL
+DEFAULT_ARGO_NAMESPACE = release_publish.DEFAULT_ARGO_NAMESPACE
+DEFAULT_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
+DEFAULT_LOOKBACK_MINUTES = 120
+DEFAULT_LIST_LIMIT = 100
+REPORT_SCHEMA = "brand-kit-ci-failure-watch/v1"
+FAILURE_PHASES = frozenset({"Failed", "Error"})
+COMMIT_PARAMETER_NAMES = frozenset(
+    {"commit", "revision", "sha", "gitcommit", "gitsha", "headcommit", "headsha"}
+)
+
+
+def argo_api_path(api_url: str, path: str) -> str:
+    base = api_url.rstrip("/")
+    if not base.endswith("/api/v1"):
+        base = f"{base}/api/v1"
+    return f"{base}/{path.lstrip('/')}"
+
+
+def argo_workflows_url(api_url: str, namespace: str) -> str:
+    if not isinstance(namespace, str) or not release_publish.WORKFLOW_NAME_PATTERN.fullmatch(
+        namespace
+    ):
+        raise release_publish.ReleaseError(f"Argo namespace is malformed: {namespace!r}")
+    return argo_api_path(
+        api_url,
+        f"workflows/{urllib.parse.quote(namespace, safe='')}",
+    )
+
+
+def workflow_list_url(
+    api_url: str,
+    namespace: str,
+    workflow_template: str,
+    *,
+    limit: int = DEFAULT_LIST_LIMIT,
+) -> str:
+    if not isinstance(workflow_template, str) or not release_publish.WORKFLOW_NAME_PATTERN.fullmatch(
+        workflow_template
+    ):
+        raise release_publish.ReleaseError(
+            f"Argo workflow template is malformed: {workflow_template!r}"
+        )
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+        raise release_publish.ReleaseError("Argo workflow list limit must be between 1 and 1000")
+    label_selector = urllib.parse.quote(
+        f"workflows.argoproj.io/workflow-template={workflow_template}",
+        safe="",
+    )
+    return f"{argo_workflows_url(api_url, namespace)}?labelSelector={label_selector}&limit={limit}"
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _utc_now(value: datetime | None) -> datetime:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc)
+
+
+def _normalized_parameter_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[-_]", "", value).lower()
+
+
+def _commit_from_workflow(workflow: dict[str, Any]) -> str | None:
+    status = workflow.get("status")
+    if not isinstance(status, dict):
+        return None
+    outputs = status.get("outputs")
+    if not isinstance(outputs, dict):
+        return None
+    parameters = outputs.get("parameters")
+    if not isinstance(parameters, list):
+        return None
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        if _normalized_parameter_name(parameter.get("name")) not in COMMIT_PARAMETER_NAMES:
+            continue
+        value = parameter.get("value")
+        if isinstance(value, str) and release_publish.OBJECT_ID_PATTERN.fullmatch(value):
+            return value.lower()
+    return None
+
+
+def _failure_summary(
+    workflow: Any,
+    *,
+    cutoff: datetime,
+    api_url: str,
+    namespace: str,
+) -> dict[str, Any] | None:
+    if not isinstance(workflow, dict):
+        return None
+    metadata = workflow.get("metadata")
+    status = workflow.get("status")
+    if not isinstance(metadata, dict) or not isinstance(status, dict):
+        return None
+    phase = status.get("phase")
+    if phase not in FAILURE_PHASES:
+        return None
+
+    created_at = metadata.get("creationTimestamp")
+    started_at = status.get("startedAt")
+    finished_at = status.get("finishedAt")
+    observed_at = (
+        _parse_timestamp(finished_at)
+        or _parse_timestamp(started_at)
+        or _parse_timestamp(created_at)
+    )
+    # A failed record without a usable timestamp is retained for manual review;
+    # dropping it would make malformed API data hide the very failure this job
+    # exists to report.
+    if observed_at is not None and observed_at < cutoff:
+        return None
+
+    name = metadata.get("name")
+    if not isinstance(name, str) or not name:
+        name = "<unnamed>"
+    summary: dict[str, Any] = {
+        "name": name,
+        "uid": metadata.get("uid"),
+        "phase": phase,
+        "message": status.get("message"),
+        "creation_timestamp": created_at,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "commit": _commit_from_workflow(workflow),
+    }
+    if name != "<unnamed>":
+        summary["api_url"] = release_publish.argo_workflow_url(
+            api_url,
+            namespace,
+            name,
+        )
+    return summary
+
+
+def run_watch(
+    token: str | None,
+    *,
+    api_url: str = DEFAULT_ARGO_API_URL,
+    namespace: str = DEFAULT_ARGO_NAMESPACE,
+    workflow_template: str = DEFAULT_WORKFLOW_TEMPLATE,
+    lookback_minutes: int = DEFAULT_LOOKBACK_MINUTES,
+    now: datetime | None = None,
+    request: Callable[..., Any] = release_publish.request_json,
+) -> dict[str, Any]:
+    """Return a report for recent failed/error CI runs without mutating Argo."""
+    token = release_publish.require_token(token, "ARGO_TOKEN")
+    if not isinstance(lookback_minutes, int) or isinstance(lookback_minutes, bool):
+        raise release_publish.ReleaseError("lookback minutes must be an integer")
+    if not 1 <= lookback_minutes <= 24 * 60:
+        raise release_publish.ReleaseError("lookback minutes must be between 1 and 1440")
+
+    current = _utc_now(now)
+    response = request(
+        "GET",
+        workflow_list_url(api_url, namespace, workflow_template),
+        token=token,
+        authorization_scheme="Bearer",
+        service="Argo API",
+    )
+    if not isinstance(response, dict) or not isinstance(response.get("items"), list):
+        raise release_publish.ReleaseError("Argo workflow-list response has no items list")
+
+    cutoff = current - timedelta(minutes=lookback_minutes)
+    failures = [
+        summary
+        for item in response["items"]
+        if (summary := _failure_summary(
+            item,
+            cutoff=cutoff,
+            api_url=api_url,
+            namespace=namespace,
+        ))
+        is not None
+    ]
+    failures.sort(
+        key=lambda item: (
+            _parse_timestamp(item.get("finished_at"))
+            or _parse_timestamp(item.get("started_at"))
+            or _parse_timestamp(item.get("creation_timestamp"))
+            or datetime.min.replace(tzinfo=timezone.utc)
+        ),
+        reverse=True,
+    )
+    return {
+        "schema": REPORT_SCHEMA,
+        "status": "fail" if failures else "pass",
+        "observed_at": current.isoformat().replace("+00:00", "Z"),
+        "lookback_minutes": lookback_minutes,
+        "workflow_template": workflow_template,
+        "failures": failures,
+    }
+
+
+def write_report(report: dict[str, Any], path: Path) -> None:
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Find recent failed brand-kit-ci Argo workflows for owner routing."
+    )
+    parser.add_argument("--argo-api-url", default=DEFAULT_ARGO_API_URL)
+    parser.add_argument("--argo-namespace", default=DEFAULT_ARGO_NAMESPACE)
+    parser.add_argument("--workflow-template", default=DEFAULT_WORKFLOW_TEMPLATE)
+    parser.add_argument("--lookback-minutes", type=int, default=DEFAULT_LOOKBACK_MINUTES)
+    parser.add_argument("--report", type=Path, required=True)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        report = run_watch(
+            os.environ.get("ARGO_TOKEN"),
+            api_url=args.argo_api_url,
+            namespace=args.argo_namespace,
+            workflow_template=args.workflow_template,
+            lookback_minutes=args.lookback_minutes,
+        )
+    except release_publish.ReleaseError as error:
+        report = {
+            "schema": REPORT_SCHEMA,
+            "status": "error",
+            "observed_at": _utc_now(None).isoformat().replace("+00:00", "Z"),
+            "workflow_template": args.workflow_template,
+            "error": str(error),
+            "failures": [],
+        }
+        exit_code = 2
+    else:
+        exit_code = 1 if report["failures"] else 0
+
+    try:
+        write_report(report, args.report)
+    except OSError as error:
+        print(f"error: cannot write failure-watch report: {error}", file=sys.stderr)
+        return 2
+
+    if report["status"] == "pass":
+        print("PASS  no recent brand-kit-ci failures")
+    elif report["status"] == "fail":
+        print(
+            f"FAIL  {len(report['failures'])} recent brand-kit-ci workflow failure(s)",
+            file=sys.stderr,
+        )
+        for failure in report["failures"]:
+            print(
+                f"FAIL  {failure['name']} phase={failure['phase']}",
+                file=sys.stderr,
+            )
+    else:
+        print(f"ERROR  {report['error']}", file=sys.stderr)
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

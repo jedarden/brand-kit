@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: brand-kit-ci-failure-watch
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Every-15-minute read-only alert check for failed brand-kit-ci runs"
+spec:
+  # The two-hour lookback covers the cluster's failure-log TTL. Alertmanager
+  # receives the owner event before the workflow record can be reaped.
+  schedules:
+    - "*/15 * * * *"
+  timezone: UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    workflowTemplateRef:
+      name: brand-kit-ci-failure-watch
