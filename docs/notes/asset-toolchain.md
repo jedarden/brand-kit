@@ -3,23 +3,49 @@
 The committed PNGs in `avatars/`, `banners/`, `favicon/` and `logo/` are
 byte-reproducible only with the exact toolchain below. The CI regression gate
 (`brand-kit-ci` WorkflowTemplate in `jedarden/declarative-config`,
-`k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml`) installs exactly
-these versions, runs the full pytest suite and `tools/verify_assets.py`, and
-fails on test failures, unexpected generated files, or regenerated diffs, so a
-commit whose assets or checks did not pass this toolchain is a broken commit.
+`k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml`) checks that its
+install commands still match this table before installing them, then runs the
+full pytest suite and `tools/verify_assets.py`. It fails on pin or install
+contract drift, test failures, unexpected generated files, or regenerated
+diffs, so a commit whose assets or checks did not pass this toolchain is a
+broken commit.
 The ordered commands and required Argo log evidence are documented under
 [CI regression gate](../README.md#ci-regression-gate).
 
 ## Pinned versions (canonical)
 
-| Tool | Pin | Notes |
-|---|---|---|
-| resvg | `0.47.0` | Renders `source/logo.svg` at each target size. `cargo install resvg@0.47.0` |
-| vtracer | `0.6.5` Cargo CLI | `tools/trace_logo.py` invokes the binary from `cargo install vtracer@0.6.5`; it does not use the PyPI `vtracer` package |
-| Pillow | `12.1.1` — **PyPI wheel build** | Encodes every PNG. Install only the wheel from PyPI with `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2` |
-| pytest | `9.0.2` | Runs the regression suite; it does not affect generated asset bytes. |
-| Python | `>=3.10` (built with 3.13; CI image uses 3.11) | Not byte-sensitive — the PNG encoder/resampler are C-level — but if this ever stops holding, the regen-diff catches it |
-| rustc/cargo | 1.97.1 at time of pinning | Build toolchain only; does not affect rendered bytes. Not pinned — a resvg rebuild from the same crate version renders identically |
+| Tool | Pin | Install command | Notes |
+|---|---|---|---|
+| resvg | `0.47.0` | `cargo install resvg@0.47.0` | Renders `source/logo.svg` at each target size. |
+| vtracer | `0.6.5` Cargo CLI | `cargo install vtracer@0.6.5` | `tools/trace_logo.py` invokes the Cargo-installed binary; it does not use the PyPI `vtracer` package. |
+| Pillow | `12.1.1` — **PyPI wheel build** | `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1` | Encodes every PNG. The wheel-only flag is part of the pin. |
+| pytest | `9.0.2` | `.venv/bin/python -m pip install --only-binary=:all: pytest==9.0.2` | Runs the regression suite; it does not affect generated asset bytes. |
+
+Python and Rust are runtime/build prerequisites rather than byte-sensitive
+pins: CI uses the Debian `python3` package and the Rustup `stable` toolchain.
+They remain documented below because the checker only enforces the exact
+four-tool reproducibility contract above.
+
+### Pin parity check
+
+`tools/check_asset_toolchain.py` parses this table and the actual
+`brand-kit-ci` WorkflowTemplate. It compares every tool name, version,
+installer, install command, and install option, and specifically requires
+Pillow's `--only-binary=:all:` PyPI-wheel contract. It also rejects a tool
+added to either side without a matching install on the other side.
+
+Run the same check locally from the brand-kit checkout (with the sibling
+`declarative-config` checkout available) before changing either set of pins:
+
+```bash
+python3 tools/check_asset_toolchain.py \
+  --workflow-template ../declarative-config/k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml
+```
+
+The CI WorkflowTemplate runs this command against the manifest cloned from the
+canonical Forgejo repository before it installs Python dependencies or runs
+the asset regression gate. Keep the table's install-command column and the
+manifest's install block in the same commit when bumping a pin.
 
 ## How `trace_logo.py` obtains vtracer
 

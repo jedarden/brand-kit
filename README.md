@@ -188,16 +188,19 @@ The Argo `brand-kit-ci` WorkflowTemplate in `jedarden/declarative-config`
 (`k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml`) applies the
 pinned toolchain and runs this acceptance sequence in order:
 
-1. Install `resvg@0.47.0` and `vtracer@0.6.5` with
-   `cargo install resvg@0.47.0 vtracer@0.6.5`, then run
-   `pip3 install --break-system-packages Pillow==12.1.1 pytest==9.0.2`.
-2. Run `python3 tools/verify_assets.py`. It must exit `0`, including the exact
+1. Run `python3 tools/check_asset_toolchain.py` against the checked-out
+   WorkflowTemplate. This parses the pin table and fails on any tool,
+   version, install-command, or Pillow wheel-flavor mismatch.
+2. Install `resvg@0.47.0` and `vtracer@0.6.5` with
+   `cargo install resvg@0.47.0 vtracer@0.6.5`, create the pinned virtualenv,
+   and run `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2`.
+3. Run `.venv/bin/python tools/verify_assets.py`. It must exit `0`, including the exact
    generated-asset inventory check, so missing or unexpected generated files
    fail the workflow.
-3. Run the full default suite with `python3 -m pytest -q`. Any test failure
+4. Run the full default suite with `.venv/bin/python -m pytest -q`. Any test failure
    exits non-zero and fails the workflow.
-4. Run `python3 tools/build_assets.py` to regenerate every derived asset.
-5. Run `git diff --exit-code --quiet`. A regenerated tracked-file difference
+5. Run `.venv/bin/python tools/build_assets.py` to regenerate every derived asset.
+6. Run `git diff --exit-code --quiet`. A regenerated tracked-file difference
    exits non-zero and fails the workflow.
 
 The container uses `set -ex`, so an install, verification, test, build, or diff
