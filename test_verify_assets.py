@@ -1,3 +1,4 @@
+import hashlib
 import json
 import shutil
 
@@ -38,6 +39,21 @@ def presence_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(verify_assets, "EXPECTED_PRESENT", expected_present)
     monkeypatch.setattr(verify_assets, "EXPECTED_ABSENT", expected_absent)
     return root
+
+
+@pytest.fixture
+def logo_checksum_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    svg = root / verify_assets.LOGO_SVG_RELPATH
+    svg.parent.mkdir(parents=True, exist_ok=True)
+    svg.write_bytes(b"<svg>authoritative</svg>\n")
+    checksum = root / verify_assets.LOGO_SVG_SHA256_RELPATH
+    checksum.write_text(
+        f"{hashlib.sha256(svg.read_bytes()).hexdigest()}\n",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    return svg, checksum
 
 
 def _write_ico(path, sizes):
@@ -185,6 +201,74 @@ def test_presence_reports_missing_file(presence_fixture):
         "MISSING",
         "README names this path",
     )
+
+
+def test_logo_checksum_accepts_matching_sidecar(logo_checksum_fixture):
+    _, checksum = logo_checksum_fixture
+
+    rows, ok = verify_assets.verify_logo_checksum()
+
+    assert ok
+    assert rows == [
+        (
+            verify_assets.LOGO_SVG_SHA256_RELPATH,
+            f"SHA-256 digest of {verify_assets.LOGO_SVG_RELPATH}",
+            checksum.read_text(encoding="ascii").strip(),
+            "✓",
+        )
+    ]
+
+
+def test_logo_checksum_reports_missing_sidecar(logo_checksum_fixture):
+    _, checksum = logo_checksum_fixture
+    checksum.unlink()
+
+    rows, ok = verify_assets.verify_logo_checksum()
+
+    assert not ok
+    assert rows == [
+        (
+            verify_assets.LOGO_SVG_SHA256_RELPATH,
+            f"SHA-256 digest of {verify_assets.LOGO_SVG_RELPATH}",
+            "MISSING",
+            "file not found",
+        )
+    ]
+
+
+def test_logo_checksum_reports_malformed_sidecar(logo_checksum_fixture):
+    _, checksum = logo_checksum_fixture
+    checksum.write_text("not-a-sha256\n", encoding="ascii")
+
+    rows, ok = verify_assets.verify_logo_checksum()
+
+    assert not ok
+    assert rows == [
+        (
+            verify_assets.LOGO_SVG_SHA256_RELPATH,
+            "64 hexadecimal characters",
+            "not-a-sha256",
+            "✗ malformed SHA-256 digest",
+        )
+    ]
+
+
+def test_logo_checksum_reports_stale_sidecar(logo_checksum_fixture):
+    svg, checksum = logo_checksum_fixture
+    stale = hashlib.sha256(b"<svg>previous</svg>\n").hexdigest()
+    checksum.write_text(f"{stale}\n", encoding="ascii")
+
+    rows, ok = verify_assets.verify_logo_checksum()
+
+    assert not ok
+    assert rows == [
+        (
+            verify_assets.LOGO_SVG_SHA256_RELPATH,
+            hashlib.sha256(svg.read_bytes()).hexdigest(),
+            stale,
+            "✗ stale digest",
+        )
+    ]
 
 
 def test_favicon_accepts_valid_layers(favicon_fixture):

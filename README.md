@@ -127,6 +127,19 @@ then run:
 .venv/bin/python tools/verify_assets.py
 ```
 
+`source/logo.svg.sha256` is the integrity sidecar for the authoritative SVG.
+The verifier rejects a missing, malformed, or stale sidecar, so whenever the
+bytes of `source/logo.svg` change—including a direct edit—refresh the sidecar
+in the same commit before running the verifier:
+
+```bash
+sha256sum source/logo.svg | awk '{print $1}' > source/logo.svg.sha256
+```
+
+`trace_logo.py` writes the refreshed sidecar automatically after a successful
+trace. Do not refresh it merely to hide an unexpected SVG change; review the
+SVG and its generated assets first.
+
 `build_assets.py` renders every opaque logo asset straight from
 `source/logo.svg` at its target size with `resvg`; it never falls back to
 `source/logo.png`. It also renders transparent assets from the independent
@@ -159,15 +172,15 @@ authoritative opaque SVG from that raster is a separate, explicit transition:
    and generated assets together.
 
 The trace writes only `source/logo.svg` and `source/logo.svg.sha256`.
-`build_assets.py` does not read the checksum, so an intentionally hand-edited
-SVG remains authoritative and builds normally.
+`build_assets.py` does not read the checksum, while `verify_assets.py` checks
+that the sidecar still describes the authoritative SVG.
 
 Before tracing, and again before replacing the SVG, `trace_logo.py` requires the
-current SVG to match the digest written by its last successful trace. A
-mismatch aborts and protects a committed hand edit from a later raster
-replacement. Use `.venv/bin/python tools/trace_logo.py --force` only when the
-current SVG must be discarded and regenerated from `source/logo.png`; then
-continue with the build and verification steps above.
+current SVG to match the recorded digest. A mismatch aborts and protects a
+committed hand edit from an unintended raster replacement. Use
+`.venv/bin/python tools/trace_logo.py --force` only when the current SVG must be
+discarded and regenerated from `source/logo.png`; then continue with the build
+and verification steps above.
 
 An alternate desk composition (`source/hero-alt.png`) was removed from the repo —
 nothing consumed it, so it was 2 MB of dead weight per clone. If the hero ever

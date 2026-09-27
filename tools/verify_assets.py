@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify that committed assets match every testable claim README.md makes.
 
-Seven classes of README-vs-repo drift are checked:
+Eight classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
   2. The generated platform manifest matches the README table, committed
      dimensions, and declared source assets.
@@ -16,10 +16,12 @@ Seven classes of README-vs-repo drift are checked:
      the canonical palette table.
   7. The generated asset inventory is exactly the 37 documented derived
      assets plus palette.json.
+  8. source/logo.svg.sha256 is a valid digest of the authoritative SVG.
 
 Run: .venv/bin/python tools/verify_assets.py
 Exits 1 on any mismatch, 0 if all checks pass.
 """
+import hashlib
 import json
 import re
 import struct
@@ -40,6 +42,9 @@ CANONICAL_PALETTE = {
     "Control-Room Black": "#070506",
 }
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+LOGO_SVG_RELPATH = "source/logo.svg"
+LOGO_SVG_SHA256_RELPATH = "source/logo.svg.sha256"
 
 # Expected dimensions mirror the README.md table
 # Format: {path: (expected_width, expected_height)}
@@ -699,6 +704,61 @@ def verify_presence():
     return rows, all_match
 
 
+def verify_logo_checksum():
+    """Check the authoritative SVG against its committed SHA-256 sidecar.
+
+    The sidecar is intentionally a bare hexadecimal digest, matching the
+    format written by ``trace_logo.py``. Whitespace surrounding the digest is
+    ignored so the usual trailing newline is accepted, but filenames or other
+    tokens make the sidecar malformed.
+
+    Returns:
+        list of tuples: (path, expected, actual, status_message)
+    """
+    svg_path = ROOT / LOGO_SVG_RELPATH
+    checksum_path = ROOT / LOGO_SVG_SHA256_RELPATH
+    claim = f"SHA-256 digest of {LOGO_SVG_RELPATH}"
+
+    if not svg_path.is_file():
+        return [(
+            LOGO_SVG_RELPATH,
+            "authoritative SVG exists",
+            "MISSING",
+            "file not found",
+        )], False
+    if not checksum_path.is_file():
+        return [(
+            LOGO_SVG_SHA256_RELPATH,
+            claim,
+            "MISSING",
+            "file not found",
+        )], False
+
+    try:
+        recorded = checksum_path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError) as error:
+        return [(LOGO_SVG_SHA256_RELPATH, claim, "ERROR", str(error))], False
+
+    if not SHA256_RE.fullmatch(recorded):
+        return [(
+            LOGO_SVG_SHA256_RELPATH,
+            "64 hexadecimal characters",
+            recorded or "EMPTY",
+            "✗ malformed SHA-256 digest",
+        )], False
+
+    actual = hashlib.sha256(svg_path.read_bytes()).hexdigest()
+    if recorded.lower() != actual:
+        return [(
+            LOGO_SVG_SHA256_RELPATH,
+            actual,
+            recorded,
+            "✗ stale digest",
+        )], False
+
+    return [(LOGO_SVG_SHA256_RELPATH, claim, actual, "✓")], True
+
+
 def ico_contained_sizes(path):
     """Resolutions actually stored inside an .ico container.
 
@@ -867,6 +927,7 @@ def main():
         ("Platform asset manifest", verify_platform_manifest()),
         ("Generated asset inventory", verify_inventory()),
         ("README-named files present", verify_presence()),
+        ("Authoritative SVG checksum", verify_logo_checksum()),
         ("Canonical palette", verify_palette()),
         ("favicon.ico container", verify_favicon_ico()),
         ("Transparent variants", verify_transparency()),

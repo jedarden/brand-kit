@@ -309,11 +309,13 @@ derives it automatically.
    .venv/bin/python tools/build_assets.py
    .venv/bin/python tools/verify_assets.py
    ```
-4. `source/logo.svg.sha256` records the digest from the last successful trace.
-   `trace_logo.py` refuses to overwrite an existing SVG whose digest differs
-   and checks that invariant again immediately before replacement, but
-   `build_assets.py` does not read the digest: a deliberately hand-edited SVG
-   remains a valid authoritative build source.
+4. `source/logo.svg.sha256` records the SHA-256 digest of the current
+   authoritative SVG. `verify_assets.py` rejects a missing, malformed, or stale
+   sidecar, and any direct SVG edit must update the sidecar in the same commit.
+   `trace_logo.py` writes it automatically after a successful trace and refuses
+   to overwrite an existing SVG whose recorded digest differs, checking that
+   invariant again immediately before replacement. `build_assets.py` does not
+   read the digest; the verifier owns the integrity check.
 5. Replacing a modified SVG from the raster is possible only through the
    explicit `.venv/bin/python tools/trace_logo.py --force` command. A normal
    trace gives vtracer a temporary output path; the authoritative SVG is not
@@ -325,8 +327,9 @@ derives it automatically.
 - Hand-edited vector work has a separate safe path: authoritative SVG → build.
   Raster replacement is an explicit, reviewable transition, and a concurrent SVG
   edit is rechecked before the traced file replaces it.
-- A malformed or missing digest fails closed, so the ordinary trace path cannot
-  silently discard a committed SVG modification.
+- A malformed, missing, or stale digest fails the verification gate, and the
+  ordinary trace path cannot silently discard an SVG modification whose digest
+  has not been refreshed.
 - `source/logo.png` is no longer ambiguously described as the logo source of
   truth, even though it remains build-visible for the original-raster master.
 - Transparent artwork still requires an explicit edit because no trace derives

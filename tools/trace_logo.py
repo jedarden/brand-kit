@@ -9,9 +9,9 @@ The logo is flat cartoon line-art (~4 colors), so the script:
   1. Snaps every pixel to the exact canonical brand palette, then
   2. Traces the flat image to colored SVG paths with vtracer.
 
-Before tracing, the current SVG must match source/logo.svg.sha256, the digest
-written by the last successful trace. Use --force only to explicitly discard a
-modified SVG and replace it from source/logo.png.
+Before tracing, the current SVG must match source/logo.svg.sha256, the recorded
+integrity digest for the authoritative source. Use --force only to explicitly
+discard a modified SVG and replace it from source/logo.png.
 
 Requires the Pillow 12.1.1 PyPI wheel in `.venv` and the vtracer 0.6.5 CLI
 installed with `cargo install vtracer@0.6.5`; the PyPI `vtracer` package is not
@@ -65,7 +65,7 @@ def guard_svg(force):
     expected = recorded_checksum()
     if LOGO_SVG.exists() and file_sha256(LOGO_SVG) != expected:
         raise SystemExit(
-            "error: source/logo.svg differs from its last-traced checksum; "
+            "error: source/logo.svg differs from its recorded checksum; "
             "refusing to overwrite it. Edit source/logo.svg directly and run "
             "build_assets.py, or rerun with --force if replacement from "
             "source/logo.png is intentional."
