@@ -93,18 +93,21 @@ Argo API attestation of that run: it requires `Succeeded` plus a structured
 full-SHA commit output matching the release commit, and fails closed when the
 run is failed, missing, malformed, or for another commit.
 
-First create and push the annotated tag:
+First prepare `VERSION` and the matching changelog section according to
+ADR-5, then derive and push the annotated tag:
 
 ```bash
-git tag -a vX.Y.Z -m "brand-kit vX.Y.Z"
-git push origin refs/tags/vX.Y.Z
+VERSION="$(tr -d '\r\n' < VERSION)"
+test "$(git show HEAD:VERSION)" = "$VERSION"
+git tag -a "$VERSION" -m "brand-kit $VERSION"
+git push origin "refs/tags/$VERSION"
 ```
 
 Then publish and verify the exact tag with:
 
 ```bash
 .venv/bin/python tools/release_publish.py \
-  --tag vX.Y.Z \
+  --tag "$VERSION" \
   --ci-run "brand-kit-ci/<successful-run-id>"
 ```
 
@@ -394,3 +397,72 @@ GitHub avatar upload.
   manifest is reconciled through the shared `declarative-config` ArgoCD
   application, while this repository remains the owner of the detector and its
   tests.
+
+## ADR-5: 2026-09-27 — SemVer policy and canonical release version
+
+### Context
+
+ADR-1 established annotated tags and published Forgejo Releases as the
+distribution contract, but it did not say how to choose the next version.
+That left an asset repository's source-artwork changes, generated-toolchain
+changes, and documentation-only changes indistinguishable at release time.
+The release checklist also used a hand-written `VERSION=vX.Y.Z` placeholder,
+which could drift from the changelog or the tag.
+
+### Decision
+
+1. The root [`VERSION`](../../VERSION) file is the single authoritative source
+   for the current release version. It contains exactly one line in the form
+   `vMAJOR.MINOR.PATCH`; at the time of this ADR its value is `v1.0.0`. The annotated Git tag,
+   the `CHANGELOG.md` heading, and the Forgejo Release are consistency checks
+   that must agree with `VERSION`, not alternate sources from which to invent a
+   version. A release commit must contain the selected value in `VERSION`
+   before it is tagged.
+2. Select the next version by classifying the complete consumer-visible diff
+   since the version in `VERSION`:
+
+   - **MAJOR** is an incompatible asset contract change: removing or renaming
+     an existing file, changing an existing asset's format, dimensions, or
+     meaning in a way that can break a consumer, or making an incompatible
+     manifest/schema change.
+   - **MINOR** is a backward-compatible capability or artwork change: adding
+     an asset or platform, adding compatible manifest fields, or changing
+     authoritative source artwork (`source/logo*.svg` or `source/hero.png`)
+     while preserving existing paths, formats, dimensions, and meanings.
+   - **PATCH** is a backward-compatible maintenance change: changing a pinned
+     generator/toolchain or its generation behavior (including regenerated
+     bytes) without changing the published asset contract, correcting
+     schema-compatible manifest metadata, or fixing release tooling and docs.
+     A docs-only change does not require a release; if it is intentionally
+     published as a stable release, it is a patch.
+
+   If one change qualifies for more than one level, use the highest level.
+   A source-artwork change is therefore minor even when it is visually small;
+   a toolchain pin is patch only when it preserves the consumer contract; and
+   a manifest change is major when it is schema-incompatible, minor when it
+   adds compatible capability, and patch when it only corrects metadata.
+3. Prepare the release commit in this order: classify the diff and choose the
+   next SemVer value from `VERSION`; write that exact value to `VERSION`; move
+   the completed entries from `CHANGELOG.md`'s `Unreleased` section into a
+   unique `## [$VERSION] - YYYY-MM-DD` section and create a fresh `Unreleased`
+   section; then run the exact-commit CI gate. Only after that commit passes CI
+   may it receive the annotated tag and Forgejo Release. The release command
+   reads `VERSION` into its shell variable, so the tag is derived from the
+   committed file rather than typed a second time. Post-release operational
+   verification may add notes later, but it never changes `VERSION` or the
+   immutable tag.
+4. A release is not required merely because `main` contains a docs-only or
+   metadata-only change. Keep such work under `Unreleased` until there is a
+   reason to publish it; if it is published, apply the patch rule above and
+   follow the same file/changelog/tag ordering.
+
+### Consequences
+
+- A reviewer can determine the intended release from one file and verify that
+  the tag, changelog, and Forgejo record all describe the same version.
+- Consumers get predictable compatibility signals: artwork additions or
+  revisions are minor, contract breaks are major, and maintenance/doc changes
+  are patch-level or remain unreleased.
+- Release preparation has one extra commit-time check: `VERSION`, the
+  changelog section, and the release candidate must be updated together before
+  CI and tagging.

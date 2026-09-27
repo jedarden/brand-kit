@@ -2,6 +2,12 @@
 
 All notable changes to the brand kit are documented in this file.
 
+The canonical current release version is recorded in [`VERSION`](VERSION).
+Choose and bump it according to [ADR-5's SemVer policy](docs/plan/plan.md#adr-5-2026-09-27--semver-policy-and-canonical-release-version)
+before moving `Unreleased` entries into a dated release section or creating a
+tag; the changelog heading is a consistency check, not a second version
+source.
+
 ## [Unreleased]
 
 ### Added
@@ -47,6 +53,9 @@ All notable changes to the brand kit are documented in this file.
   `docs/notes/post-tag-consumer-update.md`
 
 ### Changed
+- Documented the SemVer release policy and canonical `VERSION` source in
+  ADR-5; release candidates now derive their tag and changelog version from
+  that file.
 - `tools/consumer_sync.py` now requires a matching, published (non-draft) Forgejo
   release record before inspecting or changing consumers; the read-only API gate
   fails closed on missing, inaccessible, or malformed records and is not bypassed

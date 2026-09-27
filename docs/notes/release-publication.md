@@ -6,14 +6,34 @@ pushed tag alone is not a release. Forgejo is the only release authority;
 GitHub receives the tag through the server-side mirror and must not receive a
 second Release object. Forgejo is the sole release authority.
 
-Run this procedure for every release that changes `source/` or derived assets.
-The command is safe to run again: an already-published matching release is
-verified and left unchanged.
+Choose the version using [ADR-5's SemVer policy](../plan/plan.md#adr-5-2026-09-27--semver-policy-and-canonical-release-version).
+The root `VERSION` file is the one authoritative version source. Do not
+invent a value by hand in this checklist or infer it from the previous
+changelog heading.
+
+Run this procedure for every release selected under ADR-5. Changes to
+`source/` or derived assets require a release; docs-only and metadata-only
+changes may stay under `Unreleased`. The command is safe to run again: an
+already-published matching release is verified and left unchanged.
+
+## Prepare the release version
+
+Before the CI run and before creating the tag, classify the complete diff using
+ADR-5 and select the next SemVer value from the committed version in
+`VERSION`. Write the selected value (including the `v` prefix) as the only
+line of `VERSION`. In the same release commit, move the completed entries from
+`CHANGELOG.md`'s `Unreleased` section into a unique heading of the exact form
+`## [$VERSION] - YYYY-MM-DD`, then create a new `Unreleased` section. The
+changelog heading, `VERSION`, and eventual tag must be identical. A docs-only
+or metadata-only diff may remain unreleased; if it is intentionally published,
+use the patch rule and this same ordering.
 
 ## Preconditions
 
 1. Start from a clean brand-kit checkout at the commit that will be released.
-2. Confirm that the Argo `brand-kit-ci` workflow for that exact commit reached
+2. Confirm that `VERSION` is committed at the selected value and that the
+   changelog section named by that value is already in the release commit.
+3. Confirm that the Argo `brand-kit-ci` workflow for that exact commit reached
    `Succeeded`, including the asset verifier, full pytest suite, regeneration,
    and no-drift checks. Copy the workflow run name. The publisher performs a
    read-only `GET` against Argo and will accept the run only when its status is
@@ -21,10 +41,10 @@ verified and left unchanged.
    output matches the release commit. A log line or a branch name is not an
    attestation; the WorkflowTemplate must expose the checked-out SHA as a
    structured output before this release gate can pass.
-3. Make sure `origin` is the canonical Forgejo remote and `github` is the
+4. Make sure `origin` is the canonical Forgejo remote and `github` is the
    read-only tag mirror. The publisher reads both remotes and never pushes to
    either remote.
-4. Provision the three release credentials according to
+5. Provision the three release credentials according to
    [`release-token-provisioning.md`](release-token-provisioning.md). The
    publisher requires `FORGEJO_TOKEN` and `ARGO_TOKEN`; the consumer handoff
    requires `FORGEJO_TOKEN` and `ARGO_SUBMIT_TOKEN`. Load them from OpenBao
@@ -38,7 +58,8 @@ Never create a second tag, retarget an existing tag, or use a branch name as
 the release reference.
 
 ```bash
-VERSION=v1.1.0
+VERSION="$(tr -d '\r\n' < VERSION)"
+test "$(git show HEAD:VERSION)" = "$VERSION"
 git tag -a "$VERSION" -m "brand-kit $VERSION"
 git push origin "refs/tags/$VERSION"
 ```
@@ -49,11 +70,11 @@ than allowing a consumer workflow to start during propagation.
 
 ## Publish the Forgejo Release
 
-The release notes are extracted from the exact `## [v1.1.0]` section in
-`CHANGELOG.md`; add that section before running the command. The heading must
-be a valid stable-release heading, the section must be unique and non-empty,
-and any `--notes` value is accepted only when it is byte-for-byte equal to the
-extracted section.
+The release notes are extracted from the exact `## [$VERSION]` section in
+`CHANGELOG.md`; prepare that section in the release commit as described above,
+before creating the tag. The heading must be a valid stable-release heading,
+the section must be unique and non-empty, and any `--notes` value is accepted
+only when it is byte-for-byte equal to the extracted section.
 
 ```bash
 .venv/bin/python tools/release_publish.py \
@@ -63,7 +84,7 @@ extracted section.
 
 The publisher performs these checks in order:
 
-1. `v1.1.0` is an annotated tag at the current `HEAD`.
+1. `$VERSION` is an annotated tag at the current `HEAD`.
 2. The canonical `origin` and read-only `github` remotes advertise the same
    peeled commit for that exact tag.
 3. The read-only Argo API confirms that the named run is `Succeeded` and
