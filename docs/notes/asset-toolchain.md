@@ -45,11 +45,16 @@ python3 tools/check_ci_failure_watch_parity.py \
   --server http://traefik-iad-ci:8001
 ```
 
-The check reads both live objects with `kubectl get` and returns zero only
-when their controlled fields match. A non-zero result means the object is
-missing, the live object differs, or the API comparison failed; it never
-applies a manifest. Run it again after an ArgoCD sync or whenever the
-failure-watch files change.
+Before reading either child object, the check reads the
+`brand-kit-automation-iad-ci` Application through the default read-only
+`http://traefik-rs-manager:8001` proxy. It requires the documented GitHub
+mirror, `main` revision, `automation` path, recursive YAML include, and
+`argo-workflows` destination namespace, plus live `Synced` and `Healthy`
+status. A failed or malformed Application read stops the check, so the
+child-object parity result cannot be mistaken for a valid deployment. All
+queries use `kubectl get`; the check never applies or mutates resources. Use
+`--application-server` when the Application proxy differs. Run it again after
+an ArgoCD sync or whenever the failure-watch files change.
 
 Inspect the deployment status through the ArgoCD Application on the
 `rs-manager` control plane, or inspect the objects directly through the

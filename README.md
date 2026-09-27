@@ -264,6 +264,10 @@ require follow-up, and the durable report is the first place to look.
 The deployment path, live-object inspection commands, and read-only parity
 check for these two manifests are documented in
 [`docs/notes/asset-toolchain.md`](docs/notes/asset-toolchain.md#deployment-path-and-live-parity).
+That parity check first verifies the owning `brand-kit-automation-iad-ci`
+Application is correctly wired to the GitHub mirror, `main`, `automation`,
+and `argo-workflows`, and is `Synced` and `Healthy`; it then compares the
+child objects using read-only `kubectl get` calls and never applies resources.
 
 For a failed gate, inspect the report and the referenced workflow, identify the
 exact commit and failed stage, correct the pin/install contract, test/assets,
