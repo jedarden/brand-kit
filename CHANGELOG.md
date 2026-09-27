@@ -23,6 +23,9 @@ source.
   attestation before publication, requiring a `Succeeded` run with a
   structured full-SHA output for the exact release commit; mismatches,
   failures, missing evidence, and API errors fail closed.
+- The CI failure watcher now retains minimal successful-run attestations in
+  Garage, and the release publisher can use one after Argo reaps the named
+  Workflow without weakening the live-run fail-closed gate.
 - Repeatable Forgejo release-publication workflow: `tools/release_publish.py`
   creates or verifies the exact annotated tag after a successful CI run,
   confirms canonical and mirror tag readiness, and records Forgejo as the sole

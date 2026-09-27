@@ -631,6 +631,84 @@ def test_argo_attestation_reads_one_workflow_and_accepts_exact_succeeded_commit(
     ]
 
 
+def test_argo_attestation_uses_the_durable_record_after_workflow_reaping(monkeypatch):
+    calls = []
+    attestation_url = (
+        "https://s3.ardenone.com/needle-ci-artifacts/"
+        "attestations/brand-kit-ci/v1/watcher-uid/attestations.json"
+    )
+
+    def request(method, url, payload=None, token=None, timeout=20.0, **kwargs):
+        calls.append((method, url, token, kwargs))
+        if "/workflows/" in url:
+            raise release_publish.HttpFailure(404, "workflow reaped", service="Argo API")
+        return {
+            "schema": release_publish.CI_ATTESTATION_SCHEMA,
+            "attestations": [
+                {
+                    "commit": COMMIT.upper(),
+                    "workflow_uid": "brand-kit-ci-uid",
+                    "phase": "Succeeded",
+                    "finished_at": "2026-09-27T12:30:00Z",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    result = release_publish.attest_argo_ci_run(
+        "brand-kit-ci/brand-kit-ci-abc123",
+        COMMIT,
+        api_url="https://argo.example",
+        token=ARGO_READ_TOKEN,
+        attestation_url=attestation_url,
+    )
+
+    assert result["commit"] == COMMIT
+    assert result["phase"] == "Succeeded"
+    assert result["finished_at"] == "2026-09-27T12:30:00Z"
+    assert [call[1] for call in calls] == [
+        "https://argo.example/api/v1/workflows/argo-workflows/brand-kit-ci-abc123",
+        attestation_url,
+    ]
+    assert calls[1][2] is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/x.json",
+        "https://evil.example/needle-ci-artifacts/attestations/brand-kit-ci/v1/x.json",
+        "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/x.json?raw=1",
+    ),
+)
+def test_durable_ci_attestation_url_is_scoped_to_the_public_garage_prefix(url):
+    with pytest.raises(release_publish.ReleaseError, match="CI attestation URL"):
+        release_publish.validate_ci_attestation_url(url)
+
+
+def test_durable_attestation_does_not_override_a_live_failed_workflow(monkeypatch):
+    calls = []
+
+    def request(method, url, payload=None, token=None, timeout=20.0, **kwargs):
+        calls.append(url)
+        return argo_workflow(phase="Failed")
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="only Succeeded is accepted"):
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci-abc123",
+            COMMIT,
+            token=ARGO_READ_TOKEN,
+            attestation_url=(
+                "https://s3.ardenone.com/needle-ci-artifacts/"
+                "attestations/brand-kit-ci/v1/watcher-uid/attestations.json"
+            ),
+        )
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize(
     ("workflow", "message"),
     [
@@ -834,6 +912,9 @@ def test_workflow_documentation_keeps_forgejo_authoritative():
     assert "read-only Argo API" in document
     assert "structured" in document
     assert "full SHA" in document
+    assert "--ci-attestation-url" in document
+    assert "attestations/brand-kit-ci/v1" in document
+    assert "returns `404`" in document
     assert "ARGO_TOKEN" in document
     assert "--verify-only" in document
     assert "READY" in document

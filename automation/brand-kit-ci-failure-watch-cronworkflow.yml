@@ -4,10 +4,11 @@ metadata:
   name: brand-kit-ci-failure-watch
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/description: "Every-15-minute read-only alert check for failed brand-kit-ci runs"
+    workflows.argoproj.io/description: "Every-15-minute read-only alert and attestation archive for brand-kit-ci runs"
 spec:
-  # The two-hour lookback covers the cluster's failure-log TTL. Alertmanager
-  # receives the owner event before the workflow record can be reaped.
+  # The two-hour lookback covers the cluster's failure-log TTL. The watcher
+  # also copies each recent successful run's minimal attestation to Garage
+  # before the brand-kit-ci Workflow record can be reaped.
   schedules:
     - "*/15 * * * *"
   timezone: UTC

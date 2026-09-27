@@ -310,6 +310,16 @@ Wait for its `READY` result and run the read-only `--verify-only` form before
 starting the consumer workflow below. Forgejo remains the sole release
 authority; the mirrored Git tag is only a distribution path.
 
+The scheduled `brand-kit-ci-failure-watch` also archives recent successful-run
+attestations in the non-GC'd Garage bucket at
+`attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json`. If the
+named Argo Workflow has been reaped before publication, rerun the publisher
+with `--ci-attestation-url <artifact-url>`. The fallback is accepted only for
+an Argo `404` and validates the exact commit, `Succeeded` phase, workflow UID,
+and timezone-qualified `finished_at`; a live failed run or ambiguous artifact
+still blocks publication. The complete recovery procedure is in
+[`release-publication.md`](docs/notes/release-publication.md).
+
 The same token contract is checked before release day by the daily
 `brand-kit-release-token-probe` Argo `CronWorkflow`, sourced from
 `automation/brand-kit-release-token-probe-cronworkflow.yml`. Its

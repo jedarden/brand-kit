@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime, timezone
 import json
 import os
 import re
@@ -24,6 +24,9 @@ DEFAULT_MIRROR_REMOTE = "github"
 DEFAULT_ARGO_API_URL = "https://argo-ci.ardenone.com"
 DEFAULT_ARGO_NAMESPACE = "argo-workflows"
 DEFAULT_ARGO_WORKFLOW_TEMPLATE = "brand-kit-ci"
+DEFAULT_CI_ARTIFACT_HOST = "s3.ardenone.com"
+DEFAULT_CI_ARTIFACT_BUCKET = "needle-ci-artifacts"
+CI_ATTESTATION_SCHEMA = "brand-kit-ci-attestation/v1"
 TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 CHANGELOG_HEADING_PATTERN = re.compile(
@@ -34,6 +37,7 @@ CHANGELOG_HEADING_TAG_PREFIX = re.compile(
     r"^##[ \t]+\[?(?P<tag>v[0-9]+\.[0-9]+\.[0-9]+)"
 )
 WORKFLOW_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
+WORKFLOW_UID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 WORKFLOW_RUN_PREFIX = f"{DEFAULT_ARGO_WORKFLOW_TEMPLATE}/"
 COMMIT_PARAMETER_NAMES = {
     "commit",
@@ -59,6 +63,10 @@ class HttpFailure(ReleaseError):
         self.detail = detail
         self.service = service
         super().__init__(f"{service} returned HTTP {status}: {detail}")
+
+
+class ArgoWorkflowNotFound(ReleaseError):
+    """The named Argo Workflow was reaped before the release was published."""
 
 
 def require_token(token: str | None, variable: str) -> str:
@@ -392,13 +400,138 @@ def get_argo_workflow(
         )
     except HttpFailure as error:
         if error.status == 404:
-            raise ReleaseError(f"Argo CI run {ci_run} was not found") from error
+            raise ArgoWorkflowNotFound(f"Argo CI run {ci_run} was not found") from error
         raise ReleaseError(f"cannot read Argo CI run {ci_run}: {error}") from error
     except ReleaseError as error:
         raise ReleaseError(f"cannot read Argo CI run {ci_run}: {error}") from error
     if not isinstance(workflow, dict):
         raise ReleaseError(f"Argo CI run {ci_run} returned a non-object record")
     return workflow
+
+
+def validate_ci_attestation_url(url: str) -> str:
+    """Allow only the public, read-only Garage prefix used for CI evidence."""
+    if not isinstance(url, str) or url != url.strip() or not url:
+        raise ReleaseError("CI attestation URL must not be empty or padded")
+    parsed = urllib.parse.urlparse(url)
+    try:
+        parsed_port = parsed.port
+    except ValueError as error:
+        raise ReleaseError("CI attestation URL has an invalid port") from error
+    expected_prefix = (
+        f"/{DEFAULT_CI_ARTIFACT_BUCKET}/attestations/brand-kit-ci/v1/"
+    )
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != DEFAULT_CI_ARTIFACT_HOST
+        or parsed_port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.startswith(expected_prefix)
+        or not parsed.path.endswith(".json")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ReleaseError(
+            "CI attestation URL must be an HTTPS JSON object in the public "
+            f"{DEFAULT_CI_ARTIFACT_HOST}/{DEFAULT_CI_ARTIFACT_BUCKET}/attestations/brand-kit-ci/v1/ prefix"
+        )
+    return url
+
+
+def _attestation_timestamp(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ReleaseError("CI attestation finished_at is missing")
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise ReleaseError("CI attestation finished_at is not an ISO-8601 timestamp") from error
+    if parsed.tzinfo is None:
+        raise ReleaseError("CI attestation finished_at must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def validate_ci_attestation(
+    record: Any,
+    release_commit: str,
+    ci_run: str | None = None,
+) -> dict[str, Any]:
+    """Validate one durable successful-run attestation."""
+    if not isinstance(release_commit, str) or not OBJECT_ID_PATTERN.fullmatch(release_commit):
+        raise ReleaseError(f"release commit is not a full object ID: {release_commit!r}")
+    if not isinstance(record, dict):
+        raise ReleaseError("CI attestation is not an object")
+    schema = record.get("schema")
+    if schema is not None and schema != CI_ATTESTATION_SCHEMA:
+        raise ReleaseError(f"CI attestation schema is not {CI_ATTESTATION_SCHEMA!r}")
+    commit = record.get("commit")
+    if not isinstance(commit, str) or not OBJECT_ID_PATTERN.fullmatch(commit):
+        raise ReleaseError("CI attestation commit is not a full object ID")
+    if commit.lower() != release_commit.lower():
+        raise ReleaseError(
+            f"CI attestation commits {commit.lower()} but release expects {release_commit.lower()}"
+        )
+    workflow_uid = record.get("workflow_uid")
+    if not isinstance(workflow_uid, str) or not WORKFLOW_UID_PATTERN.fullmatch(workflow_uid):
+        raise ReleaseError("CI attestation workflow_uid is malformed")
+    if record.get("phase") != "Succeeded":
+        raise ReleaseError("CI attestation phase is not Succeeded")
+    finished_at = _attestation_timestamp(record.get("finished_at"))
+    if ci_run is not None:
+        run_name = argo_run_name(ci_run)
+        workflow_name = record.get("workflow_name")
+        if workflow_name is not None and workflow_name != run_name:
+            raise ReleaseError(
+                f"CI attestation names workflow {workflow_name!r}, expected {run_name!r}"
+            )
+    validated = dict(record)
+    validated["commit"] = commit.lower()
+    validated["phase"] = "Succeeded"
+    validated["finished_at"] = finished_at
+    return validated
+
+
+def get_ci_attestation(
+    url: str,
+    release_commit: str,
+    ci_run: str | None = None,
+) -> dict[str, Any]:
+    """Read and validate a durable Garage attestation without credentials."""
+    url = validate_ci_attestation_url(url)
+    try:
+        record = request_json(
+            "GET",
+            url,
+            service="CI attestation artifact",
+        )
+    except HttpFailure as error:
+        if error.status == 404:
+            raise ReleaseError(f"CI attestation artifact was not found at {url}") from error
+        raise ReleaseError(f"cannot read CI attestation artifact: {error}") from error
+    except ReleaseError as error:
+        raise ReleaseError(f"cannot read CI attestation artifact: {error}") from error
+
+    if isinstance(record, dict) and isinstance(record.get("attestations"), list):
+        matches = [
+            candidate
+            for candidate in record["attestations"]
+            if isinstance(candidate, dict)
+            and isinstance(candidate.get("commit"), str)
+            and candidate["commit"].lower() == release_commit.lower()
+        ]
+        if len(matches) == 0:
+            raise ReleaseError(
+                f"CI attestation artifact has no record for release commit {release_commit.lower()}"
+            )
+        if len(matches) != 1:
+            raise ReleaseError(
+                f"CI attestation artifact has multiple records for release commit {release_commit.lower()}"
+            )
+        record = matches[0]
+    return validate_ci_attestation(record, release_commit, ci_run=ci_run)
 
 
 def _normalized_parameter_name(name: Any) -> str:
@@ -495,17 +628,25 @@ def attest_argo_ci_run(
     api_url: str = DEFAULT_ARGO_API_URL,
     namespace: str = DEFAULT_ARGO_NAMESPACE,
     token: str | None = None,
+    attestation_url: str | None = None,
 ) -> dict[str, Any]:
-    """Require a read-only, successful Argo attestation for ``release_commit``."""
+    """Require a successful Argo attestation, using Garage after Argo reaps it."""
     run_name = argo_run_name(ci_run)
     if not isinstance(release_commit, str) or not OBJECT_ID_PATTERN.fullmatch(release_commit):
         raise ReleaseError(f"release commit is not a full object ID: {release_commit!r}")
-    workflow = get_argo_workflow(
-        run_name,
-        api_url=api_url,
-        namespace=namespace,
-        token=token,
-    )
+    if attestation_url is not None:
+        attestation_url = validate_ci_attestation_url(attestation_url)
+    try:
+        workflow = get_argo_workflow(
+            run_name,
+            api_url=api_url,
+            namespace=namespace,
+            token=token,
+        )
+    except ArgoWorkflowNotFound:
+        if attestation_url is None:
+            raise
+        return get_ci_attestation(attestation_url, release_commit, ci_run=run_name)
 
     metadata = workflow.get("metadata")
     if isinstance(metadata, dict):
@@ -738,6 +879,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Argo namespace (default: {DEFAULT_ARGO_NAMESPACE})",
     )
     parser.add_argument(
+        "--ci-attestation-url",
+        help=(
+            "durable Garage attestation URL to use only when the named Argo run "
+            "has been reaped"
+        ),
+    )
+    parser.add_argument(
         "--verify-only",
         action="store_true",
         help="verify an already-published release without writing to Forgejo",
@@ -814,8 +962,15 @@ def main(argv: list[str] | None = None) -> int:
             api_url=args.argo_api_url,
             namespace=args.argo_namespace,
             token=argo_token,
+            attestation_url=args.ci_attestation_url,
         )
-        print(f"PASS  Argo CI run {args.ci_run} succeeded for commit {commit}")
+        if args.ci_attestation_url:
+            print(
+                f"PASS  Argo CI run {args.ci_run} or its durable attestation "
+                f"succeeded for commit {commit}"
+            )
+        else:
+            print(f"PASS  Argo CI run {args.ci_run} succeeded for commit {commit}")
         print(f"PASS  exact annotated tag {args.tag} at {commit}")
         print("PASS  origin and mirror advertise the same peeled tag")
 

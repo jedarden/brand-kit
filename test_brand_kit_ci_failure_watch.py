@@ -9,6 +9,7 @@ from tools import release_publish
 
 
 NOW = datetime(2026, 9, 27, 13, 0, tzinfo=timezone.utc)
+COMMIT = "a" * 40
 
 
 def workflow(name, phase, finished_at, *, commit=None):
@@ -86,6 +87,87 @@ def test_run_watch_passes_when_no_recent_failure_exists():
 
     assert report["status"] == "pass"
     assert report["failures"] == []
+
+
+def test_run_watch_extracts_recent_successes_into_minimal_durable_attestations():
+    report = brand_kit_ci_failure_watch.run_watch(
+        "argo-secret",
+        now=NOW,
+        request=lambda *args, **kwargs: {
+            "items": [
+                workflow(
+                    "brand-kit-ci-success",
+                    "Succeeded",
+                    "2026-09-27T12:45:00Z",
+                    commit=COMMIT,
+                ),
+                workflow(
+                    "brand-kit-ci-old-success",
+                    "Succeeded",
+                    "2026-09-27T10:59:59Z",
+                    commit=COMMIT,
+                ),
+                workflow(
+                    "brand-kit-ci-no-commit",
+                    "Succeeded",
+                    "2026-09-27T12:50:00Z",
+                ),
+            ]
+        },
+    )
+
+    assert report["attestations"] == [
+        {
+            "commit": COMMIT,
+            "workflow_uid": "uid-brand-kit-ci-success",
+            "phase": "Succeeded",
+            "finished_at": "2026-09-27T12:45:00Z",
+        }
+    ]
+
+
+def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch):
+    report_path = tmp_path / "failure-report.json"
+    attestations_path = tmp_path / "attestations.json"
+
+    monkeypatch.setenv("ARGO_TOKEN", "argo-attestation-contract-secret")
+    monkeypatch.setattr(
+        brand_kit_ci_failure_watch,
+        "run_watch",
+        lambda *args, **kwargs: {
+            "schema": brand_kit_ci_failure_watch.REPORT_SCHEMA,
+            "status": "pass",
+            "observed_at": "2026-09-27T13:00:00Z",
+            "lookback_minutes": 120,
+            "workflow_template": "brand-kit-ci",
+            "failures": [],
+            "attestations": [
+                {
+                    "commit": "a" * 40,
+                    "workflow_uid": "uid-success",
+                    "phase": "Succeeded",
+                    "finished_at": "2026-09-27T12:45:00Z",
+                }
+            ],
+        },
+    )
+
+    assert brand_kit_ci_failure_watch.main(
+        ["--report", str(report_path), "--attestations", str(attestations_path)]
+    ) == 0
+
+    durable = json.loads(attestations_path.read_text(encoding="utf-8"))
+    assert durable == {
+        "schema": brand_kit_ci_failure_watch.ATTESTATION_SCHEMA,
+        "attestations": [
+            {
+                "commit": "a" * 40,
+                "workflow_uid": "uid-success",
+                "phase": "Succeeded",
+                "finished_at": "2026-09-27T12:45:00Z",
+            }
+        ],
+    }
 
 
 def test_run_watch_applies_the_two_hour_lookback_to_both_failure_phases():
@@ -260,6 +342,8 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "key: ARGO_TOKEN" in workflow
     assert "artifactGC:\n              strategy: Never" in workflow
     assert "failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json" in workflow
+    assert "attestations/brand-kit-ci/v1/{{workflow.uid}}/attestations.json" in workflow
+    assert "brand-kit-ci-attestation/v1" in workflow
     assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow
     assert '"alertname": "BrandKitCIRegressionGate"' in workflow
     assert '"owner": "jedarden"' in workflow

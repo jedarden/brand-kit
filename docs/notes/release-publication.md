@@ -45,6 +45,11 @@ use the patch rule and this same ordering.
    output matches the release commit. A log line or a branch name is not an
    attestation; the WorkflowTemplate must expose the checked-out SHA as a
    structured output before this release gate can pass.
+   The application-owned `brand-kit-ci-failure-watch` also copies recent
+   successful runs into a non-GC'd Garage artifact at
+   `attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json`.
+   Keep that URL with the release evidence: it is the recovery input if Argo
+   reaps the named Workflow before publication.
 4. Make sure `origin` is the canonical Forgejo remote and `github` is the
    read-only tag mirror. The publisher reads both remotes and never pushes to
    either remote.
@@ -86,15 +91,37 @@ only when it is byte-for-byte equal to the extracted section.
   --ci-run "brand-kit-ci/<workflow-run-name>"
 ```
 
+If the named Workflow has already been reaped, add the durable attestation
+object captured by the 15-minute watcher:
+
+```bash
+.venv/bin/python tools/release_publish.py \
+  --tag "$VERSION" \
+  --ci-run "brand-kit-ci/<workflow-run-name>" \
+  --ci-attestation-url \
+  "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json"
+```
+
+The publisher always tries the read-only Argo `GET` first. It reads the Garage
+object only after that exact run returns `404`; a live failed run, a different
+commit, an invalid timestamp, or an untrusted URL still fails closed. The
+attestation artifact contains one or more records with only `commit`,
+`workflow_uid`, `phase: Succeeded`, and `finished_at`; the publisher selects
+exactly one record for the release commit. If more than one matching record is
+present, use the watcher artifact for the run being published or rerun the
+watcher/archive path so the evidence is unambiguous.
+
 The publisher performs these checks in order:
 
 1. `$VERSION` is an annotated tag at the current `HEAD`.
 2. The canonical `origin` and read-only `github` remotes advertise the same
    peeled commit for that exact tag.
 3. The read-only Argo API confirms that the named run is `Succeeded` and
-   carries the exact release commit in a structured output. A failed run,
-   missing output, mismatched SHA, malformed response, or API error fails
-   closed.
+   carries the exact release commit in a structured output. If Argo returns
+   `404` because the run was reaped, the optional `--ci-attestation-url`
+   fallback must instead return a validated durable `Succeeded` record for the
+   exact commit. A failed run, missing output, mismatched SHA, malformed
+   response, invalid artifact URL, or API error fails closed.
 4. The exact changelog section is retained as the release body. Forgejo's
    release-by-tag endpoint either finds the matching published record, publishes
    an existing matching draft, or creates a non-draft stable release with
@@ -170,7 +197,7 @@ create a second Forgejo/GitHub release to work around a bad state.
 | Failure state | Safe recovery | Do not do this |
 |---|---|---|
 | Mirror timeout or disagreement | Leave the canonical tag in place. Confirm that `origin` still advertises the expected peeled commit, then rerun the same publisher command (or `--verify-only`) after the server-side mirror catches up. Increase `--mirror-timeout` only for the wait; the command must still end in `READY`. | Do not push the tag again, push to `github`, start consumer synchronization, or create a GitHub Release while the mirror is absent or points at another commit. |
-| Failed, missing, or unverifiable Argo attestation | Do not publish. Keep the tag untouched. If the run/API was transiently unavailable, rerun the same command after it recovers. If CI genuinely failed, fix the source on a new commit, run CI for that commit, and publish a new version with a new annotated tag. | Do not substitute a branch name, a log line, a different run, or a successful run for another commit. Do not retag the failed release commit. |
+| Failed, missing, or unverifiable Argo attestation | Do not publish. If the named Workflow returns `404`, locate the non-GC'd `attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json` object from the scheduled watcher and rerun the same command with `--ci-attestation-url`; the artifact must contain exactly one matching commit record. If Argo is transiently unavailable, rerun after it recovers. If CI genuinely failed or no durable record exists, fix the source on a new commit, run CI for that commit, and publish a new version with a new annotated tag. | Do not substitute a branch name, a log line, a different run, or a successful run for another commit. Do not use the fallback to override a live non-`Succeeded` run, and do not retag the failed release commit. |
 | Partial Forgejo publication or an ambiguous create response | Rerun the same command. The publisher reads `/releases/tags/$VERSION` first, reuses an exact published record, publishes an exact matching draft, and accepts `409` only after a matching read. A timed-out POST is therefore resolved by a GET, not another manual POST. | Do not manually create a second release, guess whether the first POST committed, or alter the tag/target/body to make the request succeed. |
 | Post-write verification failure | Leave both the tag and any Forgejo record in place. Retry the same command after a transient API/read problem; it will verify an existing exact record without writing again. If Forgejo returns a record with the wrong tag, full target commit, body, draft, or prerelease state, stop and have an operator correct that record in place to the exact tag, commit, and changelog body, then rerun. | Do not delete and recreate the Git tag, force-push, publish a replacement tag, or proceed to consumers on an unverified record. |
 | Consumer handoff or `consumer_sync.py` failure | Keep `$VERSION` fixed. First rerun the publisher's `--verify-only` gate and repair mirror/API state if needed. For a local consumer failure, inspect the consumer checkout, rerun `consumer_sync.py --apply --release-tag "$VERSION"` after correcting the reported issue, review only the expected files, then commit and push normally. Rerun `--check` and the drift audit after deployment. | Do not sync from `main`, a newer tag, or a lightweight tag; do not write consumer files when the Forgejo release gate fails; do not force-push a consumer checkout or mark a failed/indeterminate audit as verified. |

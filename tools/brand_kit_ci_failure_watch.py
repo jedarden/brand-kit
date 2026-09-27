@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Find recent failed brand-kit-ci runs for the scheduled owner alert.
+"""Find recent brand-kit-ci runs for owner routing and durable CI evidence.
 
 The watcher is deliberately read-only.  It lists Workflow records through the
-Argo API, keeps only recent ``Failed``/``Error`` runs, and writes a small
-sanitized report for the WorkflowTemplate's durable artifact.  Alert delivery
-is owned by the companion WorkflowTemplate exit handler so an Alertmanager
-outage cannot change the observed CI result.
+Argo API, keeps only recent ``Failed``/``Error`` runs for the owner report,
+and copies validated successful-run metadata into a separate durable
+attestation artifact.  Alert delivery is owned by the companion WorkflowTemplate
+exit handler so an Alertmanager outage cannot change the observed CI result.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ DEFAULT_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
 DEFAULT_LOOKBACK_MINUTES = 120
 DEFAULT_LIST_LIMIT = 100
 REPORT_SCHEMA = "brand-kit-ci-failure-watch/v1"
+ATTESTATION_SCHEMA = release_publish.CI_ATTESTATION_SCHEMA
 FAILURE_PHASES = frozenset({"Failed", "Error"})
 COMMIT_PARAMETER_NAMES = frozenset(
     {"commit", "revision", "sha", "gitcommit", "gitsha", "headcommit", "headsha"}
@@ -180,6 +181,41 @@ def _failure_summary(
     return summary
 
 
+def _success_attestation(
+    workflow: Any,
+    *,
+    cutoff: datetime,
+) -> dict[str, Any] | None:
+    """Return only the four fields needed to prove one successful CI run."""
+    if not isinstance(workflow, dict):
+        return None
+    metadata = workflow.get("metadata")
+    status = workflow.get("status")
+    if not isinstance(metadata, dict) or not isinstance(status, dict):
+        return None
+    if status.get("phase") != "Succeeded":
+        return None
+
+    finished_at = status.get("finishedAt")
+    observed_at = _parse_timestamp(finished_at)
+    if observed_at is None or observed_at < cutoff:
+        return None
+    workflow_uid = metadata.get("uid")
+    commit = _commit_from_workflow(workflow)
+    if (
+        not isinstance(workflow_uid, str)
+        or not release_publish.WORKFLOW_UID_PATTERN.fullmatch(workflow_uid)
+        or commit is None
+    ):
+        return None
+    return {
+        "commit": commit,
+        "workflow_uid": workflow_uid,
+        "phase": "Succeeded",
+        "finished_at": observed_at.isoformat().replace("+00:00", "Z"),
+    }
+
+
 def run_watch(
     token: str | None,
     *,
@@ -190,7 +226,7 @@ def run_watch(
     now: datetime | None = None,
     request: Callable[..., Any] = release_publish.request_json,
 ) -> dict[str, Any]:
-    """Return a report for recent failed/error CI runs without mutating Argo."""
+    """Return recent failures plus successful runs worth durably attesting."""
     token = release_publish.require_token(token, "ARGO_TOKEN")
     if not isinstance(lookback_minutes, int) or isinstance(lookback_minutes, bool):
         raise release_publish.ReleaseError("lookback minutes must be an integer")
@@ -220,6 +256,11 @@ def run_watch(
         ))
         is not None
     ]
+    attestations = [
+        attestation
+        for item in response["items"]
+        if (attestation := _success_attestation(item, cutoff=cutoff)) is not None
+    ]
     failures.sort(
         key=lambda item: (
             _parse_timestamp(item.get("finished_at"))
@@ -229,6 +270,11 @@ def run_watch(
         ),
         reverse=True,
     )
+    attestations.sort(
+        key=lambda item: _parse_timestamp(item["finished_at"])
+        or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     return {
         "schema": REPORT_SCHEMA,
         "status": "fail" if failures else "pass",
@@ -236,6 +282,7 @@ def run_watch(
         "lookback_minutes": lookback_minutes,
         "workflow_template": workflow_template,
         "failures": failures,
+        "attestations": attestations,
     }
 
 
@@ -243,15 +290,34 @@ def write_report(report: dict[str, Any], path: Path) -> None:
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def write_attestations(report: dict[str, Any], path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema": ATTESTATION_SCHEMA,
+                "attestations": report.get("attestations", []),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Find recent failed brand-kit-ci Argo workflows for owner routing."
+        description=(
+            "Find recent failed brand-kit-ci Argo workflows and archive "
+            "successful-run attestations."
+        )
     )
     parser.add_argument("--argo-api-url", default=DEFAULT_ARGO_API_URL)
     parser.add_argument("--argo-namespace", default=DEFAULT_ARGO_NAMESPACE)
     parser.add_argument("--workflow-template", default=DEFAULT_WORKFLOW_TEMPLATE)
     parser.add_argument("--lookback-minutes", type=int, default=DEFAULT_LOOKBACK_MINUTES)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--attestations", type=Path)
     return parser
 
 
@@ -273,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             "workflow_template": args.workflow_template,
             "error": str(error),
             "failures": [],
+            "attestations": [],
         }
         exit_code = 2
     else:
@@ -280,8 +347,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         write_report(report, args.report)
+        if args.attestations is not None:
+            write_attestations(report, args.attestations)
     except OSError as error:
-        print(f"error: cannot write failure-watch report: {error}", file=sys.stderr)
+        print(f"error: cannot write failure-watch evidence: {error}", file=sys.stderr)
         return 2
 
     if report["status"] == "pass":

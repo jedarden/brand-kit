@@ -4,7 +4,7 @@ metadata:
   name: brand-kit-ci-failure-watch
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/description: "Read-only owner alert for failed brand-kit-ci regression-gate runs"
+    workflows.argoproj.io/description: "Read-only owner alert and durable evidence archive for brand-kit-ci runs"
 spec:
   entrypoint: watch
   onExit: route-ci-failure-watch
@@ -22,6 +22,8 @@ spec:
             # fails before the watcher can create its normal report.
             printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"watcher did not reach the Argo API","failures":[]}' \
               > /tmp/brand-kit-ci-failure-report.json
+            printf '%s\n' '{"schema":"brand-kit-ci-attestation/v1","attestations":[]}' \
+              > /tmp/brand-kit-ci-attestations.json
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
             git clone --filter=blob:none --no-tags --depth=1 --branch main \
@@ -29,6 +31,7 @@ spec:
             set +e
             python3 /brand-kit/tools/brand_kit_ci_failure_watch.py \
               --report /tmp/brand-kit-ci-failure-report.json \
+              --attestations /tmp/brand-kit-ci-attestations.json \
               --lookback-minutes 120
             WATCH_EXIT=$?
             set -e
@@ -66,6 +69,26 @@ spec:
               region: garage
               insecure: false
               key: failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json
+              accessKeySecret:
+                name: needle-ci-artifact-publisher
+                key: access-key
+              secretKeySecret:
+                name: needle-ci-artifact-publisher
+                key: secret-key
+          - name: brand-kit-ci-attestations
+            path: /tmp/brand-kit-ci-attestations.json
+            archive:
+              none: {}
+            # Successful brand-kit-ci Workflow objects and logs are short-lived;
+            # this record is the publication gate's durable fallback.
+            artifactGC:
+              strategy: Never
+            s3:
+              endpoint: s3.ardenone.com
+              bucket: needle-ci-artifacts
+              region: garage
+              insecure: false
+              key: attestations/brand-kit-ci/v1/{{workflow.uid}}/attestations.json
               accessKeySecret:
                 name: needle-ci-artifact-publisher
                 key: access-key
