@@ -250,7 +250,7 @@ def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch):
     report_path = tmp_path / "failure-report.json"
     attestations_path = tmp_path / "attestations.json"
 
-    monkeypatch.setenv("ARGO_TOKEN", "argo-attestation-contract-secret")
+    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", "argo-attestation-contract-secret")
     monkeypatch.setattr(
         brand_kit_ci_failure_watch,
         "run_watch",
@@ -361,7 +361,7 @@ def test_main_writes_a_sanitized_durable_failure_report(tmp_path, monkeypatch, c
     def run_watch(token_arg, **kwargs):
         return real_run_watch(token_arg, now=NOW, request=request, **kwargs)
 
-    monkeypatch.setenv("ARGO_TOKEN", token)
+    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", token)
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
 
     assert (
@@ -405,7 +405,7 @@ def test_main_persists_an_argo_api_error_without_exposing_the_token(
             fp=io.BytesIO(f"Argo rejected credential {token}".encode()),
         )
 
-    monkeypatch.setenv("ARGO_TOKEN", token)
+    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", token)
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
     monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
 
@@ -437,7 +437,7 @@ def test_main_returns_success_and_writes_pass_report_when_no_alert_is_needed(
             **kwargs,
         )
 
-    monkeypatch.setenv("ARGO_TOKEN", "argo-pass-contract-secret")
+    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", "argo-pass-contract-secret")
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
 
     assert brand_kit_ci_failure_watch.main(["--report", str(report_path)]) == 0
@@ -486,8 +486,11 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     note = Path("docs/notes/asset-toolchain.md").read_text()
 
     assert "onExit: route-ci-failure-watch" in workflow
-    assert "brand-kit-release-tokens" in workflow
-    assert "key: ARGO_TOKEN" in workflow
+    assert "brand-kit-workflow-readonly" in workflow
+    assert "key: token" in workflow
+    assert "ARGO_WORKFLOW_TOKEN" in workflow
+    assert "brand-kit-release-tokens" not in workflow
+    assert "ARGO_TOKEN" not in workflow
     assert "tools/prune_ci_failure_watch_reports.py" in workflow
     assert "tools/prune_ci_attestations.py" in workflow
     assert "--retention-days 30" in workflow

@@ -67,11 +67,11 @@ spec:
             printf '%s\n' "$WATCH_EXIT" > /tmp/brand-kit-ci-failure-watch-exit-code
             exit "$WATCH_EXIT"
         env:
-          - name: ARGO_TOKEN
+          - name: ARGO_WORKFLOW_TOKEN
             valueFrom:
               secretKeyRef:
-                name: brand-kit-release-tokens
-                key: ARGO_TOKEN
+                name: brand-kit-workflow-readonly
+                key: token
           - name: S3_READER_ACCESS_KEY
             valueFrom:
               secretKeyRef:

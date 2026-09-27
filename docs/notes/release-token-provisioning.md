@@ -25,6 +25,11 @@ or the read-only consumer-audit token for release publication.
 The existing Argo consumer-audit `ExternalSecret` remains a separate,
 read-only workload credential. It is not an operator release credential and
 does not authorize Forgejo release publication or Argo workflow submission.
+The failure watcher and workflow-liveness workloads use a different dedicated
+read-only Argo Secret, `brand-kit-workflow-readonly`, through
+`ARGO_WORKFLOW_TOKEN`; they never mount `brand-kit-release-tokens`. See the
+[Argo credential separation](argo-credential-separation.md) role map for the
+exact namespace, service account, ExternalSecret, and API paths.
 
 ## Injection
 
@@ -109,7 +114,9 @@ It runs at 06:07 UTC, before the 06:17 UTC consumer-drift fallback, and reads
 the three values from the Kubernetes Secret `brand-kit-release-tokens`. That
 Secret must be materialized by the deployment's ExternalSecret from the three
 OpenBao paths above, with keys named exactly `FORGEJO_TOKEN`, `ARGO_TOKEN`, and
-`ARGO_SUBMIT_TOKEN`; it must not be committed to this repository.
+`ARGO_SUBMIT_TOKEN`; it must not be committed to this repository or mounted by
+the failure watcher, liveness watchdog, or consumer-audit workload. The probe
+is the deliberate operator-credential validation exception.
 
 The probe runs `tools/release_token_probe.py` and records only credential names,
 pass/fail status, and sanitized provider errors in a durable report. It checks:

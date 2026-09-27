@@ -186,7 +186,7 @@ def run_liveness(
     request: Callable[..., Any] = release_publish.request_json,
 ) -> dict[str, Any]:
     """Return a tri-state report for both scheduled target workflows."""
-    token = release_publish.require_token(token, "ARGO_TOKEN")
+    token = release_publish.require_token(token, "ARGO_WORKFLOW_TOKEN")
     current = _utc_now(now)
     checks = []
     for target in TARGETS:
@@ -244,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         report = run_liveness(
-            os.environ.get("ARGO_TOKEN"),
+            os.environ.get("ARGO_WORKFLOW_TOKEN"),
             api_url=args.argo_api_url,
             namespace=args.argo_namespace,
         )

@@ -218,11 +218,11 @@ def test_liveness_workflow_contract_is_independent_and_retains_evidence():
     assert "tools/brand_kit_workflow_liveness.py" in check["container"]["args"][0]
     assert check["container"]["env"] == [
         {
-            "name": "ARGO_TOKEN",
+            "name": "ARGO_WORKFLOW_TOKEN",
             "valueFrom": {
                 "secretKeyRef": {
-                    "name": "brand-kit-release-tokens",
-                    "key": "ARGO_TOKEN",
+                    "name": "brand-kit-workflow-readonly",
+                    "key": "token",
                     "optional": True,
                 }
             },

@@ -360,8 +360,9 @@ cluster's two-hour `secondsAfterFailure` Workflow retention window, so the gate
 failure is reported before Argo reaps its record. The retention/lookback
 contract is encoded in the WorkflowTemplate annotations and checked by
 `python3 tools/check_ci_failure_watch_retention.py`; the watcher also rejects
-an unsafe shorter runtime window. The watcher uses the existing read-only
-`ARGO_TOKEN` from `brand-kit-release-tokens`, keeps a sanitized report at
+an unsafe shorter runtime window. The watcher uses the dedicated read-only
+`ARGO_WORKFLOW_TOKEN` from the dedicated `brand-kit-workflow-readonly` Secret
+in namespace `argo-workflows`, keeps a sanitized report at
 `failures/brand-kit-ci-failure-watch/v1/<workflow-uid>/report.json` with
 `artifactGC: Never`, and its exit handler posts a `BrandKitCIRegressionGate`
 alert to the iad-ci Alertmanager. Alertmanager's configured ntfy receiver
@@ -370,7 +371,8 @@ non-success when it finds a failed gate or cannot inspect Argo; both cases
 require follow-up, and the durable report is the first place to look.
 The deployment path, live-object inspection commands, and read-only parity
 check for these two manifests are documented in
-[`docs/notes/asset-toolchain.md`](docs/notes/asset-toolchain.md#deployment-path-and-live-parity).
+[`docs/notes/asset-toolchain.md`](docs/notes/asset-toolchain.md#deployment-path-and-live-parity)
+and [`docs/notes/argo-credential-separation.md`](docs/notes/argo-credential-separation.md).
 That parity check first verifies the owning `brand-kit-automation-iad-ci`
 Application is correctly wired to the GitHub mirror, `main`, `automation`,
 and `argo-workflows`, and is `Synced` and `Healthy`; it then compares the

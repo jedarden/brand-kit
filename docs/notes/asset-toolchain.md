@@ -17,11 +17,18 @@ The ordered commands and required Argo log evidence are documented under
 The gate has an application-owned companion check in
 `automation/brand-kit-ci-failure-watch-workflowtemplate.yml`, scheduled by
 `automation/brand-kit-ci-failure-watch-cronworkflow.yml`. Every 15 minutes it
-uses the existing read-only `ARGO_TOKEN` to list `brand-kit-ci` Workflow records
+uses the dedicated read-only `ARGO_WORKFLOW_TOKEN` to list `brand-kit-ci` Workflow records
 and retains `Failed`/`Error` runs from the preceding two hours. The lookback is
 intentional: iad-ci's Argo controller retains failed Workflows for 7200 seconds
 through `controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure` in
 `declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml`.
+The token comes from Secret `brand-kit-workflow-readonly` in namespace
+`argo-workflows`, delivered by the same-named ExternalSecret; it is not the
+release operator's `ARGO_TOKEN` from `brand-kit-release-tokens`. The watcher
+runs as service account `argo-workflow` and calls only the Argo Workflow list
+and detail `GET` endpoints. See
+[`argo-credential-separation.md`](argo-credential-separation.md) for the full
+role map and the submit/mutation boundary.
 The watcher contract requires its lookback to cover that full retention window,
 and retains the exact boundary (`cutoff` is inclusive), so a short-lived failed
 run is still detected before its Workflow is reaped. The deployed

@@ -359,7 +359,7 @@ def run_watch(
     request: Callable[..., Any] = release_publish.request_json,
 ) -> dict[str, Any]:
     """Return recent failures plus successful runs worth durably attesting."""
-    token = release_publish.require_token(token, "ARGO_TOKEN")
+    token = release_publish.require_token(token, "ARGO_WORKFLOW_TOKEN")
     validate_lookback_coverage(lookback_minutes)
 
     current = _utc_now(now)
@@ -471,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         report = run_watch(
-            os.environ.get("ARGO_TOKEN"),
+            os.environ.get("ARGO_WORKFLOW_TOKEN"),
             api_url=args.argo_api_url,
             namespace=args.argo_namespace,
             workflow_template=args.workflow_template,

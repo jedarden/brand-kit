@@ -32,11 +32,11 @@ spec:
             printf '%s\n' "$LIVENESS_EXIT" > /tmp/brand-kit-workflow-liveness-exit-code
             exit "$LIVENESS_EXIT"
         env:
-          - name: ARGO_TOKEN
+          - name: ARGO_WORKFLOW_TOKEN
             valueFrom:
               secretKeyRef:
-                name: brand-kit-release-tokens
-                key: ARGO_TOKEN
+                name: brand-kit-workflow-readonly
+                key: token
                 optional: true
         outputs:
           parameters:
