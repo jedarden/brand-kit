@@ -363,7 +363,17 @@ def verify_platform_manifest():
 
     if not isinstance(manifest, dict):
         return [(PLATFORM_MANIFEST_RELPATH, claim, type(manifest).__name__, "✗ not an object")], False
-    if manifest.get("schema_version") != PLATFORM_MANIFEST_SCHEMA_VERSION:
+    if set(manifest) != {"schema_version", "assets"}:
+        return [(
+            PLATFORM_MANIFEST_RELPATH,
+            "schema_version and assets only",
+            ", ".join(sorted(manifest)),
+            "✗ invalid top-level fields",
+        )], False
+    if (
+        type(manifest.get("schema_version")) is not int
+        or manifest.get("schema_version") != PLATFORM_MANIFEST_SCHEMA_VERSION
+    ):
         return [(
             PLATFORM_MANIFEST_RELPATH,
             claim,
