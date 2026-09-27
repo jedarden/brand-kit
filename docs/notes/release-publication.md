@@ -39,6 +39,13 @@ verified and left unchanged.
    export ARGO_TOKEN='...'
    ```
 
+   The release-triggered consumer handoff uses an Argo token with permission
+   to submit workflows. Keep it separate from the read-only attestation token:
+
+   ```bash
+   export ARGO_SUBMIT_TOKEN='...'
+   ```
+
 ## Create the exact tag
 
 After CI is green, create the annotated tag locally and push it to Forgejo.
@@ -112,18 +119,31 @@ A successful verification prints `READY` only after the Argo attestation, the
 Forgejo record is published, and the canonical and mirror refs still point to
 the same commit. `--verify-only` still performs the Argo check, but does not
 write to Forgejo.
-The command prints the next consumer check, but does not run it:
+
+After `READY`, submit the release-triggered read-only consumer audit. The
+submitter reads the exact published Forgejo record, requires its full target
+commit, waits for the canonical and GitHub mirror tags to agree, and passes the
+exact tag to the Argo `WorkflowTemplate`:
 
 ```bash
-.venv/bin/python tools/consumer_sync.py --release-tag "$VERSION" --check
+.venv/bin/python tools/consumer_drift_submit.py \
+  --release-tag "$VERSION"
 ```
 
-The consumer workflow in
+The Argo workflow retries mirror visibility for up to ten minutes before its
+audit starts as an additional propagation guard. A failed, draft, prerelease,
+malformed, or otherwise unverifiable Forgejo record never submits a workflow.
+The daily `CronWorkflow` remains enabled as a fallback; it discovers the
+newest stable release after the configured 24-hour propagation age.
+
+The remediation checklist in
 [`docs/notes/post-tag-consumer-update.md`](post-tag-consumer-update.md) starts
-only after that `READY` result. It must retain the exact `$VERSION` in its
-consumer commits and verification records. If the mirror is not ready, rerun
-the command after propagation; do not synchronize from `main` or from a
-lightweight tag.
+after the release-triggered audit has been submitted. It must retain the exact
+`$VERSION` in its consumer commits and verification records. If the handoff
+fails, repair the release or mirror state and rerun the submitter; do not
+synchronize from `main` or from a lightweight tag.
+The remediation command remains `tools/consumer_sync.py` and is separate from
+the read-only drift submission.
 
 ## Recovery and release records
 

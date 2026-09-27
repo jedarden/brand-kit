@@ -1,0 +1,79 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: brand-kit-consumer-drift
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Read-only consumer drift audit for a published Forgejo release"
+spec:
+  entrypoint: audit
+  serviceAccountName: argo-workflow
+  activeDeadlineSeconds: 1800
+  arguments:
+    parameters:
+      - name: brand-kit-repository
+        value: https://github.com/jedarden/brand-kit.git
+      - name: site-repository
+        value: https://github.com/jedarden/jedarden.com.git
+      - name: release-tag
+        value: ""
+  templates:
+    - name: audit
+      container:
+        image: python:3.13.5-slim-bookworm
+        command: [bash, -c]
+        args:
+          - |
+            set -euo pipefail
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git
+            python3 -m pip install --no-cache-dir --only-binary=:all: Pillow==12.1.1
+            git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /brand-kit
+            cd /brand-kit
+            TAG="{{workflow.parameters.release-tag}}"
+            if [ -z "$TAG" ]; then
+              TAG="$(python3 tools/consumer_drift.py --config consumer-drift.json --print-release-tag)"
+            fi
+
+            # A Forgejo release webhook can arrive before the server-side
+            # GitHub tag mirror. Wait for the exact peeled tag before fetching
+            # it; the daily CronWorkflow uses the same gate as its fallback.
+            MIRROR_COMMIT=""
+            for attempt in $(seq 1 60); do
+              MIRROR_COMMIT="$(git ls-remote --exit-code "{{workflow.parameters.brand-kit-repository}}" "refs/tags/${TAG}^{}" 2>/dev/null | awk 'NR == 1 { print $1 }')" || true
+              if [ -n "$MIRROR_COMMIT" ]; then
+                break
+              fi
+              if [ "$attempt" -lt 60 ]; then
+                sleep 10
+              fi
+            done
+            if [ -z "$MIRROR_COMMIT" ]; then
+              echo "release tag ${TAG} did not reach the read-only mirror within 10 minutes" >&2
+              exit 1
+            fi
+
+            git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /release
+            git -C /release fetch --depth=1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
+            git -C /release checkout --detach --quiet "$TAG"
+            git clone --filter=blob:none --depth=1 --branch main "{{workflow.parameters.site-repository}}" /jedarden.com
+            python3 /brand-kit/tools/consumer_drift.py \
+              --source-root /release \
+              --config /brand-kit/consumer-drift.json \
+              --release-tag "$TAG" \
+              --site /jedarden.com \
+              --report /tmp/consumer-drift-report.json \
+              --json
+        env:
+          - name: FORGEJO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: brand-kit-consumer-drift
+                key: token
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi

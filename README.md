@@ -272,13 +272,19 @@ committing its site diff. The command uses that repository's Sharp toolchain;
 `consumer_drift.py` verifies `favicon.svg`, `apple-touch-icon.png`,
 `icon-192.png`, and `icon-512.png` against the tagged brand-kit derivatives.
 
-The daily Argo `CronWorkflow` source is
-`automation/brand-kit-consumer-drift-cronworkflow.yml`; it clones the exact
-published tag and jedarden.com read-only, emits the JSON report, and fails its
-run on drift. The workflow is intentionally not a GitHub Actions workflow and
-has no consumer-write step. The complete remediation checklist — including the
-manual commit/push in `jedarden.com`, the GitHub avatar re-upload (no API for
-it), release-gate failure behavior, and what "in sync" means per asset — is in
+The release-triggered Argo handoff is
+`.venv/bin/python tools/consumer_drift_submit.py --release-tag "$VERSION"`.
+It requires a published, verifiable Forgejo release, waits for the exact tag to
+reach the read-only mirror, and submits that tag to
+`automation/brand-kit-consumer-drift-workflowtemplate.yml`. The daily Argo
+`CronWorkflow` source remains
+`automation/brand-kit-consumer-drift-cronworkflow.yml` as a fallback; it clones
+the newest stable release after the configured propagation age, emits the JSON
+report, and fails its run on drift. These workflows are intentionally not
+GitHub Actions workflows and have no consumer-write step. The complete
+remediation checklist — including the manual commit/push in `jedarden.com`, the
+GitHub avatar re-upload (no API for it), release-gate failure behavior, and what
+"in sync" means per asset — is in
 **`docs/notes/post-tag-consumer-update.md`** (ADR-2 and ADR-4).
 
 ## Usage & rights

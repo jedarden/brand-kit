@@ -149,8 +149,10 @@ EXPECTED_PRESENT = [
     "tools/build_assets.py",
     "tools/consumer_sync.py",
     "tools/consumer_drift.py",
+    "tools/consumer_drift_submit.py",
     "consumer-drift.json",
     "automation/brand-kit-consumer-drift-cronworkflow.yml",
+    "automation/brand-kit-consumer-drift-workflowtemplate.yml",
     "docs/notes/post-tag-consumer-update.md",
 ]
 

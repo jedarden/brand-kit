@@ -42,12 +42,16 @@ When the detector is newer than the release being audited, pass
 `--source-root <checkout-of-the-release-tag>` while keeping the detector itself
 on the current checkout; this is what the scheduled workflow does.
 
-`automation/brand-kit-consumer-drift-cronworkflow.yml` is the Argo source
-artifact for a daily read-only run. It resolves the newest stable release
-(after the configured propagation delay), checks out that tag, clones the
-read-only GitHub mirror of jedarden.com, and leaves the JSON report in the
-workflow logs. A release-triggered Argo submission can pass the release tag as
-the same workflow parameter. Infrastructure manifests are reconciled through
+`automation/brand-kit-consumer-drift-workflowtemplate.yml` is the reusable Argo
+source artifact for a release-triggered read-only run. Run
+`tools/consumer_drift_submit.py --release-tag "$VERSION"` after the published
+Forgejo release is verified. It refuses failed or unverifiable release records,
+waits for the canonical and read-only mirror tags to agree, and submits the
+exact tag as the `release-tag` workflow parameter. The workflow itself waits
+again for mirror visibility before checking out the tag. The companion
+`automation/brand-kit-consumer-drift-cronworkflow.yml` retains the daily
+read-only run as a fallback and discovers the newest stable release after the
+configured propagation delay. Infrastructure manifests are reconciled through
 `declarative-config`; this repository keeps the application-owned detector and
 its trigger source together without granting the detector write credentials.
 
@@ -114,8 +118,10 @@ Its `READY` result confirms the Argo run attestation, the published Forgejo
 record, and the exact tag on both the canonical remote and the read-only mirror.
 If it does not print `READY`, stop: do not synchronize from `main` or from a
 tag that is still propagating. If either API requires authentication, export
-read-only API tokens as `ARGO_TOKEN` and `FORGEJO_TOKEN` before running the
-sync. Never put tokens in this repository or pass them on the command line.
+`ARGO_TOKEN` and `FORGEJO_TOKEN` before running the gate. Export
+`ARGO_SUBMIT_TOKEN` when the Argo submission endpoint requires a token with
+workflow-submit permission. Never put tokens in this repository or pass them
+on the command line.
 
 In this workspace, `origin` is canonical Forgejo and `github` is the read-only
 push mirror. Fetch the release tag from Forgejo, require both remotes to

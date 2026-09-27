@@ -977,16 +977,22 @@ def test_release_checklist_runs_site_favicon_generator_before_commit():
 
 
 def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
-    workflow = Path("automation/brand-kit-consumer-drift-cronworkflow.yml").read_text(
+    workflow = Path("automation/brand-kit-consumer-drift-workflowtemplate.yml").read_text(
+        encoding="utf-8"
+    )
+    cron = Path("automation/brand-kit-consumer-drift-cronworkflow.yml").read_text(
         encoding="utf-8"
     )
     config = json.loads(Path("consumer-drift.json").read_text(encoding="utf-8"))
     release = config["release"]
 
-    assert "kind: CronWorkflow" in workflow
+    assert "kind: WorkflowTemplate" in workflow
+    assert "kind: CronWorkflow" in cron
+    assert "workflowTemplateRef:" in cron
+    assert 'name: brand-kit-consumer-drift\n  namespace: argo-workflows' in cron
+    assert 'name: release-tag\n          value: ""' in cron
     assert release["minimum_age_hours"] == 24
     assert release["tag_pattern"] == r"^v\d+\.\d+\.\d+$"
-    assert 'name: release-tag\n          value: ""' in workflow
 
     tag_parameter = 'TAG="{{workflow.parameters.release-tag}}"'
     resolve_tag = (

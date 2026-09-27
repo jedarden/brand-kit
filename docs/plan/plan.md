@@ -342,12 +342,16 @@ repository or a platform profile.
 ### Decision
 
 Ship `tools/consumer_drift.py` with the machine-readable inventory in
-`consumer-drift.json`, and provide the Argo source artifact
-`automation/brand-kit-consumer-drift-cronworkflow.yml` for a daily read-only
-run. The workflow resolves the newest published stable Forgejo release after a
-propagation delay, checks out that exact tag, clones jedarden.com from its
-read-only GitHub mirror, and runs the detector. A release-triggered Argo
-submission may set the `release-tag` workflow parameter instead.
+`consumer-drift.json`, and provide the reusable Argo
+`automation/brand-kit-consumer-drift-workflowtemplate.yml` plus its daily
+`automation/brand-kit-consumer-drift-cronworkflow.yml` fallback. The release
+handoff uses `tools/consumer_drift_submit.py`: it accepts only a published,
+verifiable Forgejo release, waits for the canonical and read-only mirror tags
+to agree, and submits the exact `release-tag` workflow parameter. The
+workflow then waits again for mirror visibility before checking out that exact
+tag. The daily run resolves the newest published stable release after the
+configured propagation delay, checks out that tag, clones jedarden.com from
+its read-only GitHub mirror, and runs the detector.
 
 The detector:
 
