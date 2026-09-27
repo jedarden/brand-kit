@@ -13,6 +13,7 @@ NOW = datetime(2026, 9, 27, 13, 0, tzinfo=timezone.utc)
 ENDPOINT = "https://s3.example.test"
 BUCKET = "needle-ci-artifacts"
 PREFIX = "failures/brand-kit-consumer-drift/v1/"
+CUSTOM_PREFIX = "failures/custom-consumer-drift/v9/"
 HELD_KEY = f"{PREFIX}held/report.json"
 HELD_URL = f"{ENDPOINT}/{BUCKET}/{HELD_KEY}"
 
@@ -165,6 +166,150 @@ def test_dry_run_performs_listing_but_does_not_delete(tmp_path):
     )
 
     assert pruned == 1
+    assert len(requests) == 1
+
+
+def test_prune_reports_uses_configured_namespace_and_preserves_non_report_metadata(
+    tmp_path,
+):
+    evidence_root = tmp_path / "release-evidence"
+    _write_evidence(evidence_root, report_url=None)
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        if request.method == "GET":
+            return Response(
+                (
+                    '<?xml version="1.0"?><ListBucketResult '
+                    'xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                    f"<Contents><Key>{CUSTOM_PREFIX}old/report.json</Key>"
+                    "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
+                    f"<Contents><Key>{CUSTOM_PREFIX}old/metadata.json</Key>"
+                    "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
+                    f"<Contents><Key>{PREFIX}old/report.json</Key>"
+                    "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
+                    "<IsTruncated>false</IsTruncated></ListBucketResult>"
+                ).encode()
+            )
+        return Response(
+            (
+                '<?xml version="1.0"?><DeleteResult '
+                'xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                f"<Deleted><Key>{CUSTOM_PREFIX}old/report.json</Key></Deleted>"
+                "</DeleteResult>"
+            ).encode()
+        )
+
+    reader, publisher = _clients(opener)
+    pruned, _ = prune_consumer_drift_reports.prune_reports(
+        reader,
+        publisher,
+        evidence_root=evidence_root,
+        endpoint=ENDPOINT,
+        bucket=BUCKET,
+        prefix=CUSTOM_PREFIX,
+        retention_days=30,
+        now=NOW,
+    )
+
+    assert pruned == 1
+    assert parse_qs(urlsplit(requests[0].full_url).query) == {
+        "list-type": ["2"],
+        "prefix": [CUSTOM_PREFIX],
+    }
+    assert CUSTOM_PREFIX.encode() + b"old/report.json" in requests[1].data
+    assert CUSTOM_PREFIX.encode() + b"old/metadata.json" not in requests[1].data
+    assert PREFIX.encode() + b"old/report.json" not in requests[1].data
+
+
+def test_list_objects_preserves_last_modified_metadata_for_retention_decisions():
+    timestamp = "2026-08-27T12:59:59.000Z"
+
+    def opener(request, timeout):
+        return Response(
+            (
+                '<?xml version="1.0"?><ListBucketResult '
+                'xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                f"<Contents><Key>{CUSTOM_PREFIX}old/report.json</Key>"
+                f"<LastModified>{timestamp}</LastModified></Contents>"
+                "<IsTruncated>false</IsTruncated></ListBucketResult>"
+            ).encode()
+        )
+
+    reader, _ = _clients(opener)
+    objects = reader.list_objects(CUSTOM_PREFIX)
+
+    assert [(item.key, item.last_modified) for item in objects] == [
+        (
+            f"{CUSTOM_PREFIX}old/report.json",
+            datetime(2026, 8, 27, 12, 59, 59, tzinfo=timezone.utc),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "report_url",
+    [
+        f"{ENDPOINT}/{BUCKET}/{PREFIX}%2e%2e/escape/report.json",
+        f"{ENDPOINT}/{BUCKET}/{PREFIX}workflow/%2e%2e/escape/report.json",
+        f"{ENDPOINT}/{BUCKET}/{PREFIX}nested/workflow/report.json",
+        f"{ENDPOINT}/{BUCKET}/{PREFIX}workflow/./report.json",
+    ],
+)
+def test_prune_rejects_unsafe_report_artifact_paths(report_url, tmp_path):
+    evidence_root = tmp_path / "release-evidence"
+    _write_evidence(evidence_root, report_url=report_url)
+
+    with pytest.raises(
+        prune_consumer_drift_reports.RetentionError,
+        match="unsafe.*artifact path",
+    ):
+        prune_consumer_drift_reports.protected_report_keys(
+            evidence_root,
+            endpoint=ENDPOINT,
+            bucket=BUCKET,
+            prefix=PREFIX,
+        )
+
+
+@pytest.mark.parametrize("last_modified", (None, "not-a-timestamp"))
+def test_prune_fails_closed_when_report_metadata_is_malformed(
+    last_modified, tmp_path
+):
+    evidence_root = tmp_path / "release-evidence"
+    _write_evidence(evidence_root, report_url=None)
+    requests = []
+    modified_xml = (
+        ""
+        if last_modified is None
+        else f"<LastModified>{last_modified}</LastModified>"
+    )
+
+    def opener(request, timeout):
+        requests.append(request)
+        return Response(
+            (
+                '<?xml version="1.0"?><ListBucketResult '
+                'xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+                f"<Contents><Key>{PREFIX}old/report.json</Key>"
+                f"{modified_xml}</Contents>"
+                "<IsTruncated>false</IsTruncated></ListBucketResult>"
+            ).encode()
+        )
+
+    reader, publisher = _clients(opener)
+    with pytest.raises(prune_consumer_drift_reports.RetentionError, match="LastModified"):
+        prune_consumer_drift_reports.prune_reports(
+            reader,
+            publisher,
+            evidence_root=evidence_root,
+            endpoint=ENDPOINT,
+            bucket=BUCKET,
+            prefix=PREFIX,
+            now=NOW,
+        )
+
     assert len(requests) == 1
 
 

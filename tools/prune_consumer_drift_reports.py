@@ -82,15 +82,27 @@ def _report_key_from_url(
             "release evidence report URL does not use the configured S3 endpoint"
         )
 
-    bucket_path = f"/{bucket}/"
+    endpoint_path = parsed_endpoint.path.rstrip("/")
+    bucket_path = f"{endpoint_path}/{bucket}/" if endpoint_path else f"/{bucket}/"
     if not parsed_url.path.startswith(bucket_path):
         raise RetentionError(
             "release evidence report URL does not use the configured S3 bucket"
         )
     key = urllib.parse.unquote(parsed_url.path[len(bucket_path) :])
-    if not key.startswith(prefix) or not key.endswith("/report.json"):
+    if not key.startswith(prefix):
         raise RetentionError(
             "release evidence report URL is outside the consumer-drift report prefix"
+        )
+    relative = key[len(prefix) :]
+    components = relative.split("/")
+    if (
+        len(components) != 2
+        or not components[0]
+        or components[0] in {".", ".."}
+        or components[1] != "report.json"
+    ):
+        raise RetentionError(
+            "release evidence report URL contains an unsafe consumer-drift artifact path"
         )
     return key
 
