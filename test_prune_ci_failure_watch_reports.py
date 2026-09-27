@@ -1,5 +1,6 @@
 import io
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -30,7 +31,11 @@ def test_prune_reports_lists_with_reader_and_deletes_only_expired_reports():
                     "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
                     f"<Contents><Key>{PREFIX}new/report.json</Key>"
                     "<LastModified>2026-09-27T12:59:59.000Z</LastModified></Contents>"
+                    f"<Contents><Key>{PREFIX}boundary/report.json</Key>"
+                    "<LastModified>2026-08-28T13:00:00.000Z</LastModified></Contents>"
                     f"<Contents><Key>{PREFIX}old/attestations.json</Key>"
+                    "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
+                    "<Contents><Key>failures/brand-kit-consumer-drift/v1/old/report.json</Key>"
                     "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
                     "<IsTruncated>false</IsTruncated></ListBucketResult>"
                 ).encode()
@@ -69,7 +74,6 @@ def test_prune_reports_lists_with_reader_and_deletes_only_expired_reports():
     pruned, cutoff = prune_ci_failure_watch_reports.prune_reports(
         reader,
         publisher,
-        prefix=PREFIX,
         retention_days=30,
         now=NOW,
     )
@@ -77,12 +81,19 @@ def test_prune_reports_lists_with_reader_and_deletes_only_expired_reports():
     assert pruned == 1
     assert cutoff == datetime(2026, 8, 28, 13, 0, tzinfo=timezone.utc)
     assert requests[0].method == "GET"
-    assert "list-type=2" in requests[0].full_url
-    assert requests[0].headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    query = parse_qs(urlsplit(requests[0].full_url).query)
+    assert query == {"list-type": ["2"], "prefix": [PREFIX]}
+    assert "Credential=reader/" in requests[0].headers["Authorization"]
+    assert "Credential=publisher/" not in requests[0].headers["Authorization"]
     assert requests[1].method == "POST"
     assert requests[1].full_url.endswith("/needle-ci-artifacts?delete=")
+    assert "Credential=publisher/" in requests[1].headers["Authorization"]
+    assert "Credential=reader/" not in requests[1].headers["Authorization"]
     assert PREFIX.encode() + b"old/report.json" in requests[1].data
+    assert PREFIX.encode() + b"boundary/report.json" not in requests[1].data
+    assert PREFIX.encode() + b"new/report.json" not in requests[1].data
     assert PREFIX.encode() + b"old/attestations.json" not in requests[1].data
+    assert b"brand-kit-consumer-drift" not in requests[1].data
     assert requests[1].headers["Content-md5"]
     assert "publisher-secret" not in requests[1].headers["Authorization"]
 
