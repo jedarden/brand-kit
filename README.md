@@ -376,6 +376,33 @@ Application is correctly wired to the GitHub mirror, `main`, `automation`,
 and `argo-workflows`, and is `Synced` and `Healthy`; it then compares the
 child objects using read-only `kubectl get` calls and never applies resources.
 
+### Automation manifest contract
+
+Before deploying any file under `automation/`, run:
+
+```bash
+python3 tools/check_automation_manifests.py
+```
+
+This recursively validates every `.yml` and `.yaml` file against
+`automation/manifest.schema.json`. The contract requires Argo's
+`WorkflowTemplate` or `CronWorkflow` kinds, the `argoproj.io/v1alpha1` API,
+the `argo-workflows` namespace, filename/name and template-reference parity,
+version-pinned container images, declared parameters, valid UTC schedules, and
+one matching scheduled pair for each automation. No Deployment, Service,
+Ingress, or other long-running Kubernetes resource can pass this check. When
+the declarative-config checkout is available, include its deployment wiring as
+an additional check:
+
+```bash
+python3 tools/check_automation_manifests.py \
+  --application ../declarative-config/k8s/iad-ci/argo-workflows/brand-kit-automation-application.yml
+```
+
+That application check requires the recursive `automation` source, both YAML
+include patterns, and an `argo-workflows` destination, preserving the boundary
+between this repository's ephemeral Argo automation and serving workloads.
+
 For a failed gate, inspect the report and the referenced workflow, identify the
 exact commit and failed stage, correct the pin/install contract, test/assets,
 unexpected generated file, or regeneration drift, and push a new commit.

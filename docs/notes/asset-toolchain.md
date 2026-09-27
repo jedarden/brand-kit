@@ -101,6 +101,26 @@ The same live objects and their runs are visible in the VPN-only Argo UI at
 `https://argo-ci.ardenone.com`, in namespace `argo-workflows`, under the
 `brand-kit-ci-failure-watch` WorkflowTemplate and CronWorkflow names.
 
+Before changing any file in `automation/`, run the repository-side manifest
+contract check:
+
+```bash
+python3 tools/check_automation_manifests.py
+```
+
+It recursively checks every YAML manifest against
+`automation/manifest.schema.json`, including the Argo kind/API version,
+namespace and name, template references, parameter declarations, schedules,
+image pins, and the rule that only WorkflowTemplate/CronWorkflow resources
+may target `argo-workflows`. With a declarative-config checkout, pass the
+application manifest too to verify its recursive YAML inclusion and namespace
+boundary:
+
+```bash
+python3 tools/check_automation_manifests.py \
+  --application ../declarative-config/k8s/iad-ci/argo-workflows/brand-kit-automation-application.yml
+```
+
 The watcher writes a sanitized JSON report and uploads it to the
 Garage-backed `needle-ci-artifacts` bucket with `artifactGC: Never`:
 

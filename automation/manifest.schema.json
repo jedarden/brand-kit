@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://git.ardenone.com/jedarden/brand-kit/automation/manifest.schema.json",
+  "title": "brand-kit Argo automation manifest",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/workflowTemplate"
+    },
+    {
+      "$ref": "#/$defs/cronWorkflow"
+    }
+  ],
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "required": [
+        "name",
+        "namespace"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^brand-kit-[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "namespace": {
+          "const": "argo-workflows"
+        }
+      },
+      "additionalProperties": true
+    },
+    "resource": {
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "argoproj.io/v1alpha1"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        },
+        "spec": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "parameter": {
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "arguments": {
+      "type": "object",
+      "required": [
+        "parameters"
+      ],
+      "properties": {
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parameter"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "workflowTemplate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/resource"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "WorkflowTemplate"
+            },
+            "spec": {
+              "type": "object",
+              "required": [
+                "entrypoint",
+                "serviceAccountName",
+                "activeDeadlineSeconds",
+                "templates"
+              ],
+              "properties": {
+                "entrypoint": {
+                  "type": "string"
+                },
+                "serviceAccountName": {
+                  "const": "argo-workflow"
+                },
+                "activeDeadlineSeconds": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "arguments": {
+                  "$ref": "#/$defs/arguments"
+                },
+                "templates": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]*$"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "cronWorkflow": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/resource"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "CronWorkflow"
+            },
+            "spec": {
+              "type": "object",
+              "required": [
+                "schedules",
+                "timezone",
+                "concurrencyPolicy",
+                "startingDeadlineSeconds",
+                "workflowSpec"
+              ],
+              "properties": {
+                "schedules": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "timezone": {
+                  "const": "UTC"
+                },
+                "concurrencyPolicy": {
+                  "const": "Forbid"
+                },
+                "startingDeadlineSeconds": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "workflowSpec": {
+                  "type": "object",
+                  "required": [
+                    "workflowTemplateRef"
+                  ],
+                  "properties": {
+                    "workflowTemplateRef": {
+                      "type": "object",
+                      "required": [
+                        "name"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "pattern": "^brand-kit-[a-z0-9]+(?:-[a-z0-9]+)*$"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "arguments": {
+                      "$ref": "#/$defs/arguments"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    }
+  }
+}
