@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "repository": "https://git.ardenone.com/jedarden/brand-kit.git",
+  "consumers": {
+    "jedarden.com": {
+      "checkout": "~/jedarden.com",
+      "provenance": "public/brand/brand-kit-provenance.json",
+      "assets": [
+        {
+          "path": "public/brand/logo.svg",
+          "source": "logo/logo.svg",
+          "description": "vector logo",
+          "transform": {
+            "type": "copy"
+          }
+        },
+        {
+          "path": "public/brand/logo-512.png",
+          "source": "logo/logo-512.png",
+          "description": "512px logo PNG",
+          "transform": {
+            "type": "copy"
+          }
+        },
+        {
+          "path": "public/brand/og.jpg",
+          "source": "source/hero.png",
+          "description": "open-graph card (social image for /brand)",
+          "transform": {
+            "type": "jpeg-crop",
+            "width": 1200,
+            "height": 630,
+            "crop_y": 0.45,
+            "quality": 88,
+            "tolerance": 3.0
+          }
+        },
+        {
+          "path": "src/assets/brand-hero.jpg",
+          "source": "source/hero.png",
+          "description": "brand page hero (via Astro asset pipeline)",
+          "transform": {
+            "type": "jpeg-crop",
+            "width": 1536,
+            "height": 1024,
+            "crop_y": 0.0,
+            "quality": 88,
+            "tolerance": 3.0
+          }
+        }
+      ],
+      "related_assets": [
+        {
+          "path": "public/favicon.svg",
+          "source": "logo/logo.svg",
+          "description": "site-owned SVG favicon",
+          "transform": {
+            "type": "consumer-generated",
+            "command": "node scripts/make-favicons.mjs",
+            "generated_from": "public/brand/logo.svg"
+          }
+        },
+        {
+          "path": "public/apple-touch-icon.png",
+          "source": "favicon/apple-touch-icon-180.png",
+          "description": "site-owned Apple touch icon",
+          "transform": {
+            "type": "consumer-generated",
+            "command": "node scripts/make-favicons.mjs",
+            "generated_from": "public/brand/logo.svg"
+          }
+        },
+        {
+          "path": "public/icon-192.png",
+          "source": "favicon/favicon-192.png",
+          "description": "site-owned 192px icon",
+          "transform": {
+            "type": "consumer-generated",
+            "command": "node scripts/make-favicons.mjs",
+            "generated_from": "public/brand/logo.svg"
+          }
+        },
+        {
+          "path": "public/icon-512.png",
+          "source": "favicon/favicon-512.png",
+          "description": "site-owned 512px icon",
+          "transform": {
+            "type": "consumer-generated",
+            "command": "node scripts/make-favicons.mjs",
+            "generated_from": "public/brand/logo.svg"
+          }
+        }
+      ],
+      "live_checks": {
+        "github_avatar": {
+          "source": "avatars/github-460.png",
+          "url": "https://avatars.githubusercontent.com/jedarden",
+          "tolerance": 8.0
+        },
+        "live_og": {
+          "path": "public/brand/og.jpg",
+          "url": "https://jedarden.com/brand/og.jpg",
+          "tolerance": 3.0
+        }
+      }
+    }
+  }
+}

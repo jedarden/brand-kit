@@ -12,7 +12,7 @@ Forgejo API lookup for the release tag. A missing, draft, malformed, or
 inaccessible release record fails closed; ``--offline`` does not bypass this
 release gate.
 
-Consumers handled:
+Consumers are registered in consumer_registry.json. The default registration is:
   jedarden.com  (local checkout, default ~/jedarden.com)
     public/brand/logo.svg        byte-identical copy of logo/logo.svg
     public/brand/logo-512.png    byte-identical copy of logo/logo-512.png
@@ -27,6 +27,11 @@ Consumers handled:
                                  avatars/github-460.png (GitHub recompresses on
                                  serve, so this is a perceptual compare)
 
+The --apply mode writes the registered consumer's machine-readable provenance
+file after every registered asset passes. It records the exact brand-kit commit,
+the release tag when HEAD is tagged, every transform, and a SHA-256 for each
+consumer file. --check reports missing, malformed, or stale provenance.
+
 Site-owned favicon refresh:
   node scripts/make-favicons.mjs
                                  run in jedarden.com after copying a changed
@@ -35,7 +40,7 @@ Site-owned favicon refresh:
 
 Modes:
   --check  verify only (default); exits 1 on any stale/mismatched consumer
-  --apply  refresh the jedarden.com checkout in place (never commits), then verify
+  --apply  refresh the registered checkout in place (never commits), then verify
 
 A published Forgejo release record is required before either mode runs. Set
 FORGEJO_TOKEN to a read-only Forgejo API token when the Forgejo instance requires
@@ -45,9 +50,10 @@ Examples:
   python3 tools/consumer_sync.py --check
   python3 tools/consumer_sync.py --apply --release-tag v1.0.0
   python3 tools/consumer_sync.py --check --offline   # skip live-network checks
-  python3 tools/consumer_sync.py --check --site ~/src/jedarden.com
+  python3 tools/consumer_sync.py --check --consumer <id> --site <checkout>
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -62,6 +68,10 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
 
 ROOT = Path(__file__).resolve().parent.parent
+REGISTRY_RELPATH = "consumer_registry.json"
+REGISTRY_SCHEMA_VERSION = 1
+PROVENANCE_SCHEMA_VERSION = 1
+DEFAULT_CONSUMER = "jedarden.com"
 
 # JPEG recompression settings that reproduce the derivatives already shipped by
 # jedarden.com (brand-hero.jpg was verified pixel-identical to a quality-88
@@ -81,19 +91,194 @@ LIVE_OG_URL = "https://jedarden.com/brand/og.jpg"
 FORGEJO_API_URL = "https://git.ardenone.com/api/v1"
 FORGEJO_REPOSITORY = "jedarden/brand-kit"
 
-DEFAULT_SITE = Path.home() / "jedarden.com"
+def _relative_path(value, label):
+    """Validate a path stored in the registry or provenance metadata."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} must be a non-empty relative path")
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{label} must stay within the consumer checkout: {value}")
+    return value
 
-# (repo file, site file, description)
-COPIES = [
-    ("logo/logo.svg", "public/brand/logo.svg", "vector logo"),
-    ("logo/logo-512.png", "public/brand/logo-512.png", "512px logo PNG"),
-]
 
-# (width, height, fy crop bias, site file, description)
-HERO_DERIVATIVES = [
-    (1200, 630, 0.45, "public/brand/og.jpg", "open-graph card (social image for /brand)"),
-    (1536, 1024, 0.0, "src/assets/brand-hero.jpg", "brand page hero (via Astro asset pipeline)"),
-]
+def _validate_assets(
+    consumer_id, assets, destinations, supported_transforms, require_nonempty
+):
+    if require_nonempty and not assets:
+        raise ValueError(f"consumer {consumer_id!r} has no assets")
+    for index, asset in enumerate(assets):
+        if not isinstance(asset, dict):
+            raise ValueError(f"consumer {consumer_id!r} asset {index} must be an object")
+        destination = _relative_path(asset.get("path"), f"asset {index} path")
+        _relative_path(asset.get("source"), f"asset {index} source")
+        if not isinstance(asset.get("description"), str) or not asset["description"]:
+            raise ValueError(f"asset {destination} must declare a description")
+        if destination in destinations:
+            raise ValueError(f"consumer {consumer_id!r} registers {destination} more than once")
+        destinations.add(destination)
+        transform = asset.get("transform")
+        if not isinstance(transform, dict) or not isinstance(transform.get("type"), str):
+            raise ValueError(f"asset {destination} must declare transform.type")
+        transform_type = transform["type"]
+        if transform_type not in supported_transforms:
+            raise ValueError(f"asset {destination} has unsupported transform {transform_type!r}")
+        missing = [
+            field for field in supported_transforms[transform_type] if field not in transform
+        ]
+        if missing:
+            raise ValueError(
+                f"transform for {destination} is missing: {', '.join(missing)}"
+            )
+
+        if transform_type == "jpeg-crop":
+            try:
+                width = int(transform["width"])
+                height = int(transform["height"])
+                crop_y = float(transform["crop_y"])
+                quality = int(transform["quality"])
+                tolerance = float(transform["tolerance"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"transform for {destination} has invalid numeric values") from exc
+            if width <= 0 or height <= 0 or not 0 <= crop_y <= 1:
+                raise ValueError(f"transform for {destination} has invalid crop dimensions")
+            if not 1 <= quality <= 100 or tolerance < 0:
+                raise ValueError(f"transform for {destination} has invalid JPEG settings")
+
+
+def load_consumer(consumer_id, root=None):
+    """Load and validate one consumer registration from the repository registry."""
+    root = ROOT if root is None else Path(root)
+    registry_path = root / REGISTRY_RELPATH
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"consumer registry not found: {registry_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid consumer registry {registry_path}: {exc}") from exc
+
+    if not isinstance(registry, dict):
+        raise ValueError(f"{REGISTRY_RELPATH} must contain a JSON object")
+    if registry.get("schema_version") != REGISTRY_SCHEMA_VERSION:
+        raise ValueError(
+            f"{REGISTRY_RELPATH} schema_version must be {REGISTRY_SCHEMA_VERSION}"
+        )
+    repository = registry.get("repository")
+    if not isinstance(repository, str) or not repository:
+        raise ValueError(f"{REGISTRY_RELPATH} repository must be a non-empty string")
+    consumers = registry.get("consumers")
+    if not isinstance(consumers, dict) or consumer_id not in consumers:
+        choices = ", ".join(sorted(consumers)) if isinstance(consumers, dict) else "none"
+        raise ValueError(f"unknown consumer {consumer_id!r}; registered: {choices}")
+
+    config = consumers[consumer_id]
+    if not isinstance(config, dict):
+        raise ValueError(f"consumer {consumer_id!r} must be an object")
+    for field in ("checkout", "provenance"):
+        if not isinstance(config.get(field), str) or not config[field]:
+            raise ValueError(f"consumer {consumer_id!r} {field} must be a non-empty string")
+    provenance = _relative_path(config["provenance"], "provenance")
+
+    assets = config.get("assets")
+    if not isinstance(assets, list) or not assets:
+        raise ValueError(f"consumer {consumer_id!r} assets must be a non-empty list")
+    destinations = set()
+    _validate_assets(
+        consumer_id,
+        assets,
+        destinations,
+        {
+            "copy": (),
+            "jpeg-crop": ("width", "height", "crop_y", "quality", "tolerance"),
+        },
+        require_nonempty=True,
+    )
+    related_assets = config.get("related_assets", [])
+    if not isinstance(related_assets, list):
+        raise ValueError(f"consumer {consumer_id!r} related_assets must be a list")
+    _validate_assets(
+        consumer_id,
+        related_assets,
+        destinations,
+        {"consumer-generated": ()},
+        require_nonempty=False,
+    )
+    if provenance in destinations:
+        raise ValueError(f"consumer {consumer_id!r} provenance path is also a registered asset")
+
+    live_checks = config.get("live_checks", {})
+    if not isinstance(live_checks, dict):
+        raise ValueError(f"consumer {consumer_id!r} live_checks must be an object")
+    for name, check in live_checks.items():
+        if not isinstance(check, dict):
+            raise ValueError(f"consumer {consumer_id!r} live check {name!r} must be an object")
+        if name == "github_avatar":
+            _relative_path(check.get("source"), f"live check {name} source")
+        elif name == "live_og":
+            _relative_path(check.get("path"), f"live check {name} path")
+        if not isinstance(check.get("url"), str) or not check["url"]:
+            raise ValueError(f"live check {name!r} must declare a URL")
+        try:
+            tolerance = float(check.get("tolerance"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"live check {name!r} has invalid tolerance") from exc
+        if tolerance < 0:
+            raise ValueError(f"live check {name!r} has invalid tolerance")
+    return config
+
+
+def copy_assets(config):
+    return [
+        (asset["source"], asset["path"], asset["description"])
+        for asset in config["assets"]
+        if asset["transform"]["type"] == "copy"
+    ]
+
+
+def hero_derivatives(config):
+    return [
+        (
+            asset["transform"]["width"],
+            asset["transform"]["height"],
+            asset["transform"]["crop_y"],
+            asset["path"],
+            asset["description"],
+        )
+        for asset in config["assets"]
+        if asset["transform"]["type"] == "jpeg-crop"
+    ]
+
+
+def registered_assets(config):
+    return config["assets"] + config.get("related_assets", [])
+
+
+def load_registry(root=None):
+    root = ROOT if root is None else Path(root)
+    try:
+        registry = json.loads((root / REGISTRY_RELPATH).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot load {REGISTRY_RELPATH}: {exc}") from exc
+    if not isinstance(registry, dict):
+        raise ValueError(f"{REGISTRY_RELPATH} must contain a JSON object")
+    return registry
+
+
+REGISTRY = load_registry()
+DEFAULT_CONFIG = load_consumer(DEFAULT_CONSUMER)
+COPIES = copy_assets(DEFAULT_CONFIG)
+HERO_DERIVATIVES = hero_derivatives(DEFAULT_CONFIG)
+_JPEG_SETTINGS = {
+    (
+        asset["transform"]["quality"],
+        asset["transform"]["tolerance"],
+    )
+    for asset in DEFAULT_CONFIG["assets"]
+    if asset["transform"]["type"] == "jpeg-crop"
+}
+if len(_JPEG_SETTINGS) != 1:
+    raise ValueError("all registered jpeg-crop assets must share quality and tolerance")
+JPEG_QUALITY, JPEG_TOLERANCE = next(iter(_JPEG_SETTINGS))
+DEFAULT_SITE = Path(DEFAULT_CONFIG["checkout"]).expanduser()
 
 
 def hero_crop(tw, th, fy):
@@ -110,7 +295,137 @@ def mean_luma_diff(a, b):
     return ImageStat.Stat(d.convert("L")).mean[0]
 
 
-def check_copies(site, apply):
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def brand_kit_reference(repository, release=None):
+    """Return the immutable identity to write into a consumer manifest."""
+    try:
+        commit_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"cannot record brand-kit commit: {exc}") from exc
+    if commit_result.returncode != 0 or not commit_result.stdout.strip():
+        detail = commit_result.stderr.strip() or "git rev-parse HEAD failed"
+        raise RuntimeError(f"cannot record brand-kit commit: {detail}")
+
+    if release is None:
+        try:
+            release_result = subprocess.run(
+                ["git", "describe", "--tags", "--exact-match", "HEAD"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"cannot determine the brand-kit release: {exc}") from exc
+        release = release_result.stdout.strip() if release_result.returncode == 0 else None
+    return {
+        "repository": repository,
+        "commit": commit_result.stdout.strip(),
+        "release": release or None,
+    }
+
+
+def provenance_manifest(site, consumer_id, config, reference):
+    assets = {}
+    for asset in registered_assets(config):
+        destination = site / asset["path"]
+        if not destination.is_file():
+            raise FileNotFoundError(destination)
+        assets[asset["path"]] = {
+            "source": asset["source"],
+            "transform": asset["transform"],
+            "sha256": sha256_file(destination),
+        }
+    return {
+        "schema_version": PROVENANCE_SCHEMA_VERSION,
+        "consumer": consumer_id,
+        "brand_kit": reference,
+        "assets": assets,
+    }
+
+
+def provenance_label(reference):
+    if not isinstance(reference, dict):
+        return "<missing>"
+    return reference.get("release") or reference.get("commit") or "<missing>"
+
+
+def check_provenance(site, consumer_id, config, reference, apply):
+    """Create or validate the consumer's exact release/commit manifest."""
+    path = site / config["provenance"]
+    if not apply and not path.is_file():
+        print(f"STALE consumer provenance: {config['provenance']} is missing; run --apply")
+        return False
+
+    try:
+        expected = provenance_manifest(site, consumer_id, config, reference)
+    except FileNotFoundError as exc:
+        print(f"FAIL  consumer provenance: cannot record missing asset {exc}")
+        return False
+
+    payload = json.dumps(expected, indent=2, sort_keys=True) + "\n"
+    if apply:
+        try:
+            current = path.read_text(encoding="utf-8") if path.is_file() else None
+        except UnicodeDecodeError:
+            current = None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if current == payload:
+            print(
+                f"PASS  consumer provenance: {config['provenance']} records "
+                f"brand-kit @{provenance_label(reference)}"
+            )
+        else:
+            path.write_text(payload, encoding="utf-8")
+            print(
+                f"SYNC  consumer provenance: {config['provenance']} records "
+                f"brand-kit @{provenance_label(reference)}"
+            )
+        return True
+
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        print(
+            f"STALE consumer provenance: {config['provenance']} is invalid JSON ({exc}); "
+            "run --apply"
+        )
+        return False
+
+    if current == expected:
+        print(
+            f"PASS  consumer provenance: {config['provenance']} records "
+            f"brand-kit @{provenance_label(reference)} with all asset digests"
+        )
+        return True
+
+    current_reference = current.get("brand_kit") if isinstance(current, dict) else None
+    if current_reference != reference:
+        print(
+            "STALE consumer provenance: brand-kit reference differs; expected "
+            f"{provenance_label(reference)} ({reference['commit']}), recorded "
+            f"{provenance_label(current_reference)}; run --apply"
+        )
+    else:
+        print(
+            f"STALE consumer provenance: manifest or asset digest differs at "
+            f"brand-kit @{provenance_label(reference)}; run --apply"
+        )
+    return False
+
+
+def check_copies(site, apply, copies=None):
     """Logo assets must be byte-identical — the honest staleness test.
 
     Pixels can match while bytes differ (e.g. this repo's oxipng pass), and a
@@ -118,7 +433,7 @@ def check_copies(site, apply):
     release, which is exactly what this workflow exists to catch.
     """
     ok = True
-    for repo_rel, site_rel, desc in COPIES:
+    for repo_rel, site_rel, desc in COPIES if copies is None else copies:
         repo_f, site_f = ROOT / repo_rel, site / site_rel
         if not site_f.exists():
             print(f"FAIL  {site_rel}: missing (expected copy of {repo_rel})")
@@ -137,9 +452,27 @@ def check_copies(site, apply):
     return ok
 
 
-def check_hero_derivatives(site, apply):
+def check_hero_derivatives(site, apply, derivatives=None, config=None):
     ok = True
-    for tw, th, fy, site_rel, desc in HERO_DERIVATIVES:
+    if derivatives is None:
+        derivatives = HERO_DERIVATIVES
+        settings = None
+    else:
+        config = DEFAULT_CONFIG if config is None else config
+        settings = {
+            asset["path"]: (
+                asset["transform"]["quality"],
+                asset["transform"]["tolerance"],
+            )
+            for asset in config["assets"]
+            if asset["transform"]["type"] == "jpeg-crop"
+        }
+    for tw, th, fy, site_rel, desc in derivatives:
+        quality, tolerance = (
+            (JPEG_QUALITY, JPEG_TOLERANCE)
+            if settings is None
+            else settings[site_rel]
+        )
         site_f = site / site_rel
         fresh = hero_crop(tw, th, fy)
         if not site_f.exists():
@@ -147,16 +480,16 @@ def check_hero_derivatives(site, apply):
             ok = False
             continue
         diff = mean_luma_diff(Image.open(site_f).convert("RGB"), fresh)
-        if diff <= JPEG_TOLERANCE:
+        if diff <= tolerance:
             print(f"PASS  {site_rel}: matches source/hero.png crop "
                   f"({tw}x{th}, fy={fy}, mean diff {diff:.2f})")
         elif apply:
-            fresh.save(site_f, "JPEG", quality=JPEG_QUALITY)
+            fresh.save(site_f, "JPEG", quality=quality)
             print(f"SYNC  {site_rel}: regenerated from source/hero.png "
-                  f"({tw}x{th}, quality {JPEG_QUALITY}; was off by {diff:.2f})")
+                  f"({tw}x{th}, quality {quality}; was off by {diff:.2f})")
         else:
             print(f"STALE {site_rel}: mean luma diff {diff:.2f} vs source/hero.png "
-                  f"(tolerance {JPEG_TOLERANCE}) — run --apply")
+                  f"(tolerance {tolerance}) — run --apply")
             ok = False
     return ok
 
@@ -242,56 +575,68 @@ def check_forgejo_release(tag, api_url=None, token=None):
     return True
 
 
-def check_live_avatar(offline):
+def check_live_avatar(
+    offline,
+    source="avatars/github-460.png",
+    url=AVATAR_URL,
+    tolerance=AVATAR_TOLERANCE,
+):
     """The avatar is set outside any build system, so it can only be verified, never synced."""
     if offline:
         print("SKIP  github avatar: --offline passed; the re-verify did NOT happen — "
               "re-run without --offline before declaring this step done")
         return True
-    ref = Image.open(ROOT / "avatars/github-460.png").convert("RGB")
+    ref = Image.open(ROOT / source).convert("RGB")
     try:
-        live = Image.open(io.BytesIO(fetch(AVATAR_URL))).convert("RGB")
+        live = Image.open(io.BytesIO(fetch(url))).convert("RGB")
     except Exception as e:
-        print(f"SKIP  github avatar: could not fetch {AVATAR_URL} ({e}) — "
+        print(f"SKIP  github avatar: could not fetch {url} ({e}) — "
               "the re-verify did NOT happen; re-run when online")
         return True
     if live.size != ref.size:
         ref = ref.resize(live.size, Image.LANCZOS)
     diff = mean_luma_diff(live, ref)
-    if diff <= AVATAR_TOLERANCE:
-        print(f"PASS  github avatar: live avatar matches avatars/github-460.png "
-              f"(mean diff {diff:.2f}, tolerance {AVATAR_TOLERANCE} for GitHub recompression)")
+    if diff <= tolerance:
+        print(f"PASS  github avatar: live avatar matches {source} "
+              f"(mean diff {diff:.2f}, tolerance {tolerance} for GitHub recompression)")
         return True
     print(f"STALE github avatar: live avatar mean diff {diff:.2f} vs "
-          f"avatars/github-460.png — upload avatars/github-460.png via "
+          f"{source} — upload {source} via "
           f"github.com Settings > Public profile > Edit avatar, then re-run")
     return False
 
 
-def check_live_og(site, offline):
+def check_live_og(
+    site,
+    offline,
+    path="public/brand/og.jpg",
+    url=LIVE_OG_URL,
+    tolerance=JPEG_TOLERANCE,
+):
     """Catches a refreshed checkout that was never pushed, or an undeployed Pages build."""
+    label = Path(path).name
     if offline:
-        print("SKIP  live og.jpg: --offline passed; deploy status unverified")
+        print(f"SKIP  live {label}: --offline passed; deploy status unverified")
         return True
-    local = site / "public/brand/og.jpg"
+    local = site / path
     try:
-        live = Image.open(io.BytesIO(fetch(LIVE_OG_URL))).convert("RGB")
+        live = Image.open(io.BytesIO(fetch(url))).convert("RGB")
     except Exception as e:
-        print(f"SKIP  live og.jpg: could not fetch {LIVE_OG_URL} ({e}) — "
+        print(f"SKIP  live {label}: could not fetch {url} ({e}) — "
               "deploy status unverified; re-run when online")
         return True
     if not local.exists():
         print(f"FAIL  live og.jpg: local {local} missing to compare against")
         return False
     if live.size != Image.open(local).size:
-        print("STALE live og.jpg: live size differs from checkout copy — "
+        print(f"STALE live {label}: live size differs from checkout copy — "
               "commit + push the checkout, wait for the Cloudflare Pages build")
         return False
     diff = mean_luma_diff(live, Image.open(local).convert("RGB"))
-    if diff <= JPEG_TOLERANCE:
-        print(f"PASS  live og.jpg: jedarden.com serves the checkout copy (mean diff {diff:.2f})")
+    if diff <= tolerance:
+        print(f"PASS  live {label}: site serves the checkout copy (mean diff {diff:.2f})")
         return True
-    print(f"STALE live og.jpg: live copy differs from checkout (mean diff {diff:.2f}) — "
+    print(f"STALE live {label}: live copy differs from checkout (mean diff {diff:.2f}) — "
           "commit + push the checkout, wait for the Cloudflare Pages build")
     return False
 
@@ -301,15 +646,23 @@ def main():
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="verify only (default)")
     mode.add_argument("--apply", action="store_true",
-                      help="refresh the jedarden.com checkout in place, then verify")
-    ap.add_argument("--site", type=Path, default=DEFAULT_SITE,
-                    help=f"jedarden.com checkout (default {DEFAULT_SITE})")
+                      help="refresh the registered checkout in place, then verify")
+    ap.add_argument("--consumer", default=DEFAULT_CONSUMER,
+                    help=f"consumer id from {REGISTRY_RELPATH} (default: {DEFAULT_CONSUMER})")
+    ap.add_argument("--site", type=Path,
+                    help="consumer checkout (overrides the registered default)")
     ap.add_argument("--release-tag",
                     help="release tag to verify (default: the exact tag checked out at HEAD)")
     ap.add_argument("--offline", action="store_true",
-                    help="skip the live github-avatar and live og.jpg checks; the "
-                         "Forgejo release gate is still required")
+                    help="skip registered live-resource checks; the Forgejo release "
+                         "gate is still required")
     args = ap.parse_args()
+
+    try:
+        config = load_consumer(args.consumer)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 2
 
     try:
         tag = release_tag(args.release_tag)
@@ -321,46 +674,97 @@ def main():
         print("Forgejo release gate failed; no consumer files were changed.")
         return 1
 
-    if not (args.site / "public/brand").is_dir():
-        print(f"error: {args.site} does not look like a jedarden.com checkout "
-              f"(no public/brand/) — pass --site <path>")
+    site = args.site or Path(config["checkout"]).expanduser()
+    if not site.is_dir():
+        print(f"error: consumer checkout {site} does not exist — pass --site <path>")
         return 2
 
-    print(f"brand-kit: {ROOT} @ {tag}")
-    print(f"consumer:  {args.site} (mode: {'apply' if args.apply else 'check'})\n")
+    try:
+        reference = brand_kit_reference(REGISTRY["repository"])
+    except (KeyError, RuntimeError) as exc:
+        print(f"error: cannot record consumer provenance: {exc}")
+        return 2
+
+    print(f"brand-kit: {ROOT} @ {provenance_label(reference)} ({reference['commit']})")
+    print(f"consumer:  {site} ({args.consumer}, mode: "
+          f"{'apply' if args.apply else 'check'})\n")
 
     local_ok = True
-    print("logo copies (byte-identical required):")
-    local_ok &= check_copies(args.site, args.apply)
-    print("\nhero derivatives (regenerated from source/hero.png):")
-    local_ok &= check_hero_derivatives(args.site, args.apply)
-    print("\nresources set outside any build system (verify only):")
-    live_ok = check_live_avatar(args.offline)
-    live_ok &= check_live_og(args.site, args.offline)
+    copies = copy_assets(config)
+    derivatives = hero_derivatives(config)
+    print("registered byte copies (byte-identical required):")
+    copies_ok = check_copies(site, args.apply, copies)
+    local_ok &= copies_ok
+    print("\nregistered JPEG derivatives (regenerated from source/hero.png):")
+    derivatives_ok = check_hero_derivatives(site, args.apply, derivatives, config)
+    local_ok &= derivatives_ok
+
+    print("\nconsumer provenance (release or commit plus per-file digests):")
+    if copies_ok and derivatives_ok:
+        local_ok &= check_provenance(
+            site, args.consumer, config, reference, args.apply
+        )
+    else:
+        print("FAIL  consumer provenance: not recorded until every asset check passes")
+        local_ok = False
+
+    live_checks = config.get("live_checks", {})
+    live_ok = True
+    if live_checks:
+        print("\nresources set outside any build system (verify only):")
+        avatar = live_checks.get("github_avatar")
+        if avatar:
+            if avatar == DEFAULT_CONFIG.get("live_checks", {}).get("github_avatar"):
+                live_ok &= check_live_avatar(args.offline)
+            else:
+                live_ok &= check_live_avatar(
+                    args.offline,
+                    source=avatar["source"],
+                    url=avatar["url"],
+                    tolerance=avatar["tolerance"],
+                )
+        live_og = live_checks.get("live_og")
+        if live_og:
+            if live_og == DEFAULT_CONFIG.get("live_checks", {}).get("live_og"):
+                live_ok &= check_live_og(site, args.offline)
+            else:
+                live_ok &= check_live_og(
+                    site,
+                    args.offline,
+                    path=live_og["path"],
+                    url=live_og["url"],
+                    tolerance=live_og["tolerance"],
+                )
 
     print()
     if args.apply:
         quoted_tag = shlex.quote(tag)
-        commit_message = shlex.quote(f"chore(brand): sync to brand-kit @{tag}")
+        label = provenance_label(reference)
+        commit_message = shlex.quote(f"chore(brand): sync to brand-kit @{label}")
         python = shlex.quote(sys.executable)
+        paths = [asset["path"] for asset in registered_assets(config)]
+        # favicon.ico is generated by the same site-owned command but is not
+        # included in the provenance inventory because the drift detector's
+        # documented contract covers the four web-facing outputs above.
+        paths.append("public/favicon.ico")
+        paths.append(config["provenance"])
         print("Applied. Finish by hand:")
-        print(f"  SITE={shlex.quote(str(args.site))}")
+        print(f"  SITE={shlex.quote(str(site))}")
         print("  (")
         print('    cd -- "$SITE" || exit')
         print("    git status                 # review the refreshed files")
         print("    node scripts/make-favicons.mjs  # if the logo changed; site-owned")
-        print("    git add public/brand src/assets public/favicon.svg public/favicon.ico "
-              "public/apple-touch-icon.png public/icon-192.png public/icon-512.png")
+        print(f"    git add -- {shlex.join(paths)}")
         print(f"    git commit -m {commit_message}")
         print("    git push                    # Cloudflare Pages deploys on push")
         print("  )")
         print(f"  {python} {ROOT / 'tools/consumer_sync.py'} --release-tag {quoted_tag} "
-              "--check --site \"$SITE\"")
+              f"--consumer {shlex.quote(args.consumer)} --check --site \"$SITE\"")
         print(f"  {python} {ROOT / 'tools/consumer_drift.py'} --release-tag {quoted_tag} "
               "--site \"$SITE\"   # both must be all-CURRENT after deploy")
         return 0 if local_ok else 1
     ok = local_ok and live_ok
-    print("All consumer copies in sync." if ok else
+    print("All consumer copies and provenance in sync." if ok else
           "Consumer drift found — see the STALE/FAIL lines above, or the checklist in "
           "docs/notes/post-tag-consumer-update.md.")
     return 0 if ok else 1

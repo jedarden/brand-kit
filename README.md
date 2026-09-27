@@ -249,6 +249,15 @@ release for a scheduler. If the detector is newer than the tag under audit, use
 `--source-root <release-checkout>` so the tool code stays current while the
 compared inputs come from the published tag.
 
+Machine-readable consumer registration lives in
+[`consumer_registry.json`](consumer_registry.json). It names each consumer's
+checkout, provenance manifest, copied/derived files, site-owned related files,
+and optional live checks. `consumer_sync.py --apply` writes the manifest with
+the exact brand-kit commit, release tag when available, transforms, and
+per-file SHA-256 digests; `--check` reports missing or stale manifests. Future
+consumers add an entry to this registry, commit the generated manifest in their
+own checkout, and run the script with `--consumer <id> --site <checkout>`.
+
 Favicon generation remains site-owned: after `consumer_sync.py --apply` refreshes
 a changed logo, run `node scripts/make-favicons.mjs` from jedarden.com before
 committing its site diff. The command uses that repository's Sharp toolchain;

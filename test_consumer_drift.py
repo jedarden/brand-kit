@@ -38,6 +38,10 @@ def make_root(tmp_path):
     (root / "logo").mkdir()
     (root / "avatars").mkdir()
     (root / "favicon").mkdir()
+    (root / consumer_sync.REGISTRY_RELPATH).write_text(
+        (consumer_sync.ROOT / consumer_sync.REGISTRY_RELPATH).read_text(),
+        encoding="utf-8",
+    )
     (root / "source/logo.svg").write_bytes(b"<svg>source</svg>")
     Image.new("RGB", (40, 30), (100, 120, 140)).save(root / "source/hero.png")
     (root / "logo/logo.svg").write_bytes(b"<svg>release</svg>")
@@ -522,12 +526,17 @@ def test_release_to_consumer_refresh_only_remediation_writes(
     assert consumer_sync.main() == 0
     remediation_output = capsys.readouterr().out
     assert "PASS  Forgejo release: v1.0.0 is published" in remediation_output
-    assert remediation_output.count("SYNC  ") == 4
+    assert remediation_output.count("SYNC  ") == 5
     assert write_events == [
         ("remediate", "write_bytes", site / "public/brand/logo.svg"),
         ("remediate", "write_bytes", site / "public/brand/logo-512.png"),
         ("remediate", "image.save", site / "public/brand/og.jpg"),
         ("remediate", "image.save", site / "src/assets/brand-hero.jpg"),
+        (
+            "remediate",
+            "write_text",
+            site / "public/brand/brand-kit-provenance.json",
+        ),
     ]
     assert (site / "public/brand/logo.svg").read_bytes() == (
         root / "logo/logo.svg"

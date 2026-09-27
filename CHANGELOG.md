@@ -28,6 +28,11 @@ All notable changes to the brand kit are documented in this file.
   `node scripts/make-favicons.mjs` in jedarden.com after a logo sync and before
   its commit, while `consumer_drift.py` detects stale `favicon.svg`,
   `apple-touch-icon.png`, `icon-192.png`, and `icon-512.png` outputs
+- Machine-readable downstream provenance: `consumer_registry.json` registers
+  syncable consumers and `consumer_sync.py` records each consumer's brand-kit
+  release/commit, transform metadata, and per-file SHA-256 digests while
+  reporting stale manifests; the registration contract is documented in
+  `docs/notes/post-tag-consumer-update.md`
 
 ### Changed
 - `tools/consumer_sync.py` now requires a matching, published (non-draft) Forgejo

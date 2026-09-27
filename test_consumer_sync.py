@@ -1,4 +1,5 @@
 import io
+import json
 import shlex
 import sys
 import urllib.error
@@ -7,6 +8,13 @@ from pathlib import Path
 from PIL import Image
 
 from tools import consumer_sync
+
+
+REFERENCE = {
+    "repository": "https://git.ardenone.com/jedarden/brand-kit.git",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "release": "v9.9.9",
+}
 
 
 def png_bytes(image):
@@ -28,6 +36,153 @@ def write_synced_derivatives(site):
         consumer_sync.hero_crop(width, height, fy).save(
             destination, "JPEG", quality=consumer_sync.JPEG_QUALITY
         )
+
+
+def write_related_assets(site, config=None):
+    config = consumer_sync.DEFAULT_CONFIG if config is None else config
+    for asset in config.get("related_assets", []):
+        destination = site / asset["path"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(f"related:{asset['path']}".encode())
+
+
+def write_current_provenance(site, config=None, reference=None):
+    config = consumer_sync.DEFAULT_CONFIG if config is None else config
+    reference = REFERENCE if reference is None else reference
+    write_related_assets(site, config)
+    return consumer_sync.check_provenance(
+        site, "jedarden.com", config, reference, apply=True
+    )
+
+
+def test_registry_covers_every_documented_jedarden_copy():
+    config = consumer_sync.load_consumer("jedarden.com")
+
+    assert config["checkout"] == "~/jedarden.com"
+    assert config["provenance"] == "public/brand/brand-kit-provenance.json"
+    assert [asset["path"] for asset in config["assets"]] == [
+        "public/brand/logo.svg",
+        "public/brand/logo-512.png",
+        "public/brand/og.jpg",
+        "src/assets/brand-hero.jpg",
+    ]
+    assert [asset["transform"]["type"] for asset in config["assets"]] == [
+        "copy",
+        "copy",
+        "jpeg-crop",
+        "jpeg-crop",
+    ]
+    assert [asset["path"] for asset in config["related_assets"]] == [
+        "public/favicon.svg",
+        "public/apple-touch-icon.png",
+        "public/icon-192.png",
+        "public/icon-512.png",
+    ]
+
+
+def test_provenance_records_release_commit_transforms_and_asset_digests(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "brand-kit"
+    site = make_site(tmp_path)
+    (root / "source").mkdir(parents=True)
+    Image.new("RGB", (1200, 800), (30, 60, 90)).save(root / "source/hero.png", "PNG")
+    monkeypatch.setattr(consumer_sync, "ROOT", root)
+    for repo_rel, _, _ in consumer_sync.COPIES:
+        destination = root / repo_rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(f"source:{repo_rel}".encode())
+    for repo_rel, site_rel, _ in consumer_sync.COPIES:
+        (site / site_rel).write_bytes((root / repo_rel).read_bytes())
+    write_synced_derivatives(site)
+
+    assert write_current_provenance(site)
+
+    manifest = json.loads(
+        (site / consumer_sync.DEFAULT_CONFIG["provenance"]).read_text(encoding="utf-8")
+    )
+    assert manifest["schema_version"] == consumer_sync.PROVENANCE_SCHEMA_VERSION
+    assert manifest["consumer"] == "jedarden.com"
+    assert manifest["brand_kit"] == REFERENCE
+    assert set(manifest["assets"]) == {
+        "public/brand/logo.svg",
+        "public/brand/logo-512.png",
+        "public/brand/og.jpg",
+        "src/assets/brand-hero.jpg",
+        "public/favicon.svg",
+        "public/apple-touch-icon.png",
+        "public/icon-192.png",
+        "public/icon-512.png",
+    }
+    for asset in manifest["assets"].values():
+        assert len(asset["sha256"]) == 64
+        assert "transform" in asset
+
+
+def test_check_reports_missing_invalid_and_stale_provenance(tmp_path, capsys):
+    site = make_site(tmp_path)
+    for _, site_rel, _ in consumer_sync.COPIES:
+        (site / site_rel).write_bytes(b"asset")
+    for _, _, _, site_rel, _ in consumer_sync.HERO_DERIVATIVES:
+        (site / site_rel).write_bytes(b"asset")
+
+    assert consumer_sync.check_provenance(
+        site, "jedarden.com", consumer_sync.DEFAULT_CONFIG, REFERENCE, apply=False
+    ) is False
+    assert "is missing; run --apply" in capsys.readouterr().out
+
+    assert write_current_provenance(site)
+    capsys.readouterr()
+    assert consumer_sync.check_provenance(
+        site, "jedarden.com", consumer_sync.DEFAULT_CONFIG, REFERENCE, apply=False
+    ) is True
+
+    manifest_path = site / consumer_sync.DEFAULT_CONFIG["provenance"]
+    manifest_path.write_text("not json\n", encoding="utf-8")
+    assert consumer_sync.check_provenance(
+        site, "jedarden.com", consumer_sync.DEFAULT_CONFIG, REFERENCE, apply=False
+    ) is False
+    assert "invalid JSON" in capsys.readouterr().out
+
+    assert write_current_provenance(site)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["brand_kit"]["commit"] = "f" * 40
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert consumer_sync.check_provenance(
+        site, "jedarden.com", consumer_sync.DEFAULT_CONFIG, REFERENCE, apply=False
+    ) is False
+    assert "brand-kit reference differs" in capsys.readouterr().out
+
+
+def test_future_consumer_registration_is_loaded_from_the_registry(tmp_path):
+    registry = {
+        "schema_version": 1,
+        "repository": "https://git.ardenone.com/jedarden/brand-kit.git",
+        "consumers": {
+            "example.test": {
+                "checkout": str(tmp_path),
+                "provenance": "assets/brand-kit-provenance.json",
+                "assets": [
+                    {
+                        "path": "assets/logo.svg",
+                        "source": "logo/logo.svg",
+                        "transform": {"type": "copy"},
+                        "description": "logo",
+                    }
+                ],
+            }
+        },
+    }
+    (tmp_path / consumer_sync.REGISTRY_RELPATH).write_text(
+        json.dumps(registry), encoding="utf-8"
+    )
+
+    config = consumer_sync.load_consumer("example.test", root=tmp_path)
+
+    assert consumer_sync.copy_assets(config) == [
+        ("logo/logo.svg", "assets/logo.svg", "logo")
+    ]
+    assert consumer_sync.hero_derivatives(config) == []
 
 
 def test_forgejo_release_check_accepts_only_a_published_matching_record(
@@ -329,6 +484,8 @@ def test_check_skips_live_resources_on_fetch_failure(tmp_path, monkeypatch, caps
     for repo_rel, site_rel, _ in consumer_sync.COPIES:
         (site / site_rel).write_bytes((consumer_sync.ROOT / repo_rel).read_bytes())
     write_synced_derivatives(site)
+    monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
+    write_current_provenance(site)
 
     def fail_fetch(url):
         raise TimeoutError("network unavailable")

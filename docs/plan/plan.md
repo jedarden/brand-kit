@@ -198,8 +198,10 @@ this repo: `docs/notes/post-tag-consumer-update.md` and
 byte-copies the logo masters into the jedarden.com checkout and regenerates both
 hero JPEGs from `source/hero.png` at the exact crop/quality the live files were
 verified to use (open-graph crop, quality 88); (2) commits and pushes in
-jedarden.com with a `sync to brand-kit @vX.Y.Z` message, which is the provenance
-record the hand-copy process never had; (3) `--check`s — comparing site copies
+jedarden.com with a `sync to brand-kit @vX.Y.Z` message, which is a convenient
+human-readable summary; `consumer_registry.json` and the committed
+`brand-kit-provenance.json` provide machine-readable provenance; (3) `--check`s
+— comparing site copies
 and fetching the live og.jpg and the live GitHub avatar (perceptual compare,
 since GitHub recompresses on serve) — which must be all-PASS after the Pages
 deploy;
@@ -369,11 +371,12 @@ GitHub avatar upload.
   cross-repository write credentials or automatic consumer mutation.
 - The release tag, source digests, observed digests, image metrics, and
   consumer-level status are retained in the report for triage.
-- The inventory is extensible: adding a future consumer means adding a
-  read-only path/URL rule to `consumer-drift.json`; it does not expand the
-  remediation authority of this repository.
+- The inventory is extensible: adding a future read-only audit means adding a
+  path/URL rule to `consumer-drift.json`; adding a syncable checkout also means
+  registering its relative copies and provenance path in
+  `consumer_registry.json`. Neither expands the remediation authority of this
+  repository beyond the explicitly registered checkout.
 - A failed or indeterminate run is visible as a failed Argo workflow. The
   manifest is reconciled through the shared `declarative-config` ArgoCD
   application, while this repository remains the owner of the detector and its
   tests.
-

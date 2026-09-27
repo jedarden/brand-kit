@@ -62,6 +62,36 @@ its trigger source together without granting the detector write credentials.
 | `github.com/jedarden` | profile avatar | manual upload of `avatars/github-460.png`. GitHub recompresses on serve, so equality is perceptual, never byte-exact |
 | `jedarden.com` favicon set *(site-owned)* | `public/favicon.svg`, `public/apple-touch-icon.png`, `public/icon-192.png`, `public/icon-512.png` | generated from `public/brand/logo.svg` by `node scripts/make-favicons.mjs` in jedarden.com. `consumer_sync.py` copies the logo first but deliberately does not regenerate these files; the read-only drift detector verifies all four |
 
+## Machine-readable registration and provenance
+
+`consumer_registry.json` is the source of truth for copies that a checkout can
+record. Each consumer entry declares:
+
+- `checkout`: its default local checkout, overridden with `--site` when needed;
+- `provenance`: a JSON file committed in that consumer checkout;
+- `assets`: files managed by `consumer_sync.py`, each with a relative `path`,
+  canonical brand-kit `source`, description, and a `transform` (`copy` or
+  `jpeg-crop`); and
+- `related_assets`: files produced by the consumer's own tooling. These are
+  included in the manifest but are not overwritten by this repository.
+
+`consumer_sync.py --apply` writes the provenance file only after the managed
+copies pass and every registered file exists. The manifest records the full
+brand-kit commit, the exact release tag when `HEAD` is tagged, each registered
+file's SHA-256, and the declared transform. `--check` compares that manifest
+with the current checkout and reports a missing, malformed, old-reference, or
+changed-digest manifest as `STALE`; it never silently refreshes it.
+
+To register a future consumer, add a stable identifier and its checkout-relative
+paths to `consumer_registry.json`, choose the appropriate transform, and commit
+the registry change. Add a `related_assets` entry for generated files and a
+`live_checks` entry only when the script should perform a read-only URL check.
+Run `consumer_sync.py --apply --consumer <id> --site <checkout>` after the
+consumer has all registered files, commit the generated provenance file in the
+consumer repository, and use the matching `--check` command in its update or
+scheduled check. Paths must remain relative to the consumer checkout; a
+consumer can register copy assets without adding any live checks.
+
 ## The workflow
 
 Prereqs: a published `vX.Y.Z` entry in Forgejo's **Releases** tab; a **clean**
@@ -121,7 +151,10 @@ GitHub Release object; Forgejo is the sole release record.
    fails, publish the Forgejo Release or fix API access and run it again.
    This copies the two logo files byte-for-byte and regenerates both hero JPEGs
    from `source/hero.png`. Files already in sync are left untouched, so the
-   resulting site diff contains only what actually changed.
+   resulting site diff contains only what actually changed. If the site-owned
+   favicon files are already present, this first run also records their current
+   bytes; rerun the command after the favicon step below so the final manifest
+   captures the regenerated outputs.
 
 2. **If the logo changed, refresh the site-owned favicon set.** Run the
    consumer repository's own command after step 1 has copied the new
@@ -138,6 +171,10 @@ GitHub Release object; Forgejo is the sole release record.
    and `public/favicon.ico`. `consumer_sync.py` intentionally does not write
    these site-owned outputs. A hero-only release skips this step.
 
+   Run the sync command once more after this generator completes. That refreshes
+   `public/brand/brand-kit-provenance.json` with the final favicon digests without
+   rewriting files that are already current.
+
 3. **Commit and push in jedarden.com:**
    ```bash
    (
@@ -151,7 +188,10 @@ GitHub Release object; Forgejo is the sole release record.
    ```
    The generator also rewrites `public/favicon.ico`, so stage it with the four
    named PNG/SVG outputs. The subshell leaves the brand-kit checkout as the
-   current directory. The `@vX.Y.Z` commit message is the provenance record.
+   current directory. The generated
+   `public/brand/brand-kit-provenance.json` is the machine-readable provenance
+   record; the `@vX.Y.Z` commit message remains a convenient human-readable
+   summary.
 
 4. **Re-verify after the deploy lands:**
    ```bash
@@ -182,6 +222,11 @@ GitHub Release object; Forgejo is the sole release record.
 
 ## What "in sync" means per asset
 
+- **Provenance manifest** — `public/brand/brand-kit-provenance.json` must name
+  the current brand-kit commit (and release tag when available), use the
+  registry's transforms, and contain the current SHA-256 for all eight
+  registered checkout files. A missing or mismatched manifest is stale even if
+  the rendered pixels happen to match.
 - **Logo copies and `favicon.svg`** — byte-identical. Pixels matching isn't
   the bar for the logo copies: the whole point is that the consumer's copy
   provably came from the tagged release, and e.g. this repo's oxipng pass made
