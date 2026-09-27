@@ -113,7 +113,7 @@ First complete the one-time pinned toolchain setup documented in
 [docs/notes/asset-toolchain.md](docs/notes/asset-toolchain.md):
 
 ```bash
-cargo install resvg@0.47.0 vtracer@0.6.5
+cargo install --locked resvg@0.47.0 vtracer@0.6.5
 python3 -m venv .venv
 .venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2
 ```
@@ -226,7 +226,7 @@ pinned toolchain and runs this acceptance sequence in order:
    WorkflowTemplate. This parses the pin table and fails on any tool,
    version, install-command, or Pillow wheel-flavor mismatch.
 2. Install `resvg@0.47.0` and `vtracer@0.6.5` with
-   `cargo install resvg@0.47.0 vtracer@0.6.5`, create the pinned virtualenv,
+   `cargo install --locked resvg@0.47.0 vtracer@0.6.5`, create the pinned virtualenv,
    and run `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2`.
 3. Run `.venv/bin/python tools/verify_assets.py`. It must exit `0`, including the exact
    generated-asset inventory, authoritative-source sidecar, and preserved-logo
@@ -235,8 +235,12 @@ pinned toolchain and runs this acceptance sequence in order:
 4. Run the full default suite with `.venv/bin/python -m pytest -q`. Any test failure
    exits non-zero and fails the workflow, including the contract tests in
    `test_check_asset_toolchain.py`.
-5. Run `.venv/bin/python tools/build_assets.py` to regenerate every derived asset.
-6. Run `git diff --exit-code --quiet`. A regenerated tracked-file difference
+5. Run `python3 tools/check_reproducibility.py`. It creates two independent
+   clean Cargo/Python environments, exercises the vtracer trace and the full
+   resvg/Pillow build, compares every generated file with the committed tree,
+   and fails on any transitive dependency or byte drift.
+6. Run `.venv/bin/python tools/build_assets.py` to regenerate every derived asset.
+7. Run `git diff --exit-code --quiet`. A regenerated tracked-file difference
    exits non-zero and fails the workflow.
 
 The container uses `set -ex`, so an install, verification, test, build, or diff

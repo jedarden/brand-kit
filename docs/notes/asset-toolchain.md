@@ -105,8 +105,8 @@ intentionally best-effort.
 
 | Tool | Pin | Install command | Notes |
 |---|---|---|---|
-| resvg | `0.47.0` | `cargo install resvg@0.47.0` | Renders `source/logo.svg` at each target size. |
-| vtracer | `0.6.5` Cargo CLI | `cargo install vtracer@0.6.5` | `tools/trace_logo.py` invokes the Cargo-installed binary; it does not use the PyPI `vtracer` package. |
+| resvg | `0.47.0` | `cargo install --locked resvg@0.47.0` | Renders `source/logo.svg` at each target size. `--locked` rejects transitive dependency resolution drift. |
+| vtracer | `0.6.5` Cargo CLI | `cargo install --locked vtracer@0.6.5` | `tools/trace_logo.py` invokes the Cargo-installed binary; it does not use the PyPI `vtracer` package. `--locked` rejects transitive dependency resolution drift. |
 | Pillow | `12.1.1` — **PyPI wheel build** | `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1` | Encodes every PNG. The wheel-only flag is part of the pin. |
 | pytest | `9.0.2` | `.venv/bin/python -m pip install --only-binary=:all: pytest==9.0.2` | Runs the regression suite; it does not affect generated asset bytes. |
 
@@ -141,7 +141,7 @@ manifest's install block in the same commit when bumping a pin.
 `tools/trace_logo.py` is a Python entry point, but it does not import a Python
 binding or use the similarly named package from PyPI. It launches the `vtracer`
 executable found on `PATH`; the canonical pin is therefore the Cargo crate/CLI
-installed by `cargo install vtracer@0.6.5`. Do not substitute a pip-installed
+installed by `cargo install --locked vtracer@0.6.5`. Do not substitute a pip-installed
 `vtracer` package: that package and build are not covered by this pin.
 
 Both Python entry points use Pillow, so both must run with the venv interpreter.
@@ -221,34 +221,47 @@ a distro/system Pillow, even at the pinned version number. The setup command
 below uses `--only-binary=:all:` so pip fails instead of silently building an
 unpinned source distribution.
 
-## Resvg clean-cache rebuild check
+## Clean-toolchain reproducibility gate
 
-Verified 2026-09-27 with Rust `1.97.1` and Cargo `1.97.1`: two independent
-`cargo install resvg@0.47.0` runs used separate empty `CARGO_HOME` directories
-and separate target directories. Both installs resolved the same 63-package
-dependency graph and installed resvg `0.47.0`. The installed executable bytes
-were not identical, so the executable itself is not used as the determinism
-criterion.
+`tools/check_reproducibility.py` is the full clean-environment test. It takes a
+committed source snapshot and runs it twice in independent temporary trees,
+with an empty `CARGO_HOME`, separate Cargo target directories, a fresh Python
+virtualenv, and a no-cache PyPI wheel install. Each run installs the locked
+`resvg` and `vtracer` Cargo packages, records both package `Cargo.lock` files,
+and records the complete Python/Rust toolchain fingerprint. It then:
 
-Each renderer then regenerated a clean `git archive HEAD` copy with Pillow
-`12.1.1` (the pinned PyPI wheel version). `diff -qr` reported identical trees,
-and the normalized SHA-256 list for all 39 generated files was identical:
-`5ba92cb6753d4f905a0a38a5f583a59c5173ac8a8f0cf8a1a869ba2bc79d35e7`.
-Therefore, independent clean-cache rebuilds of the currently resolved resvg
-dependency graph render the committed assets byte-for-byte identically.
+1. verifies the committed assets;
+2. runs `trace_logo.py`, proving the applicable vtracer output matches the
+   committed authoritative SVG and checksum;
+3. runs `build_assets.py`, exercising resvg and every Pillow PNG/ICO encoder;
+4. verifies the full generated inventory again; and
+5. compares every file below `avatars/`, `banners/`, `favicon/`, and `logo/`,
+   plus `palette.json` and `platform-assets.json`, against the committed
+   snapshot and the other clean run.
 
-This is empirical evidence for the current resolution, not a Cargo lock: the
-`cargo install` command can select different compatible transitive versions
-after a future crates.io index change. If a later clean-cache check diverges,
-replace this floating install with a committed/vendored lock and a pinned
-toolchain image before accepting regenerated assets.
+The gate compares the locked transitive dependency graphs as well as output
+bytes. `--locked` makes a changed package lock fail during installation, while
+the cross-run comparison detects any differing lock graph, Python dependency
+set, runtime version, or tool version. Renderer executable bytes are not a
+criterion: native Rust builds can contain non-semantic build differences even
+when their rendered output is identical.
+
+Verified 2026-09-27 with `python3 tools/check_reproducibility.py`: each of two
+clean source trees reported `41 generated files match committed bytes`, and
+both produced the same complete generated tree and vtracer trace output, with
+the pinned Pillow `12.1.1` wheel and matching locked resvg and vtracer
+dependency graphs. The command is part of the `brand-kit-ci`
+WorkflowTemplate acceptance sequence, after the normal pinned environment is
+installed and before the ordinary regeneration drift check. A future failure
+must be treated as toolchain drift: inspect the reported lock or byte
+difference, then update the pins and regenerate all outputs deliberately.
 
 ## Regenerating
 
 Run the one-time setup (or repeat it after a pin bump):
 
 ```bash
-cargo install resvg@0.47.0 vtracer@0.6.5
+cargo install --locked resvg@0.47.0 vtracer@0.6.5
 python3 -m venv .venv
 .venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2
 ```

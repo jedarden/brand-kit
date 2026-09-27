@@ -18,7 +18,7 @@ spec:
         args:
           - |
             set -ex
-            cargo install resvg@0.47.0 vtracer@0.6.5
+            cargo install --locked resvg@0.47.0 vtracer@0.6.5
             .venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2
 """
 
@@ -57,10 +57,11 @@ def test_ci_regression_acceptance_sequence_is_documented():
     section = readme.split("## CI regression gate\n", 1)[1].split("\n## ", 1)[0]
     commands = (
         "python3 tools/check_asset_toolchain.py",
-        "cargo install resvg@0.47.0 vtracer@0.6.5",
+        "cargo install --locked resvg@0.47.0 vtracer@0.6.5",
         ".venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2",
         ".venv/bin/python tools/verify_assets.py",
         ".venv/bin/python -m pytest -q",
+        "python3 tools/check_reproducibility.py",
         ".venv/bin/python tools/build_assets.py",
         "git diff --exit-code --quiet",
     )
@@ -68,6 +69,7 @@ def test_ci_regression_acceptance_sequence_is_documented():
     positions = [section.index(command) for command in commands]
     assert positions == sorted(positions)
     assert "unexpected generated files" in section
+    assert "two independent" in section
     assert "Argo phase of `Succeeded`" in section
     assert "not CI acceptance evidence" in section
 
@@ -120,8 +122,8 @@ def test_trace_logo_uses_pinned_cargo_vtracer_cli():
     toolchain = (ROOT / "docs/notes/asset-toolchain.md").read_text()
     trace_logo = (ROOT / "tools/trace_logo.py").read_text()
 
-    assert "cargo install vtracer@0.6.5" in toolchain
-    assert "cargo install vtracer@0.6.5" in trace_logo
+    assert "cargo install --locked vtracer@0.6.5" in toolchain
+    assert "cargo install --locked vtracer@0.6.5" in trace_logo
     assert "PyPI `vtracer`" in toolchain
     assert "PyPI `vtracer`" in trace_logo
 

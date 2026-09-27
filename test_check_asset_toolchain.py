@@ -19,7 +19,7 @@ spec:
         args:
           - |
             set -ex
-            cargo install resvg@0.47.0 vtracer@0.6.5
+            cargo install --locked resvg@0.47.0 vtracer@0.6.5
             .venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2
 """
 
@@ -89,8 +89,8 @@ def test_rejects_tool_present_only_in_pin_table(tmp_path):
 
 def test_rejects_tool_present_only_in_workflow(tmp_path):
     workflow = WORKFLOW_TEMPLATE.replace(
-        "cargo install resvg@0.47.0 vtracer@0.6.5",
-        "cargo install resvg@0.47.0 vtracer@0.6.5 extra-tool@1.2.3",
+        "cargo install --locked resvg@0.47.0 vtracer@0.6.5",
+        "cargo install --locked resvg@0.47.0 vtracer@0.6.5 extra-tool@1.2.3",
     )
 
     with pytest.raises(

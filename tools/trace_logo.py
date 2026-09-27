@@ -14,8 +14,8 @@ integrity digest for the authoritative source. Use --force only to explicitly
 discard a modified SVG and replace it from source/logo.png.
 
 Requires the Pillow 12.1.1 PyPI wheel in `.venv` and the vtracer 0.6.5 CLI
-installed with `cargo install vtracer@0.6.5`; the PyPI `vtracer` package is not
-used.
+installed with `cargo install --locked vtracer@0.6.5`; the PyPI `vtracer`
+package is not used.
 Run:  .venv/bin/python tools/trace_logo.py
 """
 import argparse
