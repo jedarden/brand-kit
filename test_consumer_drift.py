@@ -1279,6 +1279,7 @@ def test_scheduled_workflow_routes_failures_and_retains_report():
     workflow = Path(
         "automation/brand-kit-consumer-drift-workflowtemplate.yml"
     ).read_text(encoding="utf-8")
+    toolchain = Path("docs/notes/asset-toolchain.md").read_text(encoding="utf-8")
     assert "  onExit: route-drift" in workflow
     assert "    - name: route-drift" in workflow
     assert "            template: notify-owner" in workflow
@@ -1310,4 +1311,8 @@ def test_scheduled_workflow_routes_failures_and_retains_report():
     assert (
         "https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1/{{workflow.uid}}/report.json"
         in workflow
+    )
+    assert (
+        "https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1/<workflow-uid>/report.json"
+        in toolchain
     )

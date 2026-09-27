@@ -30,6 +30,16 @@ Garage-backed `needle-ci-artifacts` bucket with `artifactGC: Never`:
 https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-ci-failure-watch/v1/<watcher-workflow-uid>/report.json
 ```
 
+The release-triggered consumer-drift handoff and its scheduled CronWorkflow
+fallback share the `brand-kit-consumer-drift` WorkflowTemplate. For confirmed
+drift (exit `1`), an indeterminate audit (exit `2`), or a setup failure before
+the detector starts, Argo uploads the sanitized JSON report with
+`artifactGC: Never` to:
+
+```text
+https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1/<workflow-uid>/report.json
+```
+
 When the watcher finds a failed gate — or cannot inspect Argo — its workflow
 exit handler posts a `BrandKitCIRegressionGate` alert to
 `alertmanager.monitoring.svc:9093/api/v1/alerts`. Alertmanager's configured
