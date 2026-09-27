@@ -165,6 +165,7 @@ def test_build_generates_from_authoritative_fixture_sources(
         )
     ) == {
         "schema_version": build_assets.PLATFORM_MANIFEST_SCHEMA_VERSION,
+        "platform_requirements": build_assets.PLATFORM_REQUIREMENTS,
         "assets": build_assets.PLATFORM_ASSETS,
     }
     assert not (asset_fixture.src / "logo.svg.sha256").exists()

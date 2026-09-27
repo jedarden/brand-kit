@@ -8,7 +8,8 @@ Sources:
   source/logo.png             -- original raster copied to logo-original.png.
 
 The generated ``platform-assets.json`` manifest records the platform role,
-path, dimensions, and authoritative source for each upload-ready asset.
+path, dimensions, authoritative source for each upload-ready asset, and the
+external requirement source and date used to verify each platform target.
 
 Profile pictures + favicons come from the opaque SVG; transparent logo assets
 come from the transparent SVG; banners/covers come from the hero.
@@ -32,7 +33,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
-PLATFORM_MANIFEST_SCHEMA_VERSION = 1
+PLATFORM_MANIFEST_SCHEMA_VERSION = 2
 PALETTE = {
     "Polo Red": "#DC3127",
     "Ink": "#0A0A08",
@@ -199,6 +200,78 @@ def _manifest_asset(platform, role, path, source):
     }
 
 
+# These are review inputs, not generated dimensions.  Each URL must be opened
+# when its platform target is changed; the freshness checker makes an overdue
+# review visible without making CI depend on live external sites.
+PLATFORM_REQUIREMENTS = [
+    {
+        "platform": "X / Twitter",
+        "source_url": "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "LinkedIn (personal)",
+        "source_url": "https://www.linkedin.com/help/linkedin/answer/a549049",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "LinkedIn (company)",
+        "source_url": "https://www.linkedin.com/help/linkedin/answer/a417335",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "GitHub",
+        "source_url": "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "Instagram",
+        "source_url": "https://help.instagram.com/",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "Threads",
+        "source_url": "https://help.instagram.com/",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "Facebook",
+        "source_url": "https://www.facebook.com/help/163248423739693",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "YouTube",
+        "source_url": "https://support.google.com/youtube/answer/10456525?hl=en",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "TikTok",
+        "source_url": "https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "Mastodon",
+        "source_url": "https://docs.joinmastodon.org/user/profile/",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "Bluesky",
+        "source_url": "https://docs.bsky.app/docs/api/app-bsky-actor-profile",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "Discord",
+        "source_url": "https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles",
+        "last_verified": "2026-09-27",
+    },
+    {
+        "platform": "Web / Open Graph",
+        "source_url": "https://ogp.me/",
+        "last_verified": "2026-09-27",
+    },
+]
+
+
 # Keep this list in the same order as the README table.  It is the build
 # input for platform-assets.json; verify_assets.py independently parses the
 # README so a stale generated manifest cannot make prose drift invisible.
@@ -243,6 +316,7 @@ def save_platform_manifest():
         json.dumps(
             {
                 "schema_version": PLATFORM_MANIFEST_SCHEMA_VERSION,
+                "platform_requirements": PLATFORM_REQUIREMENTS,
                 "assets": PLATFORM_ASSETS,
             },
             indent=2,

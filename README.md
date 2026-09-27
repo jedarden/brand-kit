@@ -19,9 +19,13 @@ platform. The logo is SVG-first: `source/logo.svg` is authoritative, while
 ## Per-platform assets
 
 Drop these straight into each platform's upload dialog — they're already at the
-exact required pixel dimensions. Consumers can use the generated
+documented target pixel dimensions recorded in the requirement provenance below.
+Those targets are platform-specific recommendations or upload minima, not a
+promise that a platform will never crop or resize an upload. Consumers can use
+the generated
 [`platform-assets.json`](platform-assets.json) manifest instead of parsing this
-table; it records each platform, role, path, dimensions, and source asset.
+table; it records each platform, role, path, dimensions, source asset, external
+requirement URL, and last-verified date.
 
 | Platform | Profile picture | Banner / cover |
 |---|---|---|
@@ -57,6 +61,58 @@ listed above or you need a custom/large size; it never pixelates.
 included for overlay use on colored backgrounds, dark surfaces, or print layouts
 where the Canvas Cream background should not be baked in. These have full alpha
 channels and can be composited onto any surface.
+
+### Platform requirement provenance
+
+`platform-assets.json` keeps one provenance record for every platform named in
+the asset table. The URL is the first-party upload guidance reviewed for the
+listed target; `last_verified` is the date that guidance was opened and
+compared with the README table and generated files. A source may describe a
+minimum, a recommendation, or a role-specific surface, so read the linked
+page before treating a dimension as a hard limit.
+
+| Platform | Requirement source | Last verified |
+|---|---|---|
+| X / Twitter | <https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo> | 2026-09-27 |
+| LinkedIn (personal) | <https://www.linkedin.com/help/linkedin/answer/a549049> | 2026-09-27 |
+| LinkedIn (company) | <https://www.linkedin.com/help/linkedin/answer/a417335> | 2026-09-27 |
+| GitHub | <https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview> | 2026-09-27 |
+| Instagram | <https://help.instagram.com/> | 2026-09-27 |
+| Threads | <https://help.instagram.com/> | 2026-09-27 |
+| Facebook | <https://www.facebook.com/help/163248423739693> | 2026-09-27 |
+| YouTube | <https://support.google.com/youtube/answer/10456525?hl=en> | 2026-09-27 |
+| TikTok | <https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile> | 2026-09-27 |
+| Mastodon | <https://docs.joinmastodon.org/user/profile/> | 2026-09-27 |
+| Bluesky | <https://docs.bsky.app/docs/api/app-bsky-actor-profile> | 2026-09-27 |
+| Discord | <https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles> | 2026-09-27 |
+| Web / Open Graph | <https://ogp.me/> | 2026-09-27 |
+
+### Reviewing changed upload requirements
+
+The freshness check is intentionally local and deterministic; it does not
+silently turn a network failure or a changed web page into a passing build.
+Run it during release review and at least every 180 days:
+
+```bash
+python3 tools/check_platform_requirements.py
+```
+
+When it reports an overdue platform, open that platform's linked source and
+compare each applicable profile, banner, cover, or favicon target with the
+current upload guidance. If the page has moved, changed a minimum or
+recommendation, changed a role's surface, or is no longer authoritative:
+
+1. Replace the URL or target dimensions in `tools/build_assets.py` and update
+   the matching README row and generated assets together.
+2. Set that platform's `last_verified` date to the review date only after the
+   external comparison is complete. Do not merely bump the date to silence the
+   freshness check.
+3. Run `python3 tools/check_platform_requirements.py`,
+   `.venv/bin/python tools/verify_assets.py`, and the full test suite; review
+   the generated-image diff before committing.
+
+For a deterministic audit of an older review, pass `--as-of YYYY-MM-DD`; use
+`--max-age-days N` only when the review cadence is intentionally different.
 
 ## Palette
 

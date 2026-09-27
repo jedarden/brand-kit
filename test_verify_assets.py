@@ -173,6 +173,30 @@ def test_platform_manifest_matches_readme_and_committed_files():
     )
 
 
+def test_platform_manifest_rejects_missing_requirement_provenance(tmp_path, monkeypatch):
+    source_root = verify_assets.ROOT
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    shutil.copy(source_root / "README.md", root / "README.md")
+    shutil.copy(
+        source_root / verify_assets.PLATFORM_MANIFEST_RELPATH,
+        root / verify_assets.PLATFORM_MANIFEST_RELPATH,
+    )
+    manifest = json.loads(
+        (root / verify_assets.PLATFORM_MANIFEST_RELPATH).read_text(encoding="utf-8")
+    )
+    manifest["platform_requirements"].pop()
+    (root / verify_assets.PLATFORM_MANIFEST_RELPATH).write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+
+    rows, ok = verify_assets.verify_platform_manifest()
+
+    assert not ok
+    assert any(row[3] == "✗ invalid requirement provenance" for row in rows)
+
+
 def test_platform_manifest_reports_committed_dimension_drift(monkeypatch, tmp_path):
     source_root = verify_assets.ROOT
     root = tmp_path / "brand-kit"

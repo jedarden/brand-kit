@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import verify_assets
+from tools import build_assets, verify_assets
 
 
 ROOT = Path(__file__).resolve().parent
@@ -85,12 +85,22 @@ EXPECTED_PLATFORM_ASSETS = [
     _asset("Web / Open Graph", "banner", "banners/twitter-card-1200x628.png", 1200, 628, "source/hero.png"),
 ]
 
+EXPECTED_PLATFORM_REQUIREMENTS = [
+    {
+        "platform": requirement["platform"],
+        "source_url": requirement["source_url"],
+        "last_verified": requirement["last_verified"],
+    }
+    for requirement in build_assets.PLATFORM_REQUIREMENTS
+]
+
 
 def test_platform_manifest_is_exact_readme_contract():
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     assert manifest == {
-        "schema_version": 1,
+        "schema_version": 2,
+        "platform_requirements": EXPECTED_PLATFORM_REQUIREMENTS,
         "assets": EXPECTED_PLATFORM_ASSETS,
     }
     assert verify_assets.read_readme_platform_assets() == EXPECTED_PLATFORM_ASSETS
@@ -139,7 +149,20 @@ def test_platform_manifest_schema_declares_strict_asset_shape():
 
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["schema_version"] == {"const": 1}
+    assert schema["properties"]["schema_version"] == {"const": 2}
+    assert schema["properties"]["platform_requirements"]["minItems"] == 1
+    assert schema["properties"]["platform_requirements"]["uniqueItems"] is True
+    assert schema["properties"]["platform_requirements"]["items"] == {
+        "$ref": "#/$defs/platform_requirement"
+    }
+    assert schema["$defs"]["platform_requirement"]["additionalProperties"] is False
+    assert schema["$defs"]["platform_requirement"]["required"] == [
+        "platform",
+        "source_url",
+        "last_verified",
+    ]
+    assert schema["$defs"]["platform_requirement"]["properties"]["source_url"]["format"] == "uri"
+    assert schema["$defs"]["platform_requirement"]["properties"]["last_verified"]["format"] == "date"
     assert schema["properties"]["assets"]["minItems"] == 1
     assert schema["properties"]["assets"]["uniqueItems"] is True
     assert schema["properties"]["assets"]["items"] == {"$ref": "#/$defs/asset"}
@@ -157,6 +180,20 @@ def test_platform_manifest_schema_declares_strict_asset_shape():
         "favicon",
     ]
     assert schema["$defs"]["dimensions"]["additionalProperties"] is False
+
+
+def test_readme_documents_requirement_provenance_and_review_check():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "### Platform requirement provenance" in readme
+    assert "### Reviewing changed upload requirements" in readme
+    assert "python3 tools/check_platform_requirements.py" in readme
+    assert "--as-of YYYY-MM-DD" in readme
+    assert "Do not merely bump the date" in readme
+    for requirement in EXPECTED_PLATFORM_REQUIREMENTS:
+        assert requirement["platform"] in readme
+        assert requirement["source_url"] in readme
+        assert requirement["last_verified"] in readme
 
 
 @pytest.mark.parametrize("drift", ["missing", "unexpected", "stale"])
@@ -203,8 +240,8 @@ def test_platform_manifest_rejects_unexpected_top_level_field(tmp_path, monkeypa
     assert rows == [
         (
             "platform-assets.json",
-            "schema_version and assets only",
-            "assets, schema_version, unexpected",
+            "schema_version, platform_requirements, and assets only",
+            "assets, platform_requirements, schema_version, unexpected",
             "✗ invalid top-level fields",
         )
     ]

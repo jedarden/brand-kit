@@ -2,16 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://git.ardenone.com/jedarden/brand-kit/platform-assets.schema.json",
   "title": "Brand Kit Platform Assets",
-  "description": "The generated, upload-ready assets indexed by platform role.",
+  "description": "The generated, upload-ready assets indexed by platform role, with external requirement provenance.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "platform_requirements",
     "assets"
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 2
+    },
+    "platform_requirements": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/platform_requirement"
+      }
     },
     "assets": {
       "type": "array",
@@ -23,6 +32,31 @@
     }
   },
   "$defs": {
+    "platform_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "source_url",
+        "last_verified"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://[^\\s]+$"
+        },
+        "last_verified": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
     "dimensions": {
       "type": "object",
       "additionalProperties": false,

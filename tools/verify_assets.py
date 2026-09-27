@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """Verify that committed assets match every testable claim README.md makes.
 
-Ten classes of README-vs-repo drift are checked:
+Eleven classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
-  2. The generated platform manifest matches the README table, committed
+  2. Platform requirement provenance has one HTTPS source and ISO date per
+     README platform.
+  3. The generated platform manifest matches the README table, committed
      dimensions, and declared source assets.
-  3. Presence of every repo path README names (plus absence of the file
+  4. Presence of every repo path README names (plus absence of the file
      it documents as removed).
-  4. favicon.ico is multi-resolution 16-256 and every contained frame
+  5. favicon.ico is multi-resolution 16-256 and every contained frame
      decodes.
-  5. The transparent variants have full alpha channels, and the
+  6. The transparent variants have full alpha channels, and the
      transparent SVG master has its background removed relative to the
      opaque one.
-  6. The required names and exact six-digit hex values in palette.json match
+  7. The required names and exact six-digit hex values in palette.json match
      the canonical palette table.
-  7. The generated asset inventory is exactly the 37 documented derived
+  8. The generated asset inventory is exactly the 37 documented derived
      assets plus palette.json.
-  8. source/logo.svg.sha256 and source/logo-transparent.svg.sha256 are valid
+  9. source/logo.svg.sha256 and source/logo-transparent.svg.sha256 are valid
      digests of their authoritative SVGs.
-  9. source/logo.png.sha256 and source/hero.png.sha256 are valid digests of
+ 10. source/logo.png.sha256 and source/hero.png.sha256 are valid digests of
      their authoritative or preserved raster sources.
- 10. logo/logo-original.png is an exact byte-for-byte copy of source/logo.png.
+ 11. logo/logo-original.png is an exact byte-for-byte copy of source/logo.png.
 
 Run: .venv/bin/python tools/verify_assets.py
 Exits 1 on any mismatch, 0 if all checks pass.
@@ -30,13 +32,15 @@ import json
 import re
 import struct
 import xml.etree.ElementTree as ET
+from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
-PLATFORM_MANIFEST_SCHEMA_VERSION = 1
+PLATFORM_MANIFEST_SCHEMA_VERSION = 2
 PALETTE_RELPATH = "palette.json"
 CANONICAL_PALETTE = {
     "Polo Red": "#DC3127",
@@ -166,6 +170,7 @@ EXPECTED_PRESENT = [
     "tools/consumer_sync.py",
     "tools/consumer_drift.py",
     "tools/consumer_drift_submit.py",
+    "tools/check_platform_requirements.py",
     "tools/release_token_probe.py",
     "tools/check_mirror_health.py",
     "consumer-drift.json",
@@ -348,6 +353,52 @@ def _manifest_dimensions_are_valid(dimensions):
     )
 
 
+def _platform_requirements_are_valid(requirements, expected_platforms):
+    """Validate one provenance record for every documented platform."""
+    if not isinstance(requirements, list):
+        return False, "platform_requirements is not a list"
+
+    seen = set()
+    for index, requirement in enumerate(requirements):
+        if not isinstance(requirement, dict):
+            return False, f"platform requirement {index} is not an object"
+        if set(requirement) != {"platform", "source_url", "last_verified"}:
+            return False, f"platform requirement {index} has invalid fields"
+        platform = requirement["platform"]
+        source_url = requirement["source_url"]
+        last_verified = requirement["last_verified"]
+        if not isinstance(platform, str) or not platform:
+            return False, f"platform requirement {index} has an invalid platform"
+        if platform in seen:
+            return False, f"duplicate platform requirement: {platform}"
+        if (
+            not isinstance(source_url, str)
+            or not source_url.startswith("https://")
+            or not urlparse(source_url).netloc
+        ):
+            return False, f"platform requirement {platform} has an invalid source_url"
+        if not isinstance(last_verified, str):
+            return False, f"platform requirement {platform} has an invalid last_verified"
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", last_verified):
+            return False, f"platform requirement {platform} has an invalid last_verified"
+        try:
+            date.fromisoformat(last_verified)
+        except ValueError:
+            return False, f"platform requirement {platform} has an invalid last_verified"
+        seen.add(platform)
+
+    if seen != expected_platforms:
+        missing = sorted(expected_platforms - seen)
+        unexpected = sorted(seen - expected_platforms)
+        details = []
+        if missing:
+            details.append(f"missing {', '.join(missing)}")
+        if unexpected:
+            details.append(f"unexpected {', '.join(unexpected)}")
+        return False, "platform requirement coverage mismatch (" + "; ".join(details) + ")"
+    return True, ""
+
+
 def _committed_dimensions(path):
     if path == ROOT / ICO_RELPATH:
         sizes = [
@@ -385,10 +436,10 @@ def verify_platform_manifest():
 
     if not isinstance(manifest, dict):
         return [(PLATFORM_MANIFEST_RELPATH, claim, type(manifest).__name__, "✗ not an object")], False
-    if set(manifest) != {"schema_version", "assets"}:
+    if set(manifest) != {"schema_version", "platform_requirements", "assets"}:
         return [(
             PLATFORM_MANIFEST_RELPATH,
-            "schema_version and assets only",
+            "schema_version, platform_requirements, and assets only",
             ", ".join(sorted(manifest)),
             "✗ invalid top-level fields",
         )], False
@@ -412,6 +463,19 @@ def verify_platform_manifest():
         expected = read_readme_platform_assets()
     except (OSError, UnicodeError, ValueError) as error:
         return [(PLATFORM_MANIFEST_RELPATH, claim, "README ERROR", str(error))], False
+
+    expected_platforms = {asset["platform"] for asset in expected}
+    requirements_ok, requirements_error = _platform_requirements_are_valid(
+        manifest.get("platform_requirements"), expected_platforms
+    )
+    if not requirements_ok:
+        rows.append((
+            PLATFORM_MANIFEST_RELPATH,
+            "one HTTPS source and ISO date per README platform",
+            requirements_error,
+            "✗ invalid requirement provenance",
+        ))
+        all_match = False
 
     if actual != expected:
         rows.append((
