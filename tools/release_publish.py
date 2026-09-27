@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import os
 import re
@@ -25,6 +26,13 @@ DEFAULT_ARGO_NAMESPACE = "argo-workflows"
 DEFAULT_ARGO_WORKFLOW_TEMPLATE = "brand-kit-ci"
 TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
+CHANGELOG_HEADING_PATTERN = re.compile(
+    r"^## \[(?P<tag>v[0-9]+\.[0-9]+\.[0-9]+)\]"
+    r"(?: - (?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2}))?$"
+)
+CHANGELOG_HEADING_TAG_PREFIX = re.compile(
+    r"^##[ \t]+\[?(?P<tag>v[0-9]+\.[0-9]+\.[0-9]+)"
+)
 WORKFLOW_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
 WORKFLOW_RUN_PREFIX = f"{DEFAULT_ARGO_WORKFLOW_TEMPLATE}/"
 COMMIT_PARAMETER_NAMES = {
@@ -245,7 +253,13 @@ def request_json(
         raise ReleaseError(f"{service} returned invalid JSON: {error}") from error
 
 
-def validate_release_record(record: Any, tag: str, allow_draft: bool = False) -> dict[str, Any]:
+def validate_release_record(
+    record: Any,
+    tag: str,
+    allow_draft: bool = False,
+    expected_commit: str | None = None,
+    expected_notes: str | None = None,
+) -> dict[str, Any]:
     validate_tag(tag)
     if not isinstance(record, dict):
         raise ReleaseError(f"Forgejo release record for {tag} is not an object")
@@ -258,6 +272,25 @@ def validate_release_record(record: Any, tag: str, allow_draft: bool = False) ->
     draft = record.get("draft")
     if draft is not False and not (allow_draft and draft is True):
         raise ReleaseError(f"Forgejo release {tag} is not published")
+    target_commit = record.get("target_commitish")
+    if not isinstance(target_commit, str) or not OBJECT_ID_PATTERN.fullmatch(target_commit):
+        raise ReleaseError(
+            f"Forgejo release {tag} has no verifiable target commit object ID"
+        )
+    if expected_commit is not None:
+        if not OBJECT_ID_PATTERN.fullmatch(expected_commit):
+            raise ReleaseError(f"release commit is not a full object ID: {expected_commit!r}")
+        if target_commit.lower() != expected_commit.lower():
+            raise ReleaseError(
+                f"Forgejo release {tag} targets {target_commit}, "
+                f"expected {expected_commit}"
+            )
+    if expected_notes is not None:
+        body = record.get("body")
+        if not isinstance(body, str) or body != expected_notes:
+            raise ReleaseError(
+                f"Forgejo release {tag} notes do not exactly match CHANGELOG.md"
+            )
     return record
 
 
@@ -267,6 +300,8 @@ def get_release(
     repository: str,
     token: str | None = None,
     allow_draft: bool = False,
+    expected_commit: str | None = None,
+    expected_notes: str | None = None,
 ) -> dict[str, Any] | None:
     try:
         record = request_json("GET", release_url(api_url, repository, tag), token=token)
@@ -274,7 +309,13 @@ def get_release(
         if error.status == 404:
             return None
         raise ReleaseError(f"cannot read Forgejo release {tag}: {error}") from error
-    return validate_release_record(record, tag, allow_draft=allow_draft)
+    return validate_release_record(
+        record,
+        tag,
+        allow_draft=allow_draft,
+        expected_commit=expected_commit,
+        expected_notes=expected_notes,
+    )
 
 
 def argo_run_name(ci_run: str) -> str:
@@ -351,7 +392,10 @@ def _named_values(value: Any) -> list[tuple[str, Any]]:
         named: list[tuple[str, Any]] = []
         for key, item in value.items():
             if isinstance(item, dict):
-                named.append((item.get("name", key), item.get("value")))
+                name = item.get("name", key)
+                if not isinstance(name, str):
+                    name = key if isinstance(key, str) else ""
+                named.append((name, item.get("value")))
             else:
                 named.append((key, item))
         return named
@@ -485,13 +529,45 @@ def release_notes_from_changelog(path: Path, tag: str) -> str:
         contents = path.read_text(encoding="utf-8")
     except OSError as error:
         raise ReleaseError(f"cannot read release notes {path}: {error}") from error
-    heading = re.compile(rf"^##\s+\[{re.escape(tag)}\].*$", re.MULTILINE)
-    match = heading.search(contents)
-    if not match:
-        raise ReleaseError(f"{path} has no '## [{tag}]' release section")
+
+    headings = list(re.finditer(r"^##[ \t]+.*$", contents, re.MULTILINE))
+    matching: list[re.Match[str]] = []
+    for heading in headings:
+        heading_text = heading.group(0).rstrip("\r")
+        version_prefix = CHANGELOG_HEADING_TAG_PREFIX.match(heading_text)
+        if version_prefix is None or version_prefix.group("tag") != tag:
+            continue
+        if CHANGELOG_HEADING_PATTERN.fullmatch(heading_text) is None:
+            raise ReleaseError(
+                f"{path} has a malformed release heading for {tag}: {heading_text!r}"
+            )
+        parsed = CHANGELOG_HEADING_PATTERN.fullmatch(heading_text)
+        assert parsed is not None
+        release_date = parsed.group("date")
+        if release_date is not None:
+            try:
+                date.fromisoformat(release_date)
+            except ValueError as error:
+                raise ReleaseError(
+                    f"{path} has an invalid release date for {tag}: {release_date!r}"
+                ) from error
+        matching.append(heading)
+
+    if not matching:
+        available = [
+            parsed.group("tag")
+            for heading in headings
+            if (parsed := CHANGELOG_HEADING_PATTERN.fullmatch(heading.group(0).rstrip("\r")))
+        ]
+        suffix = f"; available release sections: {', '.join(available)}" if available else ""
+        raise ReleaseError(f"{path} has no '## [{tag}]' release section{suffix}")
+    if len(matching) != 1:
+        raise ReleaseError(f"{path} has multiple release sections for {tag}")
+
+    match = matching[0]
+    heading_index = headings.index(match)
     start = match.end()
-    next_heading = re.search(r"^##\s+", contents[start:], re.MULTILINE)
-    end = start + next_heading.start() if next_heading else len(contents)
+    end = headings[heading_index + 1].start() if heading_index + 1 < len(headings) else len(contents)
     notes = contents[start:end].strip()
     if not notes:
         raise ReleaseError(f"the {path} section for {tag} is empty")
@@ -509,12 +585,20 @@ def publish_release(
     validate_tag(tag)
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
         raise ReleaseError(f"release commit is not a full object ID: {commit!r}")
-    if not notes.strip():
+    if not isinstance(notes, str) or not notes.strip():
         raise ReleaseError("release notes must not be empty")
     if not token:
         raise ReleaseError("FORGEJO_TOKEN is required to create or publish a release")
 
-    existing = get_release(tag, api_url, repository, token, allow_draft=True)
+    existing = get_release(
+        tag,
+        api_url,
+        repository,
+        token,
+        allow_draft=True,
+        expected_commit=commit,
+        expected_notes=notes,
+    )
     if existing is None:
         payload = {
             "tag_name": tag,
@@ -534,10 +618,23 @@ def publish_release(
         except HttpFailure as error:
             if error.status != 409:
                 raise ReleaseError(f"cannot create Forgejo release {tag}: {error}") from error
-            record = get_release(tag, api_url, repository, token, allow_draft=True)
+            record = get_release(
+                tag,
+                api_url,
+                repository,
+                token,
+                allow_draft=True,
+                expected_commit=commit,
+                expected_notes=notes,
+            )
             if record is None:
                 raise ReleaseError(f"Forgejo reported a conflict for {tag}, but no record exists")
-        validate_release_record(record, tag)
+        validate_release_record(
+            record,
+            tag,
+            expected_commit=commit,
+            expected_notes=notes,
+        )
     elif existing.get("draft") is True:
         release_id = existing.get("id")
         if not isinstance(release_id, (str, int)):
@@ -548,11 +645,23 @@ def publish_release(
             payload={"draft": False},
             token=token,
         )
-        validate_release_record(record, tag)
+        validate_release_record(
+            record,
+            tag,
+            expected_commit=commit,
+            expected_notes=notes,
+        )
     else:
         record = existing
 
-    final = get_release(tag, api_url, repository, token)
+    final = get_release(
+        tag,
+        api_url,
+        repository,
+        token,
+        expected_commit=commit,
+        expected_notes=notes,
+    )
     if final is None:
         raise ReleaseError(f"Forgejo release {tag} disappeared after publication")
     return final
@@ -629,7 +738,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--notes",
-        help="release notes override; otherwise the exact CHANGELOG.md section is used",
+        help="compatibility input; must exactly match the CHANGELOG.md section",
     )
     parser.add_argument(
         "--notes-file",
@@ -658,9 +767,12 @@ def main(argv: list[str] | None = None) -> int:
     token = os.environ.get("FORGEJO_TOKEN") or os.environ.get("FORGEJO_API_TOKEN")
     argo_token = os.environ.get("ARGO_TOKEN") or os.environ.get("ARGO_API_TOKEN")
     try:
-        notes = args.notes
-        if notes is None:
-            notes = release_notes_from_changelog(args.notes_file, args.tag)
+        changelog_notes = release_notes_from_changelog(args.notes_file, args.tag)
+        if args.notes is not None and args.notes != changelog_notes:
+            raise ReleaseError(
+                "--notes must exactly match the release section in CHANGELOG.md"
+            )
+        notes = changelog_notes
         commit = verify_ready(
             args.tag,
             origin_remote=args.origin_remote,
@@ -680,7 +792,14 @@ def main(argv: list[str] | None = None) -> int:
         print("PASS  origin and mirror advertise the same peeled tag")
 
         if args.verify_only:
-            record = get_release(args.tag, args.api_url, args.repository, token)
+            record = get_release(
+                args.tag,
+                args.api_url,
+                args.repository,
+                token,
+                expected_commit=commit,
+                expected_notes=notes,
+            )
             if record is None:
                 raise ReleaseError(f"Forgejo has no published release record for {args.tag}")
             print(f"PASS  Forgejo release {args.tag} is published")

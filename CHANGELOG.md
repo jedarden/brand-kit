@@ -5,6 +5,10 @@ All notable changes to the brand kit are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Release publication now fails closed unless the unique, well-formed
+  `CHANGELOG.md` section, annotated `vX.Y.Z` tag, Forgejo release tag, full
+  target commit, and release body agree exactly; mismatched existing releases
+  are never published or silently repaired.
 - The Forgejo release publisher now performs a read-only Argo `brand-kit-ci`
   attestation before publication, requiring a `Succeeded` run with a
   structured full-SHA output for the exact release commit; mismatches,

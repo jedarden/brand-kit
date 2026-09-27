@@ -64,9 +64,11 @@ than allowing a consumer workflow to start during propagation.
 
 ## Publish the Forgejo Release
 
-The default notes are extracted from the exact `## [v1.1.0]` section in
-`CHANGELOG.md`; add that section before running the command. Use `--notes` only
-when the release notes intentionally come from another reviewed file.
+The release notes are extracted from the exact `## [v1.1.0]` section in
+`CHANGELOG.md`; add that section before running the command. The heading must
+be a valid stable-release heading, the section must be unique and non-empty,
+and any `--notes` value is accepted only when it is byte-for-byte equal to the
+extracted section.
 
 ```bash
 .venv/bin/python tools/release_publish.py \
@@ -83,10 +85,12 @@ The publisher performs these checks in order:
    carries the exact release commit in a structured output. A failed run,
    missing output, mismatched SHA, malformed response, or API error fails
    closed.
-4. Forgejo's release-by-tag endpoint either finds the matching published
-   record, publishes an existing matching draft, or creates a non-draft stable
-   release with `tag_name` and `target_commitish` set to the exact tag and
-   commit.
+4. The exact changelog section is retained as the release body. Forgejo's
+   release-by-tag endpoint either finds the matching published record, publishes
+   an existing matching draft, or creates a non-draft stable release with
+   `tag_name`, full `target_commitish`, and `body` equal to the exact tag,
+   commit, and changelog notes. Existing records with a different tag, target,
+   or body fail closed before any write.
 5. Forgejo is queried again after the write, and both remotes are checked again
    for the tag.
 
@@ -151,7 +155,8 @@ the read-only drift submission.
   the same command. The script is idempotent and will verify or complete the
   matching Forgejo record.
 - If a draft exists for the same tag, the script publishes that record rather
-  than creating a duplicate. Review the draft body and target before rerunning.
+  than creating a duplicate only when its body and full target commit already
+  match the changelog and annotated tag. Repair a mismatch before rerunning.
 - If a release record names another tag, reports a prerelease, or is malformed,
   stop and repair the Forgejo record manually. Do not create a replacement tag
   with a different name to bypass the mismatch.

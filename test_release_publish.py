@@ -15,6 +15,7 @@ def published(tag="v1.1.0", **overrides):
         "draft": False,
         "prerelease": False,
         "target_commitish": COMMIT,
+        "body": "release notes",
     }
     record.update(overrides)
     return record
@@ -100,7 +101,7 @@ def test_release_notes_are_taken_from_the_matching_changelog_section(tmp_path):
     ("contents", "message"),
     [
         ("## [Unreleased]\n\n- not a release\n", "no .*release section"),
-        ("## [v1.1.0]\n\n## [v1.0.0]\n", "section .* empty"),
+        ("## [v1.1.0]\n\n## [v1.0.0]\n\nold\n", "section .* empty"),
     ],
 )
 def test_release_notes_extraction_fails_closed_for_missing_or_empty_sections(
@@ -110,6 +111,42 @@ def test_release_notes_extraction_fails_closed_for_missing_or_empty_sections(
     changelog.write_text(contents, encoding="utf-8")
 
     with pytest.raises(release_publish.ReleaseError, match=message):
+        release_publish.release_notes_from_changelog(changelog, "v1.1.0")
+
+
+@pytest.mark.parametrize(
+    "heading",
+    (
+        "## v1.1.0",
+        "## [v1.1.0] - not-a-date",
+        "## [v1.1.0] - 2026-02-30",
+        "## [v1.1.0] extra",
+    ),
+)
+def test_release_notes_extraction_rejects_malformed_target_sections(tmp_path, heading):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(f"{heading}\n\n### Added\n- release item\n", encoding="utf-8")
+
+    with pytest.raises(release_publish.ReleaseError, match="malformed|invalid"):
+        release_publish.release_notes_from_changelog(changelog, "v1.1.0")
+
+
+def test_release_notes_extraction_rejects_duplicate_target_sections(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "## [v1.1.0]\n\nfirst\n\n## [v1.1.0]\n\nsecond\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="multiple"):
+        release_publish.release_notes_from_changelog(changelog, "v1.1.0")
+
+
+def test_release_notes_extraction_reports_a_different_version(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [v1.2.0]\n\n- another release\n", encoding="utf-8")
+
+    with pytest.raises(release_publish.ReleaseError, match="v1.1.0.*v1.2.0"):
         release_publish.release_notes_from_changelog(changelog, "v1.1.0")
 
 
@@ -123,6 +160,34 @@ def test_release_record_validation_fails_closed():
     ):
         with pytest.raises(release_publish.ReleaseError):
             release_publish.validate_release_record(record, "v1.1.0")
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        published(target_commitish="b" * 40),
+        published(body="different notes"),
+        published(target_commitish="main"),
+        published(body=None),
+    ),
+)
+def test_release_record_validation_requires_exact_target_and_notes(record):
+    with pytest.raises(release_publish.ReleaseError):
+        release_publish.validate_release_record(
+            record,
+            "v1.1.0",
+            expected_commit=COMMIT,
+            expected_notes="release notes",
+        )
+
+
+def test_release_record_validation_accepts_exact_target_and_notes():
+    assert release_publish.validate_release_record(
+        published(),
+        "v1.1.0",
+        expected_commit=COMMIT,
+        expected_notes="release notes",
+    ) == published()
 
 
 def test_publish_release_creates_exact_non_draft_record(monkeypatch):
@@ -197,7 +262,9 @@ def test_publish_release_accepts_a_409_only_after_reading_the_exact_record(monke
 
     monkeypatch.setattr(release_publish, "request_json", request)
 
-    assert release_publish.publish_release("v1.1.0", COMMIT, "notes", token="secret") == published()
+    assert release_publish.publish_release(
+        "v1.1.0", COMMIT, "release notes", token="secret"
+    ) == published()
     assert [call[0] for call in calls] == ["GET", "POST", "GET", "GET"]
     assert all("github.com" not in call[1] for call in calls)
 
@@ -208,6 +275,31 @@ def test_publish_release_rejects_an_existing_prerelease(monkeypatch):
 
     with pytest.raises(release_publish.ReleaseError, match="stable published release"):
         release_publish.publish_release("v1.1.0", COMMIT, "notes", token="secret")
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        published(target_commitish="b" * 40),
+        published(body="not the changelog"),
+    ),
+)
+def test_publish_release_rejects_an_existing_record_with_mismatched_consistency(
+    monkeypatch, record
+):
+    calls = []
+
+    def request(method, url, payload=None, token=None, timeout=20.0):
+        calls.append((method, url, payload))
+        return record
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="target|notes"):
+        release_publish.publish_release(
+            "v1.1.0", COMMIT, "release notes", token="secret"
+        )
+    assert [call[0] for call in calls] == ["GET"]
 
 
 def test_publish_release_publishes_an_existing_draft(monkeypatch):
@@ -359,6 +451,11 @@ def test_verify_only_reads_the_published_release_without_writing_or_pushing(monk
     )
     monkeypatch.setattr(
         release_publish,
+        "release_notes_from_changelog",
+        lambda *args, **kwargs: "release notes",
+    )
+    monkeypatch.setattr(
+        release_publish,
         "attest_argo_ci_run",
         lambda *args, **kwargs: events.append("argo") or argo_workflow(),
     )
@@ -387,7 +484,7 @@ def test_verify_only_reads_the_published_release_without_writing_or_pushing(monk
             "brand-kit-ci-abc123",
             "--verify-only",
             "--notes",
-            "unused in verify-only mode",
+            "release notes",
             "--api-url",
             "https://forgejo.example/api/v1",
         ]
@@ -399,6 +496,33 @@ def test_verify_only_reads_the_published_release_without_writing_or_pushing(monk
     assert api_calls[0][1].startswith("https://forgejo.example/api/v1/")
     assert "github.com" not in api_calls[0][1]
     assert "READY" in capsys.readouterr().out
+
+
+def test_main_does_not_allow_notes_to_bypass_the_changelog_gate(monkeypatch, capsys):
+    monkeypatch.setattr(
+        release_publish,
+        "release_notes_from_changelog",
+        lambda *args, **kwargs: "changelog notes",
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "verify_ready",
+        lambda *args, **kwargs: pytest.fail("tag checks must not run after a notes mismatch"),
+    )
+
+    result = release_publish.main(
+        [
+            "--tag",
+            "v1.1.0",
+            "--ci-run",
+            "brand-kit-ci-abc123",
+            "--notes",
+            "unreviewed override",
+        ]
+    )
+
+    assert result == 1
+    assert "must exactly match" in capsys.readouterr().err
 
 
 def test_readiness_checks_only_use_read_commands_and_never_push_to_a_remote(monkeypatch):

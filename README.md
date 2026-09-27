@@ -220,9 +220,11 @@ release commit succeeds, use the repeatable publisher documented in
 
 The publisher performs a read-only Argo API attestation before any Forgejo
 write: the named run must be `Succeeded` and expose the exact release commit as
-a structured full-SHA output. It then requires the exact annotated `vX.Y.Z` tag
-at `HEAD`, creates or reuses the non-draft Forgejo Release, and confirms that
-the canonical Forgejo tag and the read-only GitHub mirror advertise the same
+a structured full-SHA output. It then requires the unique, non-empty matching
+`CHANGELOG.md` section, the exact annotated `vX.Y.Z` tag at `HEAD`, and a
+Forgejo Release whose tag, full target commit, and body exactly match those
+inputs. It creates or reuses the non-draft release and confirms that the
+canonical Forgejo tag and the read-only GitHub mirror advertise the same
 peeled commit. It is idempotent and never creates a GitHub Release. Set
 `ARGO_TOKEN` to a read-only Argo token when the server requires authentication.
 Wait for its `READY` result and run the read-only `--verify-only` form before
