@@ -261,6 +261,9 @@ alert to the iad-ci Alertmanager. Alertmanager's configured ntfy receiver
 delivers that alert to the `jedarden` owner channel. A watcher run is
 non-success when it finds a failed gate or cannot inspect Argo; both cases
 require follow-up, and the durable report is the first place to look.
+The deployment path, live-object inspection commands, and read-only parity
+check for these two manifests are documented in
+[`docs/notes/asset-toolchain.md`](docs/notes/asset-toolchain.md#deployment-path-and-live-parity).
 
 For a failed gate, inspect the report and the referenced workflow, identify the
 exact commit and failed stage, correct the pin/install contract, test/assets,

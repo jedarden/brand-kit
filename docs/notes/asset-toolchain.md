@@ -23,6 +23,51 @@ intentional: it spans the Argo failure-log/workflow retention window, so a
 short-lived failed run is still detected after its logs or Workflow object are
 reaped.
 
+### Deployment path and live parity
+
+These two manifests are not copied into `declarative-config`. The
+application-owned deployment wiring is
+`declarative-config/k8s/iad-ci/argo-workflows/brand-kit-automation-application.yml`.
+Its `brand-kit-automation-iad-ci` ArgoCD `Application` reads
+`https://github.com/jedarden/brand-kit.git` at `main`, recursively includes
+`*.yml` and `*.yaml` below `automation/`, and applies that directory to the
+`argo-workflows` namespace in `iad-ci`. A push to the Forgejo `origin` is
+mirrored to the GitHub source that ArgoCD reads; there is no second
+failure-watch copy in `declarative-config` to edit. The `brand-kit-ci`
+regression gate remains the separate template owned directly by
+`declarative-config`.
+
+After the child Application reconciles, compare the repository copies with the
+applied objects using the read-only parity check:
+
+```bash
+python3 tools/check_ci_failure_watch_parity.py \
+  --server http://traefik-iad-ci:8001
+```
+
+The check reads both live objects with `kubectl get` and returns zero only
+when their controlled fields match. A non-zero result means the object is
+missing, the live object differs, or the API comparison failed; it never
+applies a manifest. Run it again after an ArgoCD sync or whenever the
+failure-watch files change.
+
+Inspect the deployment status through the ArgoCD Application on the
+`rs-manager` control plane, or inspect the objects directly through the
+read-only `iad-ci` proxy:
+
+```bash
+kubectl --server=http://traefik-rs-manager:8001 -n argocd \
+  get application brand-kit-automation-iad-ci -o wide
+kubectl --server=http://traefik-iad-ci:8001 -n argo-workflows \
+  get workflowtemplate brand-kit-ci-failure-watch -o yaml
+kubectl --server=http://traefik-iad-ci:8001 -n argo-workflows \
+  get cronworkflow brand-kit-ci-failure-watch -o yaml
+```
+
+The same live objects and their runs are visible in the VPN-only Argo UI at
+`https://argo-ci.ardenone.com`, in namespace `argo-workflows`, under the
+`brand-kit-ci-failure-watch` WorkflowTemplate and CronWorkflow names.
+
 The watcher writes a sanitized JSON report and uploads it to the
 Garage-backed `needle-ci-artifacts` bucket with `artifactGC: Never`:
 

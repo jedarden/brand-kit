@@ -357,6 +357,11 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "BrandKitCIRegressionGate" in readme
     assert "brand-kit-ci-failure-watch" in readme
     assert "BrandKitCIRegressionGate" in note
+    assert "brand-kit-automation-application.yml" in note
+    assert "brand-kit-automation-iad-ci" in note
+    assert "check_ci_failure_watch_parity.py" in note
+    assert "traefik-iad-ci:8001" in note
+    assert "argo-ci.ardenone.com" in note
     assert "30 days" in note
     assert "15-minute schedule" in note
     assert "may return `404`" in note
