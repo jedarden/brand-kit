@@ -39,6 +39,14 @@ EXPECTED_ALERTS = {
         "bucket": "brand-kit",
         "workflow_status": "{{workflow.status}}",
     },
+    "automation/brand-kit-workflow-liveness-workflowtemplate.yml": {
+        "alertname": "BrandKitWorkflowLiveness",
+        "owner": "jedarden",
+        "component": "brand-kit-workflow-liveness",
+        "follow_up": "workflow-liveness",
+        "bucket": "brand-kit",
+        "workflow_status": "{{workflow.status}}",
+    },
 }
 
 
@@ -92,6 +100,7 @@ def test_documented_route_verification_covers_all_alerts_without_secrets():
     assert "BrandKitCIRegressionGate" in procedure
     assert "BrandKitConsumerDrift" in procedure
     assert "BrandKitReleaseTokenProbe" in procedure
+    assert "BrandKitWorkflowLiveness" in procedure
     assert "alertmanager-config" in procedure
     assert "port-forward svc/alertmanager" in procedure
     assert "ntfy" in procedure

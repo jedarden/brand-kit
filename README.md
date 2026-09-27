@@ -270,6 +270,19 @@ publication. If the report says the watcher could not inspect Argo, repair the
 API/credential or cluster condition and rerun the same check; do not treat a
 missing report as a passing gate.
 
+The separate `brand-kit-workflow-liveness` watchdog closes the gap where a
+scheduled detector never starts and therefore cannot run its own exit handler.
+Its CronWorkflow runs every 15 minutes and checks the latest successful
+`brand-kit-ci-failure-watch` run (fresh within 60 minutes) and
+`brand-kit-consumer-drift` run (fresh within 48 hours). A stale or indeterminate
+check posts a `BrandKitWorkflowLiveness` Alertmanager notification and retains
+the tri-state report at
+`failures/brand-kit-workflow-liveness/v1/<workflow-uid>/report.json`. The
+WorkflowTemplate and CronWorkflow are sourced from
+`automation/brand-kit-workflow-liveness-workflowtemplate.yml` and
+`automation/brand-kit-workflow-liveness-cronworkflow.yml`; the checker source
+is `tools/brand_kit_workflow_liveness.py`.
+
 ## Forgejo release publication
 
 A pushed tag is not a release. After the Argo `brand-kit-ci` run for the exact

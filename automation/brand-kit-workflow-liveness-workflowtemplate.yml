@@ -1,0 +1,116 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: brand-kit-workflow-liveness
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Independent heartbeat check for scheduled brand-kit workflows"
+spec:
+  entrypoint: check
+  onExit: route-liveness
+  serviceAccountName: argo-workflow
+  activeDeadlineSeconds: 600
+  templates:
+    - name: check
+      container:
+        image: python:3.13.5-slim-bookworm
+        command: [bash, -c]
+        args:
+          - |
+            set -euo pipefail
+            printf '%s\n' '{"schema":"brand-kit-workflow-liveness/v1","status":"indeterminate","checks":[],"error":"workflow did not reach the liveness check"}' \
+              > /tmp/brand-kit-workflow-liveness-report.json
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git
+            git clone --filter=blob:none --no-tags --depth=1 --branch main \
+              https://github.com/jedarden/brand-kit.git /brand-kit
+            set +e
+            python3 /brand-kit/tools/brand_kit_workflow_liveness.py \
+              --report /tmp/brand-kit-workflow-liveness-report.json
+            LIVENESS_EXIT=$?
+            set -e
+            printf '%s\n' "$LIVENESS_EXIT" > /tmp/brand-kit-workflow-liveness-exit-code
+            exit "$LIVENESS_EXIT"
+        env:
+          - name: ARGO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: brand-kit-release-tokens
+                key: ARGO_TOKEN
+                optional: true
+        outputs:
+          parameters:
+            - name: liveness-exit-code
+              valueFrom:
+                path: /tmp/brand-kit-workflow-liveness-exit-code
+                default: "2"
+          artifacts:
+            - name: brand-kit-workflow-liveness-report
+              path: /tmp/brand-kit-workflow-liveness-report.json
+              archive:
+                none: {}
+              artifactGC:
+                strategy: Never
+              s3:
+                endpoint: s3.ardenone.com
+                bucket: needle-ci-artifacts
+                region: garage
+                insecure: false
+                key: failures/brand-kit-workflow-liveness/v1/{{workflow.uid}}/report.json
+                accessKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: access-key
+                secretKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: secret-key
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+    - name: route-liveness
+      steps:
+        - - name: notify-owner
+            template: notify-owner
+            when: "{{workflow.status}} != Succeeded"
+            continueOn:
+              failed: true
+              error: true
+    - name: notify-owner
+      container:
+        image: curlimages/curl:8.12.1
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            REPORT_URL="https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-workflow-liveness/v1/{{workflow.uid}}/report.json"
+            curl --fail --silent --show-error --retry 3 --retry-delay 5 \
+              -H 'Content-Type: application/json' \
+              --data-binary @- \
+              http://alertmanager.monitoring.svc:9093/api/v1/alerts <<EOF
+            [{
+              "labels": {
+                "alertname": "BrandKitWorkflowLiveness",
+                "owner": "jedarden",
+                "component": "brand-kit-workflow-liveness",
+                "follow_up": "workflow-liveness",
+                "bucket": "brand-kit",
+                "workflow_status": "{{workflow.status}}"
+              },
+              "annotations": {
+                "summary": "brand-kit scheduled workflow liveness needs follow-up",
+                "description": "The independent watchdog found a stale or indeterminate scheduled brand-kit workflow. Inspect the durable report and restore the target CronWorkflow or WorkflowTemplate before relying on CI-gate or consumer-drift coverage.",
+                "report_url": "${REPORT_URL}"
+              }
+            }]
+            EOF
+            echo "brand-kit workflow-liveness owner alert sent: ${REPORT_URL}"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

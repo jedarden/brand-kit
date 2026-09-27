@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: brand-kit-workflow-liveness
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Every-15-minute independent heartbeat check for the failure-watch and consumer-drift schedules"
+spec:
+  schedules:
+    - "*/15 * * * *"
+  timezone: UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    workflowTemplateRef:
+      name: brand-kit-workflow-liveness

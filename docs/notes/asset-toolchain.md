@@ -44,6 +44,21 @@ gate must be rerun for that commit and reach `Succeeded` before release
 publication. A watcher/API error is an operational failure, not evidence that
 the asset commit passed, so repair the read path and rerun the check first.
 
+### Scheduled workflow liveness
+
+The failure watcher and consumer-drift fallback cannot report that they are
+missing: their Alertmanager handlers run only after a target Workflow starts.
+The independent `brand-kit-workflow-liveness` CronWorkflow therefore runs every
+15 minutes and lists successful runs for both target WorkflowTemplates. It
+reports `fresh` when the latest success is no more than 60 minutes old for
+`brand-kit-ci-failure-watch` or 48 hours old for `brand-kit-consumer-drift`.
+Missing/old successes are `stale`; an unavailable or malformed Argo response is
+`indeterminate`. Both non-fresh states fail the watchdog and invoke its
+`BrandKitWorkflowLiveness` owner alert. Its report is retained at
+`failures/brand-kit-workflow-liveness/v1/<workflow-uid>/report.json`, so a
+suspended/deleted/mis-scheduled CronWorkflow or broken template reference has a
+separate signal even when the target never reaches `onExit`.
+
 ## Alertmanager route verification
 
 The regression-gate, consumer-drift, and release-token-probe handlers have a
@@ -58,9 +73,10 @@ Alertmanager route.
 | `brand-kit-ci-failure-watch` | `BrandKitCIRegressionGate` | `brand-kit-ci` | `regression-gate` | `jedarden` |
 | `brand-kit-consumer-drift` | `BrandKitConsumerDrift` | `consumer-drift` | — | `jedarden` |
 | `brand-kit-release-token-probe` | `BrandKitReleaseTokenProbe` | `release-token-probe` | `consumer-drift` | `jedarden` |
+| `brand-kit-workflow-liveness` | `BrandKitWorkflowLiveness` | `brand-kit-workflow-liveness` | `workflow-liveness` | `jedarden` |
 
 The complete label payloads also include `bucket: brand-kit` and the
-`workflow_status` template value. All three handlers POST to
+`workflow_status` template value. All four handlers POST to
 `http://alertmanager.monitoring.svc:9093/api/v1/alerts`; their `onExit` steps
 run only for non-successful workflows and use `continueOn` so an Alertmanager
 or ntfy outage cannot change the original failure result.
