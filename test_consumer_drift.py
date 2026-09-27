@@ -822,6 +822,99 @@ def test_release_discovery_ignores_drafts_and_waits_for_the_configured_age():
     assert selected["tag_name"] == "v1.1.0"
 
 
+def test_release_discovery_skips_newest_stable_release_until_mirror_catches_up():
+    config = make_config()
+    records = [
+        {
+            "tag_name": "v1.2.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-09-24T00:00:00Z",
+        },
+        {
+            "tag_name": "v1.1.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-09-23T00:00:00Z",
+        },
+    ]
+    checked = []
+
+    def fetcher(url, headers=None):
+        return json.dumps(records).encode()
+
+    def mirror_checker(repository, tag):
+        checked.append((repository, tag))
+        return None if tag == "v1.2.0" else "a" * 40
+
+    selected = consumer_drift.discover_release(
+        config,
+        fetcher=fetcher,
+        mirror_repository="https://github.example/brand-kit.git",
+        mirror_checker=mirror_checker,
+    )
+
+    assert selected["tag_name"] == "v1.1.0"
+    assert checked == [
+        ("https://github.example/brand-kit.git", "v1.2.0"),
+        ("https://github.example/brand-kit.git", "v1.1.0"),
+    ]
+
+
+def test_release_discovery_fails_when_no_stable_release_is_on_the_mirror():
+    config = make_config()
+    records = [
+        {
+            "tag_name": "v1.1.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-09-23T00:00:00Z",
+        }
+    ]
+
+    with pytest.raises(consumer_drift.ReleaseError, match="read-only mirror"):
+        consumer_drift.discover_release(
+            config,
+            fetcher=lambda url, headers=None: json.dumps(records).encode(),
+            mirror_repository="https://github.example/brand-kit.git",
+            mirror_checker=lambda repository, tag: None,
+        )
+
+
+def test_mirror_tag_commit_uses_a_read_only_peeled_tag_query(monkeypatch):
+    calls = []
+
+    def run(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return subprocess.CompletedProcess(
+            arguments,
+            0,
+            stdout=f"{'a' * 40}\trefs/tags/v1.2.0^{{}}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(consumer_drift.subprocess, "run", run)
+
+    assert (
+        consumer_drift.mirror_tag_commit(
+            "https://github.example/brand-kit.git", "v1.2.0"
+        )
+        == "a" * 40
+    )
+    assert calls == [
+        (
+            [
+                "git",
+                "ls-remote",
+                "--exit-code",
+                "https://github.example/brand-kit.git",
+                "refs/tags/v1.2.0^{}",
+            ],
+            {"capture_output": True, "text": True, "check": False},
+        )
+    ]
+
+
 def test_explicit_release_gate_rejects_draft_before_consumer_checks(tmp_path):
     root = make_root(tmp_path)
     site = make_site(root, tmp_path)
@@ -992,18 +1085,21 @@ def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     assert 'name: brand-kit-consumer-drift\n  namespace: argo-workflows' in cron
     assert 'name: release-tag\n          value: ""' in cron
     assert release["minimum_age_hours"] == 24
+    assert release["mirror_repository"] == "https://github.com/jedarden/brand-kit.git"
     assert release["tag_pattern"] == r"^v\d+\.\d+\.\d+$"
 
     tag_parameter = 'TAG="{{workflow.parameters.release-tag}}"'
-    resolve_tag = (
-        'TAG="$(python3 tools/consumer_drift.py '
-        '--config consumer-drift.json --print-release-tag)"'
+    resolve_start = 'TAG="$(python3 tools/consumer_drift.py '
+    mirror_argument = (
+        '--mirror-repository "{{workflow.parameters.brand-kit-repository}}"'
     )
     assert tag_parameter in workflow
     assert 'if [ -z "$TAG" ]; then' in workflow
-    assert resolve_tag in workflow
-    assert workflow.index(tag_parameter) < workflow.index(resolve_tag)
-    assert workflow.index(resolve_tag) < workflow.index('git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /release')
+    assert resolve_start in workflow
+    assert mirror_argument in workflow
+    assert "--print-release-tag)" in workflow
+    assert workflow.index(tag_parameter) < workflow.index(resolve_start)
+    assert workflow.index(resolve_start) < workflow.index('git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /release')
 
     # The release checkout must be populated from and detached at the selected
     # tag, rather than auditing whichever branch the mirror happens to serve.
@@ -1014,6 +1110,7 @@ def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     assert 'git -C /release checkout --detach --quiet "$TAG"' in workflow
     assert '--source-root /release' in workflow
     assert '--release-tag "$TAG"' in workflow
+    assert 'python3 /brand-kit/tools/consumer_drift.py' in workflow
 
     # Both repositories are public GitHub mirrors; the site clone is pinned to
     # its read-only main branch and no write-capable GitHub credential is used.
@@ -1033,6 +1130,7 @@ def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     assert "GH_TOKEN" not in workflow
     assert "WRITE_TOKEN" not in workflow
     assert "FORGEJO_WRITE" not in workflow
+    assert "ARGO_SUBMIT_TOKEN" not in workflow
     assert "FORGEJO_TOKEN" in workflow
     assert "- name: FORGEJO_TOKEN" in workflow
 

@@ -50,10 +50,18 @@ waits for the canonical and read-only mirror tags to agree, and submits the
 exact tag as the `release-tag` workflow parameter. The workflow itself waits
 again for mirror visibility before checking out the tag. The companion
 `automation/brand-kit-consumer-drift-cronworkflow.yml` retains the daily
-read-only run as a fallback and discovers the newest stable release after the
-configured propagation delay. Infrastructure manifests are reconciled through
-`declarative-config`; this repository keeps the application-owned detector and
-its trigger source together without granting the detector write credentials.
+read-only run as a fallback. It runs at **06:17 UTC** and uses the configured
+**24-hour propagation delay** (`release.minimum_age_hours` in
+`consumer-drift.json`). Discovery considers only published, non-prerelease
+semantic-version releases, then excludes any tag whose peeled ref is not yet
+visible on the read-only GitHub mirror; it therefore audits the newest stable
+release that both gates have cleared instead of failing on a just-published tag
+that is still propagating. The current checkout supplies the detector and
+configuration, while the selected tag is checked out separately at
+`/release` and passed as `--source-root /release`. Infrastructure manifests are
+reconciled through `declarative-config`; this repository keeps the
+application-owned detector and its trigger source together without granting
+the detector write credentials.
 
 ## Consumer inventory (verified 2026-09-15)
 

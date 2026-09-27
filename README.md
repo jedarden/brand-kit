@@ -283,8 +283,9 @@ reach the read-only mirror, and submits that tag to
 `automation/brand-kit-consumer-drift-workflowtemplate.yml`. The daily Argo
 `CronWorkflow` source remains
 `automation/brand-kit-consumer-drift-cronworkflow.yml` as a fallback; it clones
-the newest stable release after the configured propagation age, emits the JSON
-report, and fails its run on drift. These workflows are intentionally not
+the newest stable release at least 24 hours old whose tag is visible on the
+read-only mirror, emits the JSON report, and fails its run on drift. It runs at
+06:17 UTC daily. These workflows are intentionally not
 GitHub Actions workflows and have no consumer-write step. The complete
 remediation checklist — including the manual commit/push in `jedarden.com`, the
 GitHub avatar re-upload (no API for it), release-gate failure behavior, and what

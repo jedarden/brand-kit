@@ -142,7 +142,7 @@ def _release_tag(record: Any, expected: str | None = None) -> str:
         raise ReleaseError("release response has no tag_name")
     if record.get("draft") is not False:
         raise ReleaseError(f"release {tag} is not published")
-    if record.get("prerelease") is True:
+    if record.get("prerelease") is not False:
         raise ReleaseError(f"release {tag} is a prerelease")
     if expected is not None and tag != expected:
         raise ReleaseError(f"release response names {tag!r}, expected {expected!r}")
@@ -191,11 +191,43 @@ def _release_sort_key(record: dict[str, Any]) -> tuple[datetime, str]:
     return timestamp, str(record.get("tag_name", ""))
 
 
+def mirror_tag_commit(repository: str, tag: str) -> str | None:
+    """Return a read-only mirror's peeled tag commit, or None when absent."""
+    if not isinstance(repository, str) or not repository.strip():
+        raise ConfigError("release.mirror_repository must be a non-empty string")
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "ls-remote",
+                "--exit-code",
+                repository,
+                f"refs/tags/{tag}^{{}}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise ReleaseError(f"cannot inspect read-only mirror: {exc}") from exc
+    if result.returncode == 2:
+        return None
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"git exited {result.returncode}"
+        raise ReleaseError(f"cannot inspect read-only mirror: {detail}")
+    fields = result.stdout.split()
+    if not fields or not re.fullmatch(r"[0-9a-fA-F]{40,64}", fields[0]):
+        raise ReleaseError("read-only mirror returned an invalid peeled tag")
+    return fields[0]
+
+
 def discover_release(
     config: dict[str, Any],
     token: str | None = None,
     fetcher: Callable[..., bytes] | None = None,
     now: datetime | None = None,
+    mirror_repository: str | None = None,
+    mirror_checker: Callable[[str, str], str | None] | None = None,
 ) -> dict[str, Any]:
     fetcher = fetcher or fetch_bytes
     headers = _api_headers(token)
@@ -249,6 +281,25 @@ def discover_release(
             raise ReleaseError(
                 f"no published stable release is at least {age:g} hours old"
             )
+    if mirror_repository is None:
+        mirror_repository = config["release"].get("mirror_repository")
+    if mirror_repository is not None:
+        if not isinstance(mirror_repository, str) or not mirror_repository.strip():
+            raise ConfigError(
+                "release.mirror_repository must be a non-empty string"
+            )
+        checker = mirror_checker or mirror_tag_commit
+        mirrored = [
+            record
+            for record in candidates
+            if checker(mirror_repository, str(record["tag_name"]))
+        ]
+        if not mirrored:
+            raise ReleaseError(
+                "no published stable release at least "
+                f"{age:g} hours old is visible on the read-only mirror"
+            )
+        candidates = mirrored
     return max(candidates, key=_release_sort_key)
 
 
@@ -580,6 +631,7 @@ def run_audit(
     fetcher: Callable[..., bytes] | None = None,
     now: datetime | None = None,
     allow_unverified_checkout: bool = False,
+    mirror_repository: str | None = None,
 ) -> dict[str, Any]:
     config = config or load_config()
     if site is None:
@@ -595,7 +647,13 @@ def run_audit(
             record = fetch_release(release_tag, config, token, fetcher)
             report["release"]["tag"] = _release_tag(record, release_tag)
         else:
-            record = discover_release(config, token, fetcher, now)
+            record = discover_release(
+                config,
+                token,
+                fetcher,
+                now,
+                mirror_repository=mirror_repository,
+            )
             report["release"]["tag"] = _release_tag(record)
         report["release"]["published_at"] = record.get("published_at")
         report["release"]["record_target"] = record.get("target_commitish")
@@ -664,6 +722,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--allow-unverified-checkout", action="store_true")
+    parser.add_argument("--mirror-repository")
     parser.add_argument("--print-release-tag", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -673,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
                 config,
                 token=os.environ.get("FORGEJO_TOKEN")
                 or os.environ.get("FORGEJO_API_TOKEN"),
+                mirror_repository=args.mirror_repository,
             )
             print(_release_tag(record))
             return 0
@@ -685,6 +745,7 @@ def main(argv: list[str] | None = None) -> int:
             or os.environ.get("FORGEJO_API_TOKEN"),
             offline=args.offline,
             allow_unverified_checkout=args.allow_unverified_checkout,
+            mirror_repository=args.mirror_repository,
         )
     except Exception as exc:
         report = _base_report(

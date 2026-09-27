@@ -4,8 +4,9 @@ metadata:
   name: brand-kit-consumer-drift
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/description: "Daily fallback read-only audit of downstream brand-kit consumers"
+    workflows.argoproj.io/description: "Daily read-only fallback: audit the newest stable Forgejo release at least 24 hours old and visible on the read-only mirror"
 spec:
+  # 06:17 UTC daily. consumer-drift.json owns the 24-hour release propagation delay.
   schedules:
     - "17 6 * * *"
   timezone: UTC

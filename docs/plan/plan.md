@@ -354,8 +354,11 @@ verifiable Forgejo release, waits for the canonical and read-only mirror tags
 to agree, and submits the exact `release-tag` workflow parameter. The
 workflow then waits again for mirror visibility before checking out that exact
 tag. The daily run resolves the newest published stable release after the
-configured propagation delay, checks out that tag, clones jedarden.com from
-its read-only GitHub mirror, and runs the detector.
+configured 24-hour propagation delay whose peeled tag is already visible on
+the read-only GitHub mirror, checks out that tag, clones jedarden.com from its
+read-only GitHub mirror, and runs the detector. It runs at 06:17 UTC and falls
+back to the newest older stable release when the newest release tag is still
+propagating.
 
 The detector:
 

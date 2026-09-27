@@ -32,7 +32,10 @@ spec:
             cd /brand-kit
             TAG="{{workflow.parameters.release-tag}}"
             if [ -z "$TAG" ]; then
-              TAG="$(python3 tools/consumer_drift.py --config consumer-drift.json --print-release-tag)"
+              TAG="$(python3 tools/consumer_drift.py \
+                --config consumer-drift.json \
+                --mirror-repository "{{workflow.parameters.brand-kit-repository}}" \
+                --print-release-tag)"
             fi
 
             # A Forgejo release webhook can arrive before the server-side

@@ -3,6 +3,7 @@
   "release": {
     "api_url": "https://git.ardenone.com/api/v1",
     "repository": "jedarden/brand-kit",
+    "mirror_repository": "https://github.com/jedarden/brand-kit.git",
     "tag_pattern": "^v\\d+\\.\\d+\\.\\d+$",
     "minimum_age_hours": 24,
     "require_checkout": true
