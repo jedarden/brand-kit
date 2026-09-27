@@ -330,6 +330,42 @@ def test_apply_returns_failure_when_managed_refresh_is_incomplete(
     assert "FAIL  public/brand/og.jpg" in output
 
 
+def test_consumer_sync_retry_keeps_the_same_release_tag_after_a_local_failure(
+    tmp_path, monkeypatch, capsys
+):
+    site = make_site(tmp_path)
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
+    monkeypatch.setattr(consumer_sync, "check_live_avatar", lambda offline: True)
+    monkeypatch.setattr(consumer_sync, "check_live_og", lambda site, offline: True)
+
+    argv = [
+        "consumer_sync.py",
+        "--apply",
+        "--offline",
+        "--release-tag",
+        "v1.0.0",
+        "--site",
+        str(site),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert consumer_sync.main() == 1
+    first_output = capsys.readouterr().out
+    assert "no consumer files were changed" not in first_output
+    assert "FAIL  public/brand/logo.svg" in first_output
+
+    for repo_rel, site_rel, _ in consumer_sync.COPIES:
+        (site / site_rel).write_bytes((consumer_sync.ROOT / repo_rel).read_bytes())
+    write_synced_derivatives(site)
+    write_related_assets(site)
+
+    assert consumer_sync.main() == 0
+    second_output = capsys.readouterr().out
+    assert "@v9.9.9" in second_output
+    assert "Applied. Finish by hand:" in second_output
+
+
 def test_logo_copies_require_exact_bytes_and_apply_refreshes_only_drift(
     tmp_path, monkeypatch, capsys
 ):

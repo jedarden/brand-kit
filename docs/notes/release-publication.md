@@ -151,18 +151,28 @@ the read-only drift submission.
 
 ## Recovery and release records
 
-- If the API call fails after the tag push, leave the tag in place and rerun
-  the same command. The script is idempotent and will verify or complete the
-  matching Forgejo record.
-- If a draft exists for the same tag, the script publishes that record rather
-  than creating a duplicate only when its body and full target commit already
-  match the changelog and annotated tag. Repair a mismatch before rerunning.
-- If a release record names another tag, reports a prerelease, or is malformed,
-  stop and repair the Forgejo record manually. Do not create a replacement tag
-  with a different name to bypass the mismatch.
-- If the mirror is missing or points elsewhere, stop consumer work. The GitHub
-  remote is a read-only distribution mirror; it is not a release authority and
-  is not a reason to create a GitHub Release.
-- Record the publication and consumer verification in the corresponding
-  `CHANGELOG.md` section. The exact tag, commit, CI run, and publication result
-  are the provenance record.
+Release recovery always keeps the original annotated tag and commit as the
+identity of the attempt. A retry is safe only when it repeats the same
+`$VERSION`, release commit, changelog section, and CI run. Never retag an
+existing name, amend a tag, force-push, delete a tag to make a retry fit, or
+create a second Forgejo/GitHub release to work around a bad state.
+
+| Failure state | Safe recovery | Do not do this |
+|---|---|---|
+| Mirror timeout or disagreement | Leave the canonical tag in place. Confirm that `origin` still advertises the expected peeled commit, then rerun the same publisher command (or `--verify-only`) after the server-side mirror catches up. Increase `--mirror-timeout` only for the wait; the command must still end in `READY`. | Do not push the tag again, push to `github`, start consumer synchronization, or create a GitHub Release while the mirror is absent or points at another commit. |
+| Failed, missing, or unverifiable Argo attestation | Do not publish. Keep the tag untouched. If the run/API was transiently unavailable, rerun the same command after it recovers. If CI genuinely failed, fix the source on a new commit, run CI for that commit, and publish a new version with a new annotated tag. | Do not substitute a branch name, a log line, a different run, or a successful run for another commit. Do not retag the failed release commit. |
+| Partial Forgejo publication or an ambiguous create response | Rerun the same command. The publisher reads `/releases/tags/$VERSION` first, reuses an exact published record, publishes an exact matching draft, and accepts `409` only after a matching read. A timed-out POST is therefore resolved by a GET, not another manual POST. | Do not manually create a second release, guess whether the first POST committed, or alter the tag/target/body to make the request succeed. |
+| Post-write verification failure | Leave both the tag and any Forgejo record in place. Retry the same command after a transient API/read problem; it will verify an existing exact record without writing again. If Forgejo returns a record with the wrong tag, full target commit, body, draft, or prerelease state, stop and have an operator correct that record in place to the exact tag, commit, and changelog body, then rerun. | Do not delete and recreate the Git tag, force-push, publish a replacement tag, or proceed to consumers on an unverified record. |
+| Consumer handoff or `consumer_sync.py` failure | Keep `$VERSION` fixed. First rerun the publisher's `--verify-only` gate and repair mirror/API state if needed. For a local consumer failure, inspect the consumer checkout, rerun `consumer_sync.py --apply --release-tag "$VERSION"` after correcting the reported issue, review only the expected files, then commit and push normally. Rerun `--check` and the drift audit after deployment. | Do not sync from `main`, a newer tag, or a lightweight tag; do not write consumer files when the Forgejo release gate fails; do not force-push a consumer checkout or mark a failed/indeterminate audit as verified. |
+
+The corrective-release path for a real content problem is a new normal release:
+fix the source, regenerate and pass CI, update the changelog, choose the next
+version, create a new annotated tag on the new commit, and push that tag once to
+`origin`. It never retargets or force-pushes the old tag. A service outage or
+partial publication is not a content problem and uses the same-tag retry path
+above.
+
+After a successful recovery, record the original tag, full commit, Argo run,
+publication result, and consumer verification in the corresponding
+`CHANGELOG.md` section. The exact tag remains the provenance record even when
+the first attempt timed out or a consumer needed a second sync.

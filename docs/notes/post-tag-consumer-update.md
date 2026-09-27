@@ -226,6 +226,36 @@ GitHub Release object; Forgejo is the sole release record.
    date for the avatar is otherwise folklore (its previous entry was
    2026-07-20 in plan.md, with nothing since).
 
+## Recovery after a consumer failure
+
+Keep the release tag fixed throughout remediation. A failed release-triggered
+submission, a mirror timeout, a missing consumer file, a failed site deploy, or
+an indeterminate live check does not authorize switching to `main` or a newer
+tag. Rerun the release publisher with `--verify-only` first; it must print
+`READY` for the same `$VERSION` before any consumer write or retry.
+
+`consumer_sync.py --apply` is repeatable. Inspect the consumer checkout after a
+failure, repair only the reported local problem, and rerun the exact command:
+
+```bash
+.venv/bin/python tools/consumer_sync.py --apply \
+  --release-tag "$VERSION" --site "$SITE"
+```
+
+Review the resulting consumer diff, run the site-owned favicon command when the
+logo changed, and commit/push with the exact `@${VERSION}` provenance. A normal
+push retry is safe; a force-push is not. If the release-triggered Argo
+submission fails before a workflow name is returned, repair the API or mirror
+condition and submit the same tag again. If a workflow was accepted, use its
+record and inspect that run before submitting another one so a transient client
+timeout does not create duplicate audits.
+
+If `--check` or `consumer_drift.py` reports drift after the consumer push, wait
+for the deployment and rerun both read-only checks. Fix the consumer checkout,
+site-owned outputs, or manually managed avatar identified by the report; do not
+alter the brand-kit release tag. Only an all-PASS, exit-0 verification belongs
+in the release's `CHANGELOG.md` record.
+
 ## What "in sync" means per asset
 
 - **Provenance manifest** — `public/brand/brand-kit-provenance.json` must name

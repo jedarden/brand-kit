@@ -269,6 +269,68 @@ def test_publish_release_accepts_a_409_only_after_reading_the_exact_record(monke
     assert all("github.com" not in call[1] for call in calls)
 
 
+def test_publish_retry_resolves_an_ambiguous_create_without_a_second_post(monkeypatch):
+    calls = []
+    release_exists = False
+
+    def request(method, url, payload=None, token=None, timeout=20.0):
+        nonlocal release_exists
+        calls.append((method, url, payload))
+        if method == "GET":
+            if not release_exists:
+                raise release_publish.HttpFailure(404, "missing")
+            return published()
+        if method == "POST":
+            release_exists = True
+            raise release_publish.ReleaseError("cannot reach Forgejo API: timed out")
+        raise AssertionError(method)
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="timed out"):
+        release_publish.publish_release(
+            "v1.1.0", COMMIT, "release notes", token="secret"
+        )
+
+    assert release_publish.publish_release(
+        "v1.1.0", COMMIT, "release notes", token="secret"
+    ) == published()
+    assert [call[0] for call in calls] == ["GET", "POST", "GET", "GET"]
+    assert sum(method == "POST" for method, _, _ in calls) == 1
+
+
+def test_publish_retry_recovers_after_post_write_verification_timeout(monkeypatch):
+    calls = []
+    get_count = 0
+
+    def request(method, url, payload=None, token=None, timeout=20.0):
+        nonlocal get_count
+        calls.append((method, url, payload))
+        if method == "GET":
+            get_count += 1
+            if get_count == 1:
+                raise release_publish.HttpFailure(404, "missing")
+            if get_count == 2:
+                raise release_publish.HttpFailure(503, "read timed out")
+            return published()
+        if method == "POST":
+            return published()
+        raise AssertionError(method)
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="cannot read Forgejo release"):
+        release_publish.publish_release(
+            "v1.1.0", COMMIT, "release notes", token="secret"
+        )
+
+    assert release_publish.publish_release(
+        "v1.1.0", COMMIT, "release notes", token="secret"
+    ) == published()
+    assert [call[0] for call in calls] == ["GET", "POST", "GET", "GET", "GET"]
+    assert sum(method == "POST" for method, _, _ in calls) == 1
+
+
 def test_publish_release_rejects_an_existing_prerelease(monkeypatch):
     prerelease = published(prerelease=True)
     monkeypatch.setattr(release_publish, "request_json", lambda *args, **kwargs: prerelease)
@@ -350,6 +412,25 @@ def test_mirror_gate_requires_exact_peeled_refs(monkeypatch):
         )
 
 
+def test_mirror_timeout_can_be_retried_without_changing_the_release_ref(monkeypatch):
+    observed = iter([COMMIT, None, COMMIT, COMMIT])
+
+    monkeypatch.setattr(
+        release_publish,
+        "remote_tag_commit",
+        lambda remote_name, tag, root=release_publish.ROOT: next(observed),
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="has not caught up"):
+        release_publish.wait_for_mirror(
+            "v1.1.0", COMMIT, timeout=0, interval=0
+        )
+
+    release_publish.wait_for_mirror(
+        "v1.1.0", COMMIT, timeout=1, interval=0
+    )
+
+
 def test_mirror_gate_rejects_a_canonical_tag_at_the_wrong_commit(monkeypatch):
     observed = []
 
@@ -422,6 +503,26 @@ def test_argo_attestation_fails_closed_for_phase_commit_or_missing_evidence(
 
     with pytest.raises(release_publish.ReleaseError, match=message):
         release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+
+
+def test_failed_argo_attestation_can_be_retried_for_the_same_run(monkeypatch):
+    workflows = iter([argo_workflow(phase="Failed"), argo_workflow()])
+    calls = []
+
+    def request(method, url, payload=None, token=None, timeout=20.0, **kwargs):
+        calls.append((method, url, payload))
+        return next(workflows)
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="only Succeeded is accepted"):
+        release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+
+    assert release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)[
+        "status"
+    ]["phase"] == "Succeeded"
+    assert [method for method, _, _ in calls] == ["GET", "GET"]
+    assert calls[0][1] == calls[1][1]
 
 
 def test_argo_attestation_rejects_conflicting_structured_commits(monkeypatch):
@@ -575,6 +676,28 @@ def test_workflow_documentation_keeps_forgejo_authoritative():
     assert "GitHub Releases API" in document
     assert "sole release authority" in document
     assert "tools/consumer_sync.py" in document
+    assert "Mirror timeout or disagreement" in document
+    assert "Failed, missing, or unverifiable Argo attestation" in document
+    assert "Partial Forgejo publication" in document
+    assert "Post-write verification failure" in document
+    assert "Consumer handoff or `consumer_sync.py` failure" in document
+    assert "Never retag an" in document
+    assert "existing name" in document
+    assert "force-push" in document
+    assert "new annotated tag" in document
+
+
+def test_consumer_recovery_documentation_keeps_the_exact_tag_and_requires_reverify():
+    document = Path("docs/notes/post-tag-consumer-update.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "## Recovery after a consumer failure" in document
+    assert "Keep the release tag fixed" in document
+    assert "--verify-only" in document
+    assert "consumer_sync.py --apply" in document
+    assert "force-push" in document
+    assert "all-PASS, exit-0 verification" in document
 
 
 def test_workflow_documentation_is_linked_from_the_operator_entrypoints():
