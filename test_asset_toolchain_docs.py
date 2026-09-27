@@ -150,6 +150,9 @@ def test_logo_source_and_regeneration_contract_is_consistent():
             or "`source/logo.svg` is the authoritative" in document
         )
         assert "`source/logo.svg.sha256`" in document
+        assert "`source/logo.png.sha256`" in document
+        assert "`source/hero.png.sha256`" in document
+        assert "byte-for-byte" in document
         assert ".venv/bin/python tools/trace_logo.py --force" in document
         assert trace in normalized
         assert build_verify in normalized

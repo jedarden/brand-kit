@@ -14,8 +14,9 @@ low-churn asset repo.
 Three authoritative artwork sources drive the platform assets:
 `source/logo.svg` for the opaque vector logo, the independently maintained
 `source/logo-transparent.svg` for transparent variants, and `source/hero.png`
-for banners/covers. `source/logo.png` is preserved provenance, is copied to
-`logo/logo-original.png`, and may explicitly replace the opaque SVG through
+for banners/covers. `source/logo.png` is preserved provenance, is copied
+byte-for-byte to `logo/logo-original.png`, and may explicitly replace the
+opaque SVG through
 `tools/trace_logo.py`; it is not the source used for normal vector rendering
 and there is no raster fallback. The build produces 37 asset files plus
 `palette.json`. There is no running service, API, or k8s workload; the
@@ -287,9 +288,10 @@ derives it automatically.
 1. `source/logo.svg` is authoritative for the opaque logo. A normal SVG or hero
    edit runs `build_assets.py`, never `trace_logo.py`.
    `source/logo.png` remains preserved provenance, produces the original-raster
-   master, and is an input only to an explicitly requested raster-to-vector
-   replacement. `source/logo-transparent.svg` is independently authoritative
-   for transparent outputs.
+   master by byte-for-byte copy, and is an input only to an explicitly
+   requested raster-to-vector replacement. `source/hero.png` is independently
+   authoritative for banners. `source/logo-transparent.svg` is independently
+   authoritative for transparent outputs.
 2. The hand-edit order is: edit the authoritative source(s), run
    `build_assets.py`, run `verify_assets.py`, review the complete diff, and
    commit. Editing `source/logo-transparent.svg` follows the same order.
@@ -316,7 +318,15 @@ derives it automatically.
    to overwrite an existing SVG whose recorded digest differs, checking that
    invariant again immediately before replacement. `build_assets.py` does not
    read the digest; the verifier owns the integrity check.
-5. Replacing a modified SVG from the raster is possible only through the
+5. `source/logo.png.sha256` and `source/hero.png.sha256` record the bare
+   SHA-256 digests of the preserved and authoritative raster sources.
+   `verify_assets.py` rejects missing, malformed, or stale raster sidecars and
+   rejects any byte difference between `source/logo.png` and
+   `logo/logo-original.png`. An intentional raster change therefore updates
+   the source, runs `build_assets.py`, refreshes the relevant sidecar, runs
+   `verify_assets.py`, and commits the source, sidecar, exact copy, and
+   regenerated outputs together.
+6. Replacing a modified SVG from the raster is possible only through the
    explicit `.venv/bin/python tools/trace_logo.py --force` command. A normal
    trace gives vtracer a temporary output path; the authoritative SVG is not
    replaced unless that process exits successfully, after which the new digest
@@ -331,7 +341,8 @@ derives it automatically.
   ordinary trace path cannot silently discard an SVG modification whose digest
   has not been refreshed.
 - `source/logo.png` is no longer ambiguously described as the logo source of
-  truth, even though it remains build-visible for the original-raster master.
+  truth, even though it remains build-visible for the byte-preserved
+  original-raster master.
 - Transparent artwork still requires an explicit edit because no trace derives
   it; this is visible in the documented order rather than hidden in an
   intermediate-output side effect.

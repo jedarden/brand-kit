@@ -158,9 +158,10 @@ that SVG with `resvg`; `source/logo.png` is never a raster fallback.
 source for the transparent logo outputs.
 
 `source/logo.png` has two narrower roles: it is preserved provenance and is
-copied to `logo/logo-original.png`; it may also be the input to an explicit
-`tools/trace_logo.py` run that replaces `source/logo.svg`. The trace is not part
-of the normal build from the authoritative SVG.
+copied byte-for-byte to `logo/logo-original.png`; it may also be the input to
+an explicit `tools/trace_logo.py` run that replaces `source/logo.svg`. The trace
+is not part of the normal build from the authoritative SVG. `build_assets.py`
+uses a file copy for the original, rather than decoding and re-encoding it.
 
 `source/logo.svg.sha256` is the committed integrity sidecar for the
 authoritative SVG. It contains the SVG's bare SHA-256 digest. The normal build
@@ -183,9 +184,25 @@ same commit:
 sha256sum source/logo-transparent.svg | awk '{print $1}' > source/logo-transparent.svg.sha256
 ```
 
+`source/logo.png.sha256` and `source/hero.png.sha256` are the matching bare
+SHA-256 sidecars for the preserved logo raster and authoritative hero raster.
+`verify_assets.py` rejects either sidecar when it is missing, malformed, or
+stale, and also rejects any byte difference between `source/logo.png` and
+`logo/logo-original.png`. Refresh the relevant raster sidecar whenever an
+intentional source change is made, in the same commit:
+
+```bash
+sha256sum source/logo.png | awk '{print $1}' > source/logo.png.sha256
+sha256sum source/hero.png | awk '{print $1}' > source/hero.png.sha256
+```
+
+Run `build_assets.py` before `verify_assets.py` so the exact original copy and
+hero-derived assets are regenerated. Do not refresh a sidecar merely to hide
+an unexpected source change; review the source and generated diff first.
+
 `trace_logo.py` writes the refreshed sidecar automatically after a successful
 trace of `source/logo.svg`. It does not update the transparent sidecar. Do not
-refresh either sidecar merely to hide an unexpected SVG change. Before an
+refresh either SVG sidecar merely to hide an unexpected SVG change. Before an
 ordinary trace, `trace_logo.py` fails closed when the opaque digest is missing
 or malformed. It refuses to replace an existing SVG whose digest does not
 match and checks that invariant again immediately before replacement.
@@ -267,8 +284,9 @@ from the original raster, run this explicit transition in order:
    .venv/bin/python tools/verify_assets.py
    ```
 
-5. Review the complete diff and commit the traced SVG, updated checksum, sources,
-   and generated assets together.
+5. Refresh `source/logo.png.sha256` for the intentional raster replacement,
+   then review the complete diff and commit the traced SVG, updated checksums,
+   sources, exact original copy, and generated assets together.
 
 The trace writes `source/logo.svg` and `source/logo.svg.sha256` only. If it
 refuses because the current SVG differs from the recorded digest, either review

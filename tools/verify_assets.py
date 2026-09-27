@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify that committed assets match every testable claim README.md makes.
 
-Eight classes of README-vs-repo drift are checked:
+Ten classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
   2. The generated platform manifest matches the README table, committed
      dimensions, and declared source assets.
@@ -18,6 +18,9 @@ Eight classes of README-vs-repo drift are checked:
      assets plus palette.json.
   8. source/logo.svg.sha256 and source/logo-transparent.svg.sha256 are valid
      digests of their authoritative SVGs.
+  9. source/logo.png.sha256 and source/hero.png.sha256 are valid digests of
+     their authoritative or preserved raster sources.
+ 10. logo/logo-original.png is an exact byte-for-byte copy of source/logo.png.
 
 Run: .venv/bin/python tools/verify_assets.py
 Exits 1 on any mismatch, 0 if all checks pass.
@@ -48,6 +51,11 @@ LOGO_SVG_RELPATH = "source/logo.svg"
 LOGO_SVG_SHA256_RELPATH = "source/logo.svg.sha256"
 TRANSPARENT_LOGO_SVG_RELPATH = "source/logo-transparent.svg"
 TRANSPARENT_LOGO_SVG_SHA256_RELPATH = "source/logo-transparent.svg.sha256"
+LOGO_PNG_RELPATH = "source/logo.png"
+LOGO_PNG_SHA256_RELPATH = "source/logo.png.sha256"
+HERO_PNG_RELPATH = "source/hero.png"
+HERO_PNG_SHA256_RELPATH = "source/hero.png.sha256"
+LOGO_ORIGINAL_RELPATH = "logo/logo-original.png"
 
 # Expected dimensions mirror the README.md table
 # Format: {path: (expected_width, expected_height)}
@@ -707,8 +715,8 @@ def verify_presence():
     return rows, all_match
 
 
-def _verify_svg_checksum(svg_relpath, checksum_relpath):
-    """Check an authoritative SVG against its committed SHA-256 sidecar.
+def _verify_file_checksum(source_relpath, checksum_relpath, source_claim):
+    """Check a committed file against its bare SHA-256 sidecar.
 
     The sidecar is intentionally a bare hexadecimal digest, matching the
     format written by ``trace_logo.py``. Whitespace surrounding the digest is
@@ -718,14 +726,14 @@ def _verify_svg_checksum(svg_relpath, checksum_relpath):
     Returns:
         list of tuples: (path, expected, actual, status_message)
     """
-    svg_path = ROOT / svg_relpath
+    source_path = ROOT / source_relpath
     checksum_path = ROOT / checksum_relpath
-    claim = f"SHA-256 digest of {svg_relpath}"
+    claim = f"SHA-256 digest of {source_relpath}"
 
-    if not svg_path.is_file():
+    if not source_path.is_file():
         return [(
-            svg_relpath,
-            "authoritative SVG exists",
+            source_relpath,
+            source_claim,
             "MISSING",
             "file not found",
         )], False
@@ -750,7 +758,7 @@ def _verify_svg_checksum(svg_relpath, checksum_relpath):
             "✗ malformed SHA-256 digest",
         )], False
 
-    actual = hashlib.sha256(svg_path.read_bytes()).hexdigest()
+    actual = hashlib.sha256(source_path.read_bytes()).hexdigest()
     if recorded.lower() != actual:
         return [(
             checksum_relpath,
@@ -760,6 +768,15 @@ def _verify_svg_checksum(svg_relpath, checksum_relpath):
         )], False
 
     return [(checksum_relpath, claim, actual, "✓")], True
+
+
+def _verify_svg_checksum(svg_relpath, checksum_relpath):
+    """Check an authoritative SVG against its committed SHA-256 sidecar."""
+    return _verify_file_checksum(
+        svg_relpath,
+        checksum_relpath,
+        "authoritative SVG exists",
+    )
 
 
 def verify_logo_checksum():
@@ -773,6 +790,63 @@ def verify_transparent_logo_checksum():
         TRANSPARENT_LOGO_SVG_RELPATH,
         TRANSPARENT_LOGO_SVG_SHA256_RELPATH,
     )
+
+
+def verify_logo_png_checksum():
+    """Check the preserved logo raster's committed SHA-256 sidecar."""
+    return _verify_file_checksum(
+        LOGO_PNG_RELPATH,
+        LOGO_PNG_SHA256_RELPATH,
+        "preserved logo raster exists",
+    )
+
+
+def verify_hero_checksum():
+    """Check the authoritative hero raster's committed SHA-256 sidecar."""
+    return _verify_file_checksum(
+        HERO_PNG_RELPATH,
+        HERO_PNG_SHA256_RELPATH,
+        "authoritative hero raster exists",
+    )
+
+
+def verify_logo_original_copy():
+    """Check that the preserved logo output is an exact byte-for-byte copy."""
+    source_path = ROOT / LOGO_PNG_RELPATH
+    original_path = ROOT / LOGO_ORIGINAL_RELPATH
+    claim = f"byte-for-byte copy of {LOGO_PNG_RELPATH}"
+
+    if not source_path.is_file():
+        return [(
+            LOGO_PNG_RELPATH,
+            "preserved logo raster exists",
+            "MISSING",
+            "file not found",
+        )], False
+    if not original_path.is_file():
+        return [(
+            LOGO_ORIGINAL_RELPATH,
+            claim,
+            "MISSING",
+            "file not found",
+        )], False
+
+    source_bytes = source_path.read_bytes()
+    original_bytes = original_path.read_bytes()
+    if source_bytes != original_bytes:
+        return [(
+            LOGO_ORIGINAL_RELPATH,
+            claim,
+            f"{len(original_bytes)} bytes (source: {len(source_bytes)} bytes)",
+            "✗ different bytes",
+        )], False
+
+    return [(
+        LOGO_ORIGINAL_RELPATH,
+        claim,
+        f"{len(original_bytes)} bytes",
+        "✓",
+    )], True
 
 
 def ico_contained_sizes(path):
@@ -945,6 +1019,9 @@ def main():
         ("README-named files present", verify_presence()),
         ("Authoritative opaque SVG checksum", verify_logo_checksum()),
         ("Authoritative transparent SVG checksum", verify_transparent_logo_checksum()),
+        ("Preserved logo raster checksum", verify_logo_png_checksum()),
+        ("Authoritative hero raster checksum", verify_hero_checksum()),
+        ("Preserved logo raster copy", verify_logo_original_copy()),
         ("Canonical palette", verify_palette()),
         ("favicon.ico container", verify_favicon_ico()),
         ("Transparent variants", verify_transparency()),

@@ -276,7 +276,8 @@ def main():
         save(logo_at(size, resvg), path)
     shutil.copy(LOGO_SVG, ROOT / "logo/logo.svg")
     print("  logo/logo.svg: vector")
-    save(Image.open(LOGO_PNG).convert("RGB"), "logo/logo-original.png")
+    shutil.copy(LOGO_PNG, ROOT / "logo/logo-original.png")
+    print("  logo/logo-original.png: byte-for-byte copy")
 
     print("logo masters (transparent):")
     for path, size in LOGO_SIZES.items():

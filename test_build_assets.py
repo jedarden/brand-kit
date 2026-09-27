@@ -141,12 +141,14 @@ def test_build_generates_from_authoritative_fixture_sources(
         Path("avatars/avatar.png"),
         Path("logo/logo-9.png"),
         Path("logo/logo-9-transparent.png"),
-        Path("logo/logo-original.png"),
         Path("favicon/favicon-9.png"),
         Path("banners/banner.png"),
     }
     assert {path for path, _ in png_saves} == expected_pngs
     assert all(options == {"optimize": True} for _, options in png_saves)
+    assert (asset_fixture.root / "logo/logo-original.png").read_bytes() == (
+        asset_fixture.logo_png.read_bytes()
+    )
     assert (asset_fixture.root / "favicon/favicon.ico").is_file()
     assert (asset_fixture.root / "logo/logo.svg").read_bytes() == (
         asset_fixture.logo_svg.read_bytes()

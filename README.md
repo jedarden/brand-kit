@@ -140,6 +140,24 @@ sha256sum source/logo.svg | awk '{print $1}' > source/logo.svg.sha256
 trace. Do not refresh it merely to hide an unexpected SVG change; review the
 SVG and its generated assets first.
 
+`source/logo.png.sha256` and `source/hero.png.sha256` are the matching bare
+SHA-256 sidecars for the preserved logo raster and authoritative hero raster.
+`verify_assets.py` rejects either sidecar when it is missing, malformed, or
+stale. The build copies `source/logo.png` byte-for-byte to
+`logo/logo-original.png`, and the verifier checks that exact-copy contract;
+Pillow must not decode or re-encode the preserved original. When either raster
+source changes intentionally, refresh its sidecar in the same commit:
+
+```bash
+sha256sum source/logo.png | awk '{print $1}' > source/logo.png.sha256
+sha256sum source/hero.png | awk '{print $1}' > source/hero.png.sha256
+```
+
+Run `tools/build_assets.py` before `tools/verify_assets.py` so the original
+logo copy and all hero-derived assets are updated before the integrity checks.
+Do not refresh a digest merely to hide an unexpected raster change; review the
+source, exact logo copy, and regenerated assets first.
+
 `build_assets.py` renders every opaque logo asset straight from
 `source/logo.svg` at its target size with `resvg`; it never falls back to
 `source/logo.png`. It also renders transparent assets from the independent
@@ -168,12 +186,15 @@ authoritative opaque SVG from that raster is a separate, explicit transition:
    .venv/bin/python tools/verify_assets.py
    ```
 
-5. Review the complete diff and commit the traced SVG, updated checksum, sources,
-   and generated assets together.
+5. Refresh `source/logo.png.sha256`, review the complete diff, and commit the
+   traced SVG, updated checksums, sources, raster sidecars, and generated assets
+   together.
 
 The trace writes only `source/logo.svg` and `source/logo.svg.sha256`.
-`build_assets.py` does not read the checksum, while `verify_assets.py` checks
-that the sidecar still describes the authoritative SVG.
+`build_assets.py` does not read any checksum, while `verify_assets.py` checks
+the SVG sidecars, raster sidecars, and exact preserved-logo copy. The raster
+sidecars are updated explicitly as part of the intentional-change procedure
+above.
 
 Before tracing, and again before replacing the SVG, `trace_logo.py` requires the
 current SVG to match the recorded digest. A mismatch aborts and protects a
@@ -208,8 +229,9 @@ pinned toolchain and runs this acceptance sequence in order:
    `cargo install resvg@0.47.0 vtracer@0.6.5`, create the pinned virtualenv,
    and run `.venv/bin/python -m pip install --only-binary=:all: Pillow==12.1.1 pytest==9.0.2`.
 3. Run `.venv/bin/python tools/verify_assets.py`. It must exit `0`, including the exact
-   generated-asset inventory check, so missing or unexpected generated files
-   fail the workflow.
+   generated-asset inventory, authoritative-source sidecar, and preserved-logo
+   byte-copy checks, so missing or unexpected generated files or changed source
+   bytes fail the workflow.
 4. Run the full default suite with `.venv/bin/python -m pytest -q`. Any test failure
    exits non-zero and fails the workflow, including the contract tests in
    `test_check_asset_toolchain.py`.

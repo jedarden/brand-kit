@@ -56,6 +56,41 @@ def logo_checksum_fixture(tmp_path, monkeypatch):
     return svg, checksum
 
 
+@pytest.fixture
+def raster_checksum_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    files = {
+        verify_assets.LOGO_PNG_RELPATH: b"preserved logo raster\x00",
+        verify_assets.HERO_PNG_RELPATH: b"authoritative hero raster\x00",
+    }
+    checksums = {}
+    for relpath, contents in files.items():
+        source = root / relpath
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(contents)
+        checksum = root / f"{relpath}.sha256"
+        checksum.write_text(
+            f"{hashlib.sha256(contents).hexdigest()}\n",
+            encoding="ascii",
+        )
+        checksums[relpath] = checksum
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    return root, checksums
+
+
+@pytest.fixture
+def logo_original_fixture(tmp_path, monkeypatch):
+    root = tmp_path / "brand-kit"
+    source = root / verify_assets.LOGO_PNG_RELPATH
+    original = root / verify_assets.LOGO_ORIGINAL_RELPATH
+    source.parent.mkdir(parents=True, exist_ok=True)
+    original.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"preserved logo bytes\x00\xff\n")
+    original.write_bytes(source.read_bytes())
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    return source, original
+
+
 def _write_ico(path, sizes):
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGBA", (256, 256), (220, 49, 39, 255)).save(path, sizes=sizes)
@@ -320,6 +355,162 @@ def test_transparent_logo_checksum_reports_stale_sidecar(
             hashlib.sha256(svg.read_bytes()).hexdigest(),
             stale,
             "✗ stale digest",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_relpath", "verify"),
+    [
+        (verify_assets.LOGO_PNG_RELPATH, verify_assets.verify_logo_png_checksum),
+        (verify_assets.HERO_PNG_RELPATH, verify_assets.verify_hero_checksum),
+    ],
+)
+def test_raster_checksum_accepts_matching_sidecar(
+    raster_checksum_fixture, source_relpath, verify
+):
+    _, checksums = raster_checksum_fixture
+
+    rows, ok = verify()
+
+    assert ok
+    checksum = checksums[source_relpath]
+    assert rows == [
+        (
+            f"{source_relpath}.sha256",
+            f"SHA-256 digest of {source_relpath}",
+            checksum.read_text(encoding="ascii").strip(),
+            "✓",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_relpath", "verify"),
+    [
+        (verify_assets.LOGO_PNG_RELPATH, verify_assets.verify_logo_png_checksum),
+        (verify_assets.HERO_PNG_RELPATH, verify_assets.verify_hero_checksum),
+    ],
+)
+def test_raster_checksum_reports_missing_sidecar(
+    raster_checksum_fixture, source_relpath, verify
+):
+    _, checksums = raster_checksum_fixture
+    checksums[source_relpath].unlink()
+
+    rows, ok = verify()
+
+    assert not ok
+    assert rows == [
+        (
+            f"{source_relpath}.sha256",
+            f"SHA-256 digest of {source_relpath}",
+            "MISSING",
+            "file not found",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_relpath", "verify"),
+    [
+        (verify_assets.LOGO_PNG_RELPATH, verify_assets.verify_logo_png_checksum),
+        (verify_assets.HERO_PNG_RELPATH, verify_assets.verify_hero_checksum),
+    ],
+)
+def test_raster_checksum_reports_malformed_sidecar(
+    raster_checksum_fixture, source_relpath, verify
+):
+    _, checksums = raster_checksum_fixture
+    checksums[source_relpath].write_text("not-a-sha256\n", encoding="ascii")
+
+    rows, ok = verify()
+
+    assert not ok
+    assert rows == [
+        (
+            f"{source_relpath}.sha256",
+            "64 hexadecimal characters",
+            "not-a-sha256",
+            "✗ malformed SHA-256 digest",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_relpath", "verify"),
+    [
+        (verify_assets.LOGO_PNG_RELPATH, verify_assets.verify_logo_png_checksum),
+        (verify_assets.HERO_PNG_RELPATH, verify_assets.verify_hero_checksum),
+    ],
+)
+def test_raster_checksum_reports_stale_sidecar(
+    raster_checksum_fixture, source_relpath, verify
+):
+    root, checksums = raster_checksum_fixture
+    source = root / source_relpath
+    stale = hashlib.sha256(b"previous raster\n").hexdigest()
+    checksums[source_relpath].write_text(f"{stale}\n", encoding="ascii")
+
+    rows, ok = verify()
+
+    assert not ok
+    assert rows == [
+        (
+            f"{source_relpath}.sha256",
+            hashlib.sha256(source.read_bytes()).hexdigest(),
+            stale,
+            "✗ stale digest",
+        )
+    ]
+
+
+def test_logo_original_copy_accepts_exact_bytes(logo_original_fixture):
+    source, _ = logo_original_fixture
+
+    rows, ok = verify_assets.verify_logo_original_copy()
+
+    assert ok
+    assert rows == [
+        (
+            verify_assets.LOGO_ORIGINAL_RELPATH,
+            f"byte-for-byte copy of {verify_assets.LOGO_PNG_RELPATH}",
+            f"{source.stat().st_size} bytes",
+            "✓",
+        )
+    ]
+
+
+def test_logo_original_copy_reports_different_bytes(logo_original_fixture):
+    _, original = logo_original_fixture
+    original.write_bytes(b"same pixels, different bytes")
+
+    rows, ok = verify_assets.verify_logo_original_copy()
+
+    assert not ok
+    assert rows == [
+        (
+            verify_assets.LOGO_ORIGINAL_RELPATH,
+            f"byte-for-byte copy of {verify_assets.LOGO_PNG_RELPATH}",
+            "28 bytes (source: 23 bytes)",
+            "✗ different bytes",
+        )
+    ]
+
+
+def test_logo_original_copy_reports_missing_copy(logo_original_fixture):
+    _, original = logo_original_fixture
+    original.unlink()
+
+    rows, ok = verify_assets.verify_logo_original_copy()
+
+    assert not ok
+    assert rows == [
+        (
+            verify_assets.LOGO_ORIGINAL_RELPATH,
+            f"byte-for-byte copy of {verify_assets.LOGO_PNG_RELPATH}",
+            "MISSING",
+            "file not found",
         )
     ]
 
