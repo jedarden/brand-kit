@@ -10,10 +10,10 @@ OTHER_COMMIT = "b" * 40
 ARGO_SUBMIT_TOKEN = "argo-submit-test-token"
 
 
-def submitted_workflow(commit=COMMIT, **overrides):
+def submitted_workflow(commit=COMMIT, branch="main", run="brand-kit-ci-abc123", **overrides):
     workflow = {
         "metadata": {
-            "name": "brand-kit-ci-abc123",
+            "name": run,
             "labels": {
                 "workflows.argoproj.io/workflow-template": "brand-kit-ci",
             },
@@ -22,12 +22,30 @@ def submitted_workflow(commit=COMMIT, **overrides):
             "arguments": {
                 "parameters": [
                     {"name": "repo", "value": "jedarden/brand-kit"},
-                    {"name": "branch", "value": "main"},
+                    {"name": "branch", "value": branch},
                     {"name": "revision", "value": commit},
                 ]
             }
         },
     }
+    workflow.update(overrides)
+    return workflow
+
+
+def attested_workflow(
+    commit=COMMIT,
+    *,
+    run="brand-kit-ci-abc123",
+    phase="Succeeded",
+    output_name="commit",
+    **overrides,
+):
+    workflow = submitted_workflow(commit, run=run)
+    workflow["status"] = {"phase": phase}
+    if output_name is not None:
+        workflow["status"]["outputs"] = {
+            "parameters": [{"name": output_name, "value": commit}]
+        }
     workflow.update(overrides)
     return workflow
 
@@ -79,6 +97,148 @@ def test_submit_uses_argo_workflowtemplate_endpoint_and_preserves_revision():
             {"authorization_scheme": "Bearer", "service": "Argo API"},
         )
     ]
+
+
+def test_submit_preserves_the_requested_branch_alongside_the_exact_full_sha():
+    calls = []
+    branch = "release/2026.09"
+
+    def request(method, url, payload=None, token=None, **kwargs):
+        calls.append((method, url, payload, token, kwargs))
+        return submitted_workflow(branch=branch)
+
+    result = brand_kit_ci_submit.submit_brand_kit_ci(
+        COMMIT,
+        branch=branch,
+        argo_token=ARGO_SUBMIT_TOKEN,
+        request=request,
+    )
+
+    assert result["metadata"]["name"] == "brand-kit-ci-abc123"
+    assert calls[0][2]["submitOptions"]["parameters"] == [
+        "repo=jedarden/brand-kit",
+        f"branch={branch}",
+        f"revision={COMMIT}",
+    ]
+
+
+def test_attestation_fetches_the_workflow_named_by_the_submission(monkeypatch):
+    calls = []
+    submitted = submitted_workflow(run="brand-kit-ci-submitted")
+
+    def request(method, url, payload=None, token=None, **kwargs):
+        calls.append((method, url, payload, token, kwargs))
+        if method == "POST":
+            return submitted
+        return attested_workflow(run=submitted["metadata"]["name"])
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+    result = brand_kit_ci_submit.submit_brand_kit_ci(
+        COMMIT,
+        argo_api_url="https://argo.example",
+        argo_token=ARGO_SUBMIT_TOKEN,
+        request=request,
+    )
+    assert result["metadata"]["name"] == "brand-kit-ci-submitted"
+
+    attested = release_publish.attest_argo_ci_run(
+        result["metadata"]["name"],
+        COMMIT,
+        api_url="https://argo.example",
+        token=ARGO_SUBMIT_TOKEN,
+        # Keep the test's request double in place for the read-only lookup.
+    )
+
+    assert attested["metadata"]["name"] == "brand-kit-ci-submitted"
+    assert calls[1][0:2] == (
+        "GET",
+        "https://argo.example/api/v1/workflows/argo-workflows/brand-kit-ci-submitted",
+    )
+
+
+@pytest.mark.parametrize(
+    ("workflow", "message"),
+    [
+        (attested_workflow(phase="Failed"), "only Succeeded is accepted"),
+        (attested_workflow(commit=OTHER_COMMIT), "attests commit"),
+    ],
+)
+def test_attestation_rejects_failed_or_mismatched_workflows(monkeypatch, workflow, message):
+    monkeypatch.setattr(
+        release_publish,
+        "request_json",
+        lambda *args, **kwargs: workflow,
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match=message):
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci-abc123",
+            COMMIT,
+            token=ARGO_SUBMIT_TOKEN,
+        )
+
+
+def test_attestation_rejects_a_different_workflow_even_when_its_commit_matches(monkeypatch):
+    monkeypatch.setattr(
+        release_publish,
+        "request_json",
+        lambda *args, **kwargs: attested_workflow(run="brand-kit-ci-other"),
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="expected"):
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci-abc123",
+            COMMIT,
+            token=ARGO_SUBMIT_TOKEN,
+        )
+
+
+def test_branch_names_and_log_lines_are_not_commit_attestations(monkeypatch):
+    submission = submitted_workflow()
+    submission["spec"]["arguments"]["parameters"] = [
+        {"name": "repo", "value": "jedarden/brand-kit"},
+        {"name": "branch", "value": "main"},
+    ]
+    submission["status"] = {
+        "nodes": {
+            "ci": {
+                "outputs": {
+                    "result": f"checked commit {COMMIT} successfully",
+                }
+            }
+        }
+    }
+
+    with pytest.raises(release_publish.ReleaseError, match="no structured full revision"):
+        brand_kit_ci_submit.validate_submission(submission, COMMIT)
+
+    attestation = attested_workflow(output_name=None)
+    attestation["spec"]["arguments"]["parameters"] = [
+        {"name": "repo", "value": "jedarden/brand-kit"},
+        {"name": "branch", "value": "main"},
+    ]
+    attestation["status"]["nodes"] = {
+        "ci": {
+            "outputs": {
+                "result": f"checked commit {COMMIT} successfully",
+            }
+        }
+    }
+    monkeypatch.setattr(
+        release_publish,
+        "request_json",
+        lambda *args, **kwargs: attestation,
+    )
+
+    with pytest.raises(
+        release_publish.ReleaseError,
+        match="no structured full-commit attestation",
+    ):
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci-abc123",
+            COMMIT,
+            token=ARGO_SUBMIT_TOKEN,
+        )
 
 
 @pytest.mark.parametrize(
