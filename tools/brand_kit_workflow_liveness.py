@@ -40,6 +40,11 @@ TARGETS = (
         "workflow_template": "brand-kit-consumer-drift",
         "max_age_minutes": 48 * 60,
     },
+    {
+        "name": "brand-kit-mirror-health",
+        "workflow_template": "brand-kit-mirror-health",
+        "max_age_minutes": 12 * 60,
+    },
 )
 
 

@@ -1,0 +1,117 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: brand-kit-mirror-health
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Read-only Forgejo-to-GitHub branch and tag parity report with owner alerting"
+spec:
+  entrypoint: check
+  onExit: route-mirror-health
+  serviceAccountName: argo-workflow
+  activeDeadlineSeconds: 1800
+  templates:
+    - name: check
+      container:
+        image: python:3.13.5-slim-bookworm
+        command: [bash, -c]
+        args:
+          - |
+            set -euo pipefail
+            # Preserve a diagnostic artifact even when setup or the canonical
+            # checkout fails before the checker can run.
+            printf '%s\n' '{"schema":"brand-kit-mirror-health/v1","status":"indeterminate","summary":{"match":0,"missing":0,"stale":0,"divergent":0,"indeterminate":1},"checks":[],"error":"workflow did not reach the mirror-health checker"}' \
+              > /tmp/brand-kit-mirror-health-report.json
+            printf '2\n' > /tmp/brand-kit-mirror-health-exit-code
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git
+            git clone --filter=blob:none --no-tags --depth=1 --branch main \
+              https://git.ardenone.com/jedarden/brand-kit.git /brand-kit
+            cd /brand-kit
+            set +e
+            python3 tools/check_mirror_health.py \
+              --canonical-repository https://git.ardenone.com/jedarden/brand-kit.git \
+              --mirror-repository https://github.com/jedarden/brand-kit.git \
+              --report /tmp/brand-kit-mirror-health-report.json
+            CHECK_EXIT=$?
+            set -e
+            printf '%s\n' "$CHECK_EXIT" > /tmp/brand-kit-mirror-health-exit-code
+            exit "$CHECK_EXIT"
+        outputs:
+          parameters:
+            - name: mirror-health-exit-code
+              valueFrom:
+                path: /tmp/brand-kit-mirror-health-exit-code
+                default: "2"
+          artifacts:
+            - name: brand-kit-mirror-health-report
+              path: /tmp/brand-kit-mirror-health-report.json
+              archive:
+                none: {}
+              artifactGC:
+                strategy: Never
+              s3:
+                endpoint: s3.ardenone.com
+                bucket: needle-ci-artifacts
+                region: garage
+                insecure: false
+                key: failures/brand-kit-mirror-health/v1/{{workflow.uid}}/report.json
+                accessKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: access-key
+                secretKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: secret-key
+        resources:
+          requests:
+            cpu: 150m
+            memory: 256Mi
+          limits:
+            cpu: 750m
+            memory: 768Mi
+    # The checker exits non-zero for confirmed drift and for inconclusive
+    # provider responses. Alertmanager routes both states to the owner.
+    - name: route-mirror-health
+      steps:
+        - - name: notify-owner
+            template: notify-owner
+            when: "{{workflow.status}} != Succeeded"
+            continueOn:
+              failed: true
+              error: true
+    - name: notify-owner
+      container:
+        image: curlimages/curl:8.12.1
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            REPORT_URL="https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-mirror-health/v1/{{workflow.uid}}/report.json"
+            curl --fail --silent --show-error --retry 3 --retry-delay 5 \
+              -H 'Content-Type: application/json' \
+              --data-binary @- \
+              http://alertmanager.monitoring.svc:9093/api/v1/alerts <<EOF
+            [{
+              "labels": {
+                "alertname": "BrandKitMirrorHealth",
+                "owner": "jedarden",
+                "component": "forgejo-github-mirror",
+                "follow_up": "mirror-health",
+                "bucket": "brand-kit",
+                "workflow_status": "{{workflow.status}}"
+              },
+              "annotations": {
+                "summary": "brand-kit Forgejo-to-GitHub mirror needs follow-up",
+                "description": "The scheduled read-only mirror check found a missing, stale, or divergent branch/tag, or could not inspect one of the repositories. Inspect the durable report before release or consumer processing.",
+                "report_url": "${REPORT_URL}"
+              }
+            }]
+            EOF
+            echo "brand-kit mirror-health owner alert sent: ${REPORT_URL}"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

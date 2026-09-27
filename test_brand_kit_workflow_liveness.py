@@ -30,35 +30,40 @@ def test_liveness_is_fresh_when_both_targets_have_recent_successes():
         assert kwargs["authorization_scheme"] == "Bearer"
         if "brand-kit-ci-failure-watch" in url:
             return {"items": [workflow("failure-watch", "Succeeded", "2026-09-27T12:30:00Z")]}
-        assert "brand-kit-consumer-drift" in url
-        return {"items": [workflow("consumer-drift", "Succeeded", "2026-09-26T12:00:00Z")]}
+        if "brand-kit-consumer-drift" in url:
+            return {"items": [workflow("consumer-drift", "Succeeded", "2026-09-26T12:00:00Z")]}
+        assert "brand-kit-mirror-health" in url
+        return {"items": [workflow("mirror-health", "Succeeded", "2026-09-27T12:00:00Z")]}
 
     report = brand_kit_workflow_liveness.run_liveness(
         "argo-secret", now=NOW, api_url="https://argo.example", request=request
     )
 
     assert report["status"] == "fresh"
-    assert [check["status"] for check in report["checks"]] == ["fresh", "fresh"]
+    assert [check["status"] for check in report["checks"]] == ["fresh", "fresh", "fresh"]
     assert report["checks"][0]["max_age_minutes"] == 60
     assert report["checks"][1]["max_age_minutes"] == 2880
+    assert report["checks"][2]["max_age_minutes"] == 720
 
 
 def test_liveness_is_stale_when_a_target_has_no_recent_success():
     def request(method, url, **kwargs):
         if "brand-kit-ci-failure-watch" in url:
             return {"items": []}
-        return {
-            "items": [
-                workflow("consumer-drift-old", "Succeeded", "2026-09-25T12:00:00Z")
-            ]
-        }
+        if "brand-kit-consumer-drift" in url:
+            return {
+                "items": [
+                    workflow("consumer-drift-old", "Succeeded", "2026-09-25T12:00:00Z")
+                ]
+            }
+        return {"items": []}
 
     report = brand_kit_workflow_liveness.run_liveness(
         "argo-secret", now=NOW, request=request
     )
 
     assert report["status"] == "stale"
-    assert [check["status"] for check in report["checks"]] == ["stale", "stale"]
+    assert [check["status"] for check in report["checks"]] == ["stale", "stale", "stale"]
     assert report["checks"][0]["reason"] == "no successful run was returned by Argo"
 
 
@@ -68,7 +73,9 @@ def test_liveness_is_indeterminate_when_argo_cannot_prove_one_target():
     def request(method, url, **kwargs):
         if "brand-kit-ci-failure-watch" in url:
             raise release_publish.ReleaseError("cannot reach Argo API")
-        return {"items": [workflow("consumer-drift", "Succeeded", "2026-09-27T12:00:00Z")]}
+        if "brand-kit-consumer-drift" in url:
+            return {"items": [workflow("consumer-drift", "Succeeded", "2026-09-27T12:00:00Z")]}
+        return {"items": [workflow("mirror-health", "Succeeded", "2026-09-27T12:00:00Z")]}
 
     report = brand_kit_workflow_liveness.run_liveness(
         token, now=NOW, request=request
@@ -77,6 +84,7 @@ def test_liveness_is_indeterminate_when_argo_cannot_prove_one_target():
     assert report["status"] == "indeterminate"
     assert report["checks"][0]["status"] == "indeterminate"
     assert report["checks"][1]["status"] == "fresh"
+    assert report["checks"][2]["status"] == "fresh"
     assert token not in json.dumps(report)
 
 

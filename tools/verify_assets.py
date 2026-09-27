@@ -167,11 +167,14 @@ EXPECTED_PRESENT = [
     "tools/consumer_drift.py",
     "tools/consumer_drift_submit.py",
     "tools/release_token_probe.py",
+    "tools/check_mirror_health.py",
     "consumer-drift.json",
     "automation/brand-kit-consumer-drift-cronworkflow.yml",
     "automation/brand-kit-consumer-drift-workflowtemplate.yml",
     "automation/brand-kit-release-token-probe-cronworkflow.yml",
     "automation/brand-kit-release-token-probe-workflowtemplate.yml",
+    "automation/brand-kit-mirror-health-cronworkflow.yml",
+    "automation/brand-kit-mirror-health-workflowtemplate.yml",
     "docs/notes/post-tag-consumer-update.md",
 ]
 

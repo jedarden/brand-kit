@@ -11,6 +11,10 @@ source.
 ## [Unreleased]
 
 ### Added
+- Scheduled Forgejo-to-GitHub mirror health check: the read-only Argo
+  `brand-kit-mirror-health` workflow compares every branch and tag, distinguishes
+  missing, stale, and divergent refs, retains a durable report, and alerts the
+  owner before release or consumer processing relies on the mirror.
 - Scheduled release-token validity probe: the daily Argo workflow checks the
   Forgejo and Argo credentials (including a server-side dry-run consumer
   submission), retains a sanitized report, and routes failures to the owner

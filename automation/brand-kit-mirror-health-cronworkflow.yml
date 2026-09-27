@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: brand-kit-mirror-health
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: "Every-six-hour read-only Forgejo-to-GitHub branch and tag mirror health check"
+spec:
+  # Run several times per day so a mirror outage is visible well before the
+  # next release or consumer-drift handoff.
+  schedules:
+    - "17 */6 * * *"
+  timezone: UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    workflowTemplateRef:
+      name: brand-kit-mirror-health

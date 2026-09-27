@@ -281,7 +281,8 @@ The separate `brand-kit-workflow-liveness` watchdog closes the gap where a
 scheduled detector never starts and therefore cannot run its own exit handler.
 Its CronWorkflow runs every 15 minutes and checks the latest successful
 `brand-kit-ci-failure-watch` run (fresh within 60 minutes) and
-`brand-kit-consumer-drift` run (fresh within 48 hours). A stale or indeterminate
+`brand-kit-consumer-drift` run (fresh within 48 hours), plus the scheduled
+`brand-kit-mirror-health` run (fresh within 12 hours). A stale or indeterminate
 check posts a `BrandKitWorkflowLiveness` Alertmanager notification and retains
 the tri-state report at
 `failures/brand-kit-workflow-liveness/v1/<workflow-uid>/report.json`. The
@@ -289,6 +290,17 @@ WorkflowTemplate and CronWorkflow are sourced from
 `automation/brand-kit-workflow-liveness-workflowtemplate.yml` and
 `automation/brand-kit-workflow-liveness-cronworkflow.yml`; the checker source
 is `tools/brand_kit_workflow_liveness.py`.
+
+The independent `brand-kit-mirror-health` CronWorkflow runs every six hours.
+`tools/check_mirror_health.py` reads every `refs/heads/*` and `refs/tags/*`
+from canonical Forgejo and the read-only GitHub mirror, reporting missing,
+stale, or divergent refs without pushing or changing either repository. It
+retains its JSON report at
+`failures/brand-kit-mirror-health/v1/<workflow-uid>/report.json` and its
+`BrandKitMirrorHealth` exit-handler alert routes to the `jedarden` owner
+channel. A healthy report requires exact parity for all branches and tags;
+an unavailable remote or inconclusive ancestry comparison is indeterminate and
+also fails closed.
 
 ## Forgejo release publication
 

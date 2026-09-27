@@ -122,18 +122,36 @@ the asset commit passed, so repair the read path and rerun the check first.
 
 ### Scheduled workflow liveness
 
-The failure watcher and consumer-drift fallback cannot report that they are
-missing: their Alertmanager handlers run only after a target Workflow starts.
-The independent `brand-kit-workflow-liveness` CronWorkflow therefore runs every
-15 minutes and lists successful runs for both target WorkflowTemplates. It
-reports `fresh` when the latest success is no more than 60 minutes old for
-`brand-kit-ci-failure-watch` or 48 hours old for `brand-kit-consumer-drift`.
+The failure watcher, consumer-drift fallback, and mirror-health check cannot
+report that they are missing: their Alertmanager handlers run only after a
+target Workflow starts. The independent `brand-kit-workflow-liveness`
+CronWorkflow therefore runs every 15 minutes and lists successful runs for all
+three target WorkflowTemplates. It reports `fresh` when the latest success is
+no more than 60 minutes old for `brand-kit-ci-failure-watch`, 48 hours old for
+`brand-kit-consumer-drift`, or 12 hours old for `brand-kit-mirror-health`.
 Missing/old successes are `stale`; an unavailable or malformed Argo response is
 `indeterminate`. Both non-fresh states fail the watchdog and invoke its
 `BrandKitWorkflowLiveness` owner alert. Its report is retained at
 `failures/brand-kit-workflow-liveness/v1/<workflow-uid>/report.json`, so a
 suspended/deleted/mis-scheduled CronWorkflow or broken template reference has a
 separate signal even when the target never reaches `onExit`.
+
+### Forgejo-to-GitHub mirror health
+
+The `brand-kit-mirror-health` WorkflowTemplate runs
+`tools/check_mirror_health.py` from a read-only checkout of canonical Forgejo
+every six hours. The checker uses `git ls-remote` for all branches and tags on
+both repositories. When object IDs differ, it fetches the named refs into a
+disposable local bare repository only to determine ancestry: a mirror commit
+behind Forgejo is `stale`, an unrelated or mirror-only ref is `divergent`, and
+an absent mirror ref is `missing`. It never runs `git push`, writes either
+remote, or treats an unavailable/inconclusive comparison as healthy.
+
+Reports are retained at
+`https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-mirror-health/v1/<workflow-uid>/report.json`.
+Confirmed drift and indeterminate reads both fail the Workflow and invoke the
+`BrandKitMirrorHealth` Alertmanager route, which sends the owner a durable
+report URL before a release or consumer handoff can rely on the mirror.
 
 ## Alertmanager route verification
 
@@ -150,9 +168,10 @@ Alertmanager route.
 | `brand-kit-consumer-drift` | `BrandKitConsumerDrift` | `consumer-drift` | — | `jedarden` |
 | `brand-kit-release-token-probe` | `BrandKitReleaseTokenProbe` | `release-token-probe` | `consumer-drift` | `jedarden` |
 | `brand-kit-workflow-liveness` | `BrandKitWorkflowLiveness` | `brand-kit-workflow-liveness` | `workflow-liveness` | `jedarden` |
+| `brand-kit-mirror-health` | `BrandKitMirrorHealth` | `forgejo-github-mirror` | `mirror-health` | `jedarden` |
 
 The complete label payloads also include `bucket: brand-kit` and the
-`workflow_status` template value. All four handlers POST to
+`workflow_status` template value. All five handlers POST to
 `http://alertmanager.monitoring.svc:9093/api/v1/alerts`; their `onExit` steps
 run only for non-successful workflows and use `continueOn` so an Alertmanager
 or ntfy outage cannot change the original failure result.
