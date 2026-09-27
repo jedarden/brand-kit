@@ -42,6 +42,9 @@ source.
   verifies the published Forgejo record, waits for canonical/mirror tag
   agreement, and submits the exact tag to the reusable Argo
   `WorkflowTemplate`; the daily `CronWorkflow` remains as a fallback
+- Consumer-drift failure routing: non-success Argo runs notify the owner through
+  Alertmanager/ntfy and retain the JSON report as a non-GC'd Garage artifact
+  linked from the alert
 - Site-owned favicon refresh path: the post-tag workflow runs
   `node scripts/make-favicons.mjs` in jedarden.com after a logo sync and before
   its commit, while `consumer_drift.py` detects stale `favicon.svg`,

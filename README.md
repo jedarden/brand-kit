@@ -295,6 +295,11 @@ GitHub avatar re-upload (no API for it), release-gate failure behavior, and what
 "in sync" means per asset — is in
 **`docs/notes/post-tag-consumer-update.md`** (ADR-2 and ADR-4).
 
+Non-success runs also invoke the WorkflowTemplate's exit handler, which posts a
+`BrandKitConsumerDrift` alert to the iad-ci Alertmanager/ntfy owner channel.
+The JSON report is retained as a non-GC'd Garage artifact at the URL included in
+that alert, rather than remaining only under the ephemeral pod's `/tmp`.
+
 ## Usage & rights
 
 These are the personal brand assets of Jed Arden. The repository is public so the

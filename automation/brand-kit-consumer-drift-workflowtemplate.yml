@@ -7,6 +7,10 @@ metadata:
     workflows.argoproj.io/description: "Read-only consumer drift audit for a published Forgejo release"
 spec:
   entrypoint: audit
+  # A failed audit is an owner-facing event, not merely an Argo UI status.
+  # Keep the handler best-effort so an Alertmanager outage cannot hide the
+  # detector's original non-zero result.
+  onExit: route-drift
   serviceAccountName: argo-workflow
   activeDeadlineSeconds: 1800
   arguments:
@@ -25,6 +29,13 @@ spec:
         args:
           - |
             set -euo pipefail
+            # These fallbacks make the report and exit-code outputs available
+            # even when package installation, cloning, or mirror polling
+            # fails before the detector can run. The report is uploaded by
+            # Argo after the pod exits, so it must never be /tmp-only state.
+            printf '%s\n' '{"schema":"brand-kit-consumer-drift/v1","status":"indeterminate","errors":["workflow did not reach the detector"]}' \
+              > /tmp/consumer-drift-report.json
+            printf '2\n' > /tmp/consumer-drift-exit-code
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
             python3 -m pip install --no-cache-dir --only-binary=:all: Pillow==12.1.1
@@ -60,6 +71,7 @@ spec:
             git -C /release fetch --depth=1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
             git -C /release checkout --detach --quiet "$TAG"
             git clone --filter=blob:none --depth=1 --branch main "{{workflow.parameters.site-repository}}" /jedarden.com
+            set +e
             python3 /brand-kit/tools/consumer_drift.py \
               --source-root /release \
               --config /brand-kit/consumer-drift.json \
@@ -67,6 +79,37 @@ spec:
               --site /jedarden.com \
               --report /tmp/consumer-drift-report.json \
               --json
+            DETECTOR_EXIT=$?
+            set -e
+            printf '%s\n' "$DETECTOR_EXIT" > /tmp/consumer-drift-exit-code
+            exit "$DETECTOR_EXIT"
+        outputs:
+          parameters:
+            - name: detector-exit-code
+              valueFrom:
+                path: /tmp/consumer-drift-exit-code
+                default: "2"
+          artifacts:
+            - name: consumer-drift-report
+              path: /tmp/consumer-drift-report.json
+              archive:
+                none: {}
+              # The owner notification links to this object after Argo has
+              # deleted the pod and (eventually) the Workflow CR.
+              artifactGC:
+                strategy: Never
+              s3:
+                endpoint: s3.ardenone.com
+                bucket: needle-ci-artifacts
+                region: garage
+                insecure: false
+                key: failures/brand-kit-consumer-drift/v1/{{workflow.uid}}/report.json
+                accessKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: access-key
+                secretKeySecret:
+                  name: needle-ci-artifact-publisher
+                  key: secret-key
         env:
           - name: FORGEJO_TOKEN
             valueFrom:
@@ -80,3 +123,43 @@ spec:
           limits:
             cpu: 1000m
             memory: 1Gi
+    # Workflow-level exit handler. Alertmanager's configured ntfy receiver
+    # routes this alert to the brand-kit owner. The step is conditional on a
+    # non-success workflow, which includes detector exit 1 (confirmed drift),
+    # exit 2 (indeterminate), and failures before the detector starts.
+    - name: route-drift
+      steps:
+        - - name: notify-owner
+            template: notify-owner
+            when: "{{workflow.status}} != Succeeded"
+            continueOn:
+              failed: true
+              error: true
+    - name: notify-owner
+      container:
+        image: curlimages/curl:8.12.1
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            REPORT_URL="https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1/{{workflow.uid}}/report.json"
+            curl --fail --silent --show-error --retry 3 --retry-delay 5 \
+              -H 'Content-Type: application/json' \
+              --data-binary @- \
+              http://alertmanager.monitoring.svc:9093/api/v1/alerts <<EOF
+            [{
+              "labels": {
+                "alertname": "BrandKitConsumerDrift",
+                "owner": "jedarden",
+                "component": "consumer-drift",
+                "bucket": "brand-kit",
+                "workflow_status": "{{workflow.status}}"
+              },
+              "annotations": {
+                "summary": "brand-kit consumer drift audit needs follow-up",
+                "description": "Workflow {{workflow.name}} ended {{workflow.status}}; inspect the durable report and run the post-tag consumer-update checklist.",
+                "report_url": "${REPORT_URL}"
+              }
+            }]
+            EOF
+            echo "Consumer-drift owner alert sent: ${REPORT_URL}"

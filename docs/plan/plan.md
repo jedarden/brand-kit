@@ -530,6 +530,16 @@ describe behavior that is easy to mistake for optional ceremony.
    older eligible release instead of treating temporary propagation as a
    consumer failure. The release-triggered workflow is the fast path; the
    daily run provides recovery when that handoff is delayed or missed.
+6. **A non-success audit is routed to the owner and retains evidence.**
+   The WorkflowTemplate's `onExit` handler posts a `BrandKitConsumerDrift`
+   alert to the iad-ci Alertmanager endpoint, whose configured ntfy receiver is
+   the `jedarden` owner channel. Exit `1`, exit `2`, and pre-detector failures
+   all notify; the handler is best-effort and never masks the original failed
+   workflow. The JSON report is uploaded to the shared Garage artifact bucket
+   under `failures/brand-kit-consumer-drift/v1/<workflow-uid>/report.json` with
+   `artifactGC: Never`, and the alert links to its public S3 URL. The report
+   therefore remains available after the pod and short-lived Argo Workflow are
+   removed.
 
 ### Alternatives Considered
 

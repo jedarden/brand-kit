@@ -1138,3 +1138,41 @@ def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     # result as a machine-readable artifact for later inspection.
     assert "--json" in workflow
     assert "--report /tmp/consumer-drift-report.json" in workflow
+
+
+def test_scheduled_workflow_routes_failures_and_retains_report():
+    workflow = Path(
+        "automation/brand-kit-consumer-drift-workflowtemplate.yml"
+    ).read_text(encoding="utf-8")
+    assert "  onExit: route-drift" in workflow
+    assert "    - name: route-drift" in workflow
+    assert "            template: notify-owner" in workflow
+    assert '            when: "{{workflow.status}} != Succeeded"' in workflow
+    assert "              failed: true\n              error: true" in workflow
+
+    assert "            - name: detector-exit-code" in workflow
+    assert (
+        "                path: /tmp/consumer-drift-exit-code\n"
+        '                default: "2"'
+    ) in workflow
+    assert "            - name: consumer-drift-report" in workflow
+    assert "              path: /tmp/consumer-drift-report.json" in workflow
+    assert "              artifactGC:\n                strategy: Never" in workflow
+    assert (
+        "                key: failures/brand-kit-consumer-drift/v1/{{workflow.uid}}/report.json"
+        in workflow
+    )
+    assert "                endpoint: s3.ardenone.com" in workflow
+    assert "                bucket: needle-ci-artifacts" in workflow
+    assert "                name: needle-ci-artifact-publisher" in workflow
+    assert "                key: access-key" in workflow
+    assert "                key: secret-key" in workflow
+
+    assert "        image: curlimages/curl:8.12.1" in workflow
+    assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow
+    assert '"alertname": "BrandKitConsumerDrift"' in workflow
+    assert '"owner": "jedarden"' in workflow
+    assert (
+        "https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1/{{workflow.uid}}/report.json"
+        in workflow
+    )

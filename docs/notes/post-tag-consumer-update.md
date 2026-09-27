@@ -67,6 +67,38 @@ reconciled through `declarative-config`; this repository keeps the
 application-owned detector and its trigger source together without granting
 the detector write credentials.
 
+### Failure routing and report retention
+
+The detector's non-zero result is now an owner-facing event. The
+`WorkflowTemplate` has a workflow-level `onExit: route-drift` handler. When the
+run is not `Succeeded` — including detector exit `1` (confirmed drift), exit
+`2` (indeterminate), and failures before the detector starts — the handler
+posts a `BrandKitConsumerDrift` alert to the in-cluster
+`alertmanager.monitoring.svc:9093/api/v1/alerts` endpoint. Alertmanager's
+configured `ntfy` receiver delivers it to the `jedarden` owner channel. The
+handler is best-effort and cannot turn the detector's failed workflow green;
+if the notification hop is unavailable, the Argo run and durable report still
+carry the failure.
+
+The owner follows the recovery section below: exit `1` means repair the stale
+consumer at the exact reported release tag, while exit `2` means repair the
+missing evidence or network condition and rerun that same tag. A report URL is
+included in the alert. The detector writes its JSON report to
+`/tmp/consumer-drift-report.json` only as the pod-local staging path; Argo
+uploads it as the `consumer-drift-report` artifact to Garage before the pod is
+reaped and marks the artifact `artifactGC: Never` so it survives Workflow and
+pod retention:
+
+```text
+https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1/<workflow-uid>/report.json
+```
+
+The selected release tag and all check results remain in that JSON object. The
+`needle-ci-artifacts` bucket has no lifecycle rule for this prefix, so reports
+remain available for owner follow-up until they are deliberately cleaned up
+under the bucket's quota/retention policy. The report is therefore not lost
+when the failed CronWorkflow disappears from the Argo UI.
+
 ## Consumer inventory (verified 2026-09-15)
 
 | Consumer | File(s) | Relationship to this repo |
