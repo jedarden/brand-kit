@@ -44,6 +44,63 @@ gate must be rerun for that commit and reach `Succeeded` before release
 publication. A watcher/API error is an operational failure, not evidence that
 the asset commit passed, so repair the read path and rerun the check first.
 
+## Alertmanager route verification
+
+The regression-gate and consumer-drift handlers have a contract test in
+`test_alertmanager_routing.py`. It parses the JSON heredoc each workflow posts
+to Alertmanager, checking the alert names and labels below. The shared
+`bucket: brand-kit` label is also the grouping key used by the configured
+Alertmanager route.
+
+| Workflow | Alert name | Component | Follow-up | Owner |
+|---|---|---|---|---|
+| `brand-kit-ci-failure-watch` | `BrandKitCIRegressionGate` | `brand-kit-ci` | `regression-gate` | `jedarden` |
+| `brand-kit-consumer-drift` | `BrandKitConsumerDrift` | `consumer-drift` | — | `jedarden` |
+
+The complete label payloads also include `bucket: brand-kit` and the
+`workflow_status` template value. Both handlers POST to
+`http://alertmanager.monitoring.svc:9093/api/v1/alerts`; their `onExit` steps
+run only for non-successful workflows and use `continueOn` so an Alertmanager
+or ntfy outage cannot change the original failure result.
+
+For a live, redacted check in the iad-ci cluster, first inspect only the
+non-secret route fields from the rendered config. This command must print the
+`ntfy` receiver, the `[alertname, bucket]` grouping, and `max_alerts: 0`; it
+does not print the ntfy URL or bearer token:
+
+```bash
+kubectl -n monitoring get secret alertmanager-config \
+  -o jsonpath='{.data.alertmanager\.yaml}' |
+  base64 --decode |
+  grep -E '^[[:space:]]+(receiver: ntfy|group_by: \[alertname, bucket\]|- name: ntfy|max_alerts: 0)$'
+```
+
+Then send a clearly marked canary through the in-cluster Alertmanager service
+and inspect the Alertmanager API/logs for acceptance and notification errors.
+The canary uses the same labels as the regression-gate alert, so it exercises
+the owner route without reading or printing any credential:
+
+```bash
+kubectl -n monitoring port-forward svc/alertmanager 19093:9093 >/dev/null 2>&1 &
+PORT_FORWARD_PID=$!
+trap 'kill "$PORT_FORWARD_PID" 2>/dev/null || true' EXIT
+curl --fail --silent --show-error \
+  -H 'Content-Type: application/json' \
+  --data '[{"labels":{"alertname":"BrandKitCIRegressionGate","owner":"jedarden","component":"brand-kit-ci","follow_up":"regression-gate","bucket":"brand-kit","workflow_status":"routing-canary"},"annotations":{"summary":"brand-kit Alertmanager routing canary"}}]' \
+  http://127.0.0.1:19093/api/v1/alerts
+curl --fail --silent --show-error \
+  'http://127.0.0.1:19093/api/v2/alerts?filter=alertname%3D%22BrandKitCIRegressionGate%22'
+kubectl -n monitoring logs deploy/alertmanager --since=2m |
+  grep -Ei 'notify|ntfy|error'
+```
+
+The canary is an operational notification and should be run only when an
+owner can acknowledge it. A successful API response proves Alertmanager
+accepted the alert; the recent logs must show the webhook notification was
+attempted without an error. If notification delivery is unavailable, retain
+the failed workflow and durable report as the source of truth: delivery is
+intentionally best-effort.
+
 ## Pinned versions (canonical)
 
 | Tool | Pin | Install command | Notes |
