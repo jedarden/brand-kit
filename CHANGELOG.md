@@ -11,6 +11,10 @@ source.
 ## [Unreleased]
 
 ### Added
+- Exact-commit `brand-kit-ci` trigger path: `tools/brand_kit_ci_submit.py`
+  submits the Argo WorkflowTemplate with a required full `revision` SHA and
+  rejects a submission response that drops or changes that revision; the
+  release checklist documents the main-branch and release-commit flow.
 - Scheduled Forgejo-to-GitHub mirror health check: the read-only Argo
   `brand-kit-mirror-health` workflow compares every branch and tag, distinguishes
   missing, stale, and divergent refs, retains a durable report, and alerts the

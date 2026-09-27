@@ -249,6 +249,35 @@ Argo phase of `Succeeded` plus logs showing the verifier, full pytest, build,
 and final no-drift check all reached exit `0`. A local test pass or the mere
 presence of the WorkflowTemplate is not CI acceptance evidence.
 
+### Triggering an exact commit
+
+`brand-kit-ci` is submitted manually through the Argo Workflows API. The
+operator-facing command is `tools/brand_kit_ci_submit.py`; it requires a full
+commit SHA and passes it as the immutable `revision` parameter to the
+WorkflowTemplate. The template checks out that revision detached and exposes
+the resulting full SHA as its structured `commit` output. A branch name alone
+is not a valid release gate because it can move while a queued workflow is
+waiting for capacity.
+
+For a pushed commit on `main` (including the commit being prepared for a
+release), run:
+
+```bash
+COMMIT="$(git rev-parse --verify HEAD^{commit})"
+.venv/bin/python tools/brand_kit_ci_submit.py \
+  --commit "$COMMIT" \
+  --branch main
+```
+
+The command uses `ARGO_SUBMIT_TOKEN` from the release-token provisioning
+contract; credentials are environment-only and never command-line options.
+Record the returned workflow name, wait for `Succeeded`, and confirm its
+structured `commit` output equals `$COMMIT` before running the release
+publisher. The canonical template and any Argo Event Sensor must preserve the
+same `revision` value; a submission that drops it or returns another revision
+is rejected by the submitter and by the release publisher's exact-commit
+attestation.
+
 The application-owned `brand-kit-ci-failure-watch` companion in
 `automation/` checks the Argo API every 15 minutes for `Failed` or `Error`
 `brand-kit-ci` runs from the preceding two hours. That lookback covers the

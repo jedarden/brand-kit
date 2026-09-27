@@ -37,14 +37,25 @@ use the patch rule and this same ordering.
 1. Start from a clean brand-kit checkout at the commit that will be released.
 2. Confirm that `VERSION` is committed at the selected value and that the
    changelog section named by that value is already in the release commit.
-3. Confirm that the Argo `brand-kit-ci` workflow for that exact commit reached
-   `Succeeded`, including the asset verifier, full pytest suite, regeneration,
-   and no-drift checks. Copy the workflow run name. The publisher performs a
-   read-only `GET` against Argo and will accept the run only when its status is
-   `Succeeded` and a structured `commit`, `revision`, or equivalent full SHA
-   output matches the release commit. A log line or a branch name is not an
-   attestation; the WorkflowTemplate must expose the checked-out SHA as a
-   structured output before this release gate can pass.
+3. Submit `brand-kit-ci` for that exact commit before creating the tag. The
+   supported trigger is the repository-owned manual Argo submitter:
+
+   ```bash
+   COMMIT="$(git rev-parse --verify HEAD^{commit})"
+   .venv/bin/python tools/brand_kit_ci_submit.py \
+     --commit "$COMMIT" \
+     --branch main
+   ```
+
+   This passes the full SHA as the WorkflowTemplate's `revision` parameter;
+   the template must check out that revision detached, not resolve `main`
+   again when the pod starts. Record the returned workflow name and wait for
+   its `Succeeded` phase, including the asset verifier, full pytest suite,
+   regeneration, and no-drift checks. Confirm that the structured `commit`
+   output equals `$COMMIT`. The publisher performs a read-only `GET` against
+   Argo and accepts the run only when its status is `Succeeded` and a
+   structured `commit`, `revision`, or equivalent full SHA output matches the
+   release commit. A log line or a branch name is not an attestation.
    The application-owned `brand-kit-ci-failure-watch` also copies recent
    successful runs into a non-GC'd Garage artifact at
    `attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json`.
