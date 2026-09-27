@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -38,6 +39,42 @@ def argo_workflow(run="brand-kit-ci-abc123", phase="Succeeded", commit=COMMIT, *
     return workflow
 
 
+def git(root, *arguments):
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def initialize_git_repository(root):
+    git(root, "init", "-q")
+    git(root, "config", "user.name", "release-test")
+    git(root, "config", "user.email", "release-test@example.test")
+    (root / "release.txt").write_text("release\n", encoding="utf-8")
+    git(root, "add", "release.txt")
+    git(root, "commit", "-q", "-m", "release")
+    return git(root, "rev-parse", "HEAD")
+
+
+def test_local_tag_info_requires_an_annotated_tag_at_head(tmp_path):
+    commit = initialize_git_repository(tmp_path)
+    git(tmp_path, "tag", "-a", "v1.1.0", "-m", "release")
+    assert release_publish.local_tag_info("v1.1.0", tmp_path) == commit
+
+    git(tmp_path, "tag", "v1.1.1")
+    with pytest.raises(release_publish.ReleaseError, match="annotated tag"):
+        release_publish.local_tag_info("v1.1.1", tmp_path)
+
+    (tmp_path / "release.txt").write_text("new head\n", encoding="utf-8")
+    git(tmp_path, "add", "release.txt")
+    git(tmp_path, "commit", "-q", "-m", "new head")
+    with pytest.raises(release_publish.ReleaseError, match="HEAD"):
+        release_publish.local_tag_info("v1.1.0", tmp_path)
+
+
 def test_tag_validation_requires_an_exact_stable_tag():
     assert release_publish.validate_tag("v1.1.0") == "v1.1.0"
     for tag in ("v1.1", "v1.1.0-rc1", "1.1.0", " v1.1.0", "v1.1.0\n"):
@@ -57,6 +94,23 @@ def test_release_notes_are_taken_from_the_matching_changelog_section(tmp_path):
     assert release_publish.release_notes_from_changelog(changelog, "v1.1.0") == (
         "### Added\n- release item"
     )
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ("## [Unreleased]\n\n- not a release\n", "no .*release section"),
+        ("## [v1.1.0]\n\n## [v1.0.0]\n", "section .* empty"),
+    ],
+)
+def test_release_notes_extraction_fails_closed_for_missing_or_empty_sections(
+    tmp_path, contents, message
+):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(release_publish.ReleaseError, match=message):
+        release_publish.release_notes_from_changelog(changelog, "v1.1.0")
 
 
 def test_release_record_validation_fails_closed():
@@ -130,6 +184,32 @@ def test_publish_release_is_idempotent_for_an_existing_published_record(monkeypa
     assert all(call[2] is None for call in calls)
 
 
+def test_publish_release_accepts_a_409_only_after_reading_the_exact_record(monkeypatch):
+    calls = []
+
+    def request(method, url, payload=None, token=None, timeout=20.0):
+        calls.append((method, url, payload))
+        if len(calls) == 1:
+            raise release_publish.HttpFailure(404, "missing")
+        if method == "POST":
+            raise release_publish.HttpFailure(409, "already exists")
+        return published()
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    assert release_publish.publish_release("v1.1.0", COMMIT, "notes", token="secret") == published()
+    assert [call[0] for call in calls] == ["GET", "POST", "GET", "GET"]
+    assert all("github.com" not in call[1] for call in calls)
+
+
+def test_publish_release_rejects_an_existing_prerelease(monkeypatch):
+    prerelease = published(prerelease=True)
+    monkeypatch.setattr(release_publish, "request_json", lambda *args, **kwargs: prerelease)
+
+    with pytest.raises(release_publish.ReleaseError, match="stable published release"):
+        release_publish.publish_release("v1.1.0", COMMIT, "notes", token="secret")
+
+
 def test_publish_release_publishes_an_existing_draft(monkeypatch):
     calls = []
     draft = published(draft=True, id=17)
@@ -176,6 +256,32 @@ def test_mirror_gate_requires_exact_peeled_refs(monkeypatch):
             timeout=0,
             interval=0,
         )
+
+
+def test_mirror_gate_rejects_a_canonical_tag_at_the_wrong_commit(monkeypatch):
+    observed = []
+
+    def remote(remote_name, tag, root=release_publish.ROOT):
+        observed.append(remote_name)
+        return "b" * 40
+
+    monkeypatch.setattr(release_publish, "remote_tag_commit", remote)
+
+    with pytest.raises(release_publish.ReleaseError, match="origin .* expected"):
+        release_publish.wait_for_mirror("v1.1.0", COMMIT, timeout=0, interval=0)
+    assert observed == ["origin"]
+
+
+def test_mirror_gate_accepts_matching_canonical_and_mirror_commits(monkeypatch):
+    observed = []
+
+    def remote(remote_name, tag, root=release_publish.ROOT):
+        observed.append(remote_name)
+        return COMMIT
+
+    monkeypatch.setattr(release_publish, "remote_tag_commit", remote)
+    release_publish.wait_for_mirror("v1.1.0", COMMIT, timeout=0, interval=0)
+    assert observed == ["origin", "github"]
 
 
 def test_argo_attestation_reads_one_workflow_and_accepts_exact_succeeded_commit(monkeypatch):
@@ -239,6 +345,95 @@ def test_argo_attestation_rejects_conflicting_structured_commits(monkeypatch):
 
     with pytest.raises(release_publish.ReleaseError, match="conflicting commit attestations"):
         release_publish.attest_argo_ci_run("brand-kit-ci-abc123", COMMIT)
+
+
+def test_verify_only_reads_the_published_release_without_writing_or_pushing(monkeypatch, capsys):
+    events = []
+    api_calls = []
+
+    monkeypatch.setenv("FORGEJO_TOKEN", "secret")
+    monkeypatch.setattr(
+        release_publish,
+        "verify_ready",
+        lambda *args, **kwargs: events.append("verify-ready") or COMMIT,
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "attest_argo_ci_run",
+        lambda *args, **kwargs: events.append("argo") or argo_workflow(),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "wait_for_mirror",
+        lambda *args, **kwargs: events.append("mirror"),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "publish_release",
+        lambda *args, **kwargs: pytest.fail("verify-only must not publish"),
+    )
+
+    def request(method, url, payload=None, token=None, timeout=20.0):
+        api_calls.append((method, url, payload))
+        return published()
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    result = release_publish.main(
+        [
+            "--tag",
+            "v1.1.0",
+            "--ci-run",
+            "brand-kit-ci-abc123",
+            "--verify-only",
+            "--notes",
+            "unused in verify-only mode",
+            "--api-url",
+            "https://forgejo.example/api/v1",
+        ]
+    )
+
+    assert result == 0
+    assert events == ["verify-ready", "argo", "mirror"]
+    assert [(method, payload) for method, _, payload in api_calls] == [("GET", None)]
+    assert api_calls[0][1].startswith("https://forgejo.example/api/v1/")
+    assert "github.com" not in api_calls[0][1]
+    assert "READY" in capsys.readouterr().out
+
+
+def test_readiness_checks_only_use_read_commands_and_never_push_to_a_remote(monkeypatch):
+    commands = []
+
+    def run_git(arguments, root=release_publish.ROOT):
+        commands.append(arguments)
+        if arguments == ["cat-file", "-t", "refs/tags/v1.1.0"]:
+            return "tag"
+        if arguments == ["rev-parse", "--verify", "refs/tags/v1.1.0^{commit}"]:
+            return COMMIT
+        if arguments == ["rev-parse", "--verify", "HEAD^{commit}"]:
+            return COMMIT
+        if arguments == ["remote", "get-url", "origin"]:
+            return "https://git.ardenone.com/jedarden/brand-kit.git"
+        if arguments == ["remote", "get-url", "github"]:
+            return "https://github.com/jedarden/brand-kit.git"
+        raise AssertionError(arguments)
+
+    def run_git_optional(arguments, root=release_publish.ROOT):
+        commands.append(arguments)
+        assert arguments[:2] == ["ls-remote", "--exit-code"]
+        return subprocess.CompletedProcess(
+            ["git", *arguments],
+            0,
+            stdout=f"{COMMIT} refs/tags/v1.1.0^{{}}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(release_publish, "run_git", run_git)
+    monkeypatch.setattr(release_publish, "run_git_optional", run_git_optional)
+
+    assert release_publish.verify_ready("v1.1.0", timeout=0, interval=0) == COMMIT
+    assert all(command[0] not in {"push", "fetch", "send-pack"} for command in commands)
+    assert all("push" not in command for command in commands)
 
 
 def test_workflow_documentation_keeps_forgejo_authoritative():
