@@ -29,7 +29,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +44,9 @@ PUBLICATION_PUBLISHER_PATH = Path("tools/release_publish.py")
 DERIVED_DIRECTORIES = ("avatars", "banners", "favicon", "logo")
 DERIVED_FILES = ("palette.json", "platform-assets.json")
 
-VERSION_PATTERN = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+VERSION_PATTERN = re.compile(
+    r"^v(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)$"
+)
 RELEASE_HEADING_PATTERN = re.compile(
     r"^## \[(?P<version>v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))\]"
     r" - (?P<released>[0-9]{4}-[0-9]{2}-[0-9]{2})$"
@@ -52,10 +54,24 @@ RELEASE_HEADING_PATTERN = re.compile(
 PUBLICATION_WORKFLOW_MARKERS = (
     "# Forgejo release-publication workflow",
     "tools/release_publish.py",
+    'VERSION="$(tr -d \'\\r\\n\' < VERSION)"',
+    'git tag -a "$VERSION"',
+    'git push origin "refs/tags/$VERSION"',
     "--tag",
+    '--tag "$VERSION"',
     "--ci-run",
     "published Forgejo Release",
 )
+BUMP_RANK = {"patch": 0, "minor": 1, "major": 2}
+SOURCE_ARTWORK_PATHS = (
+    "source/hero.png",
+    "source/logo.svg",
+    "source/logo-transparent.svg",
+)
+SCHEMA_PATHS = {
+    "automation/manifest.schema.json",
+    "platform-assets.schema.json",
+}
 
 
 class ReleasePreflightError(ValueError):
@@ -78,9 +94,34 @@ class DiffClassification:
         return bool(self.source or self.derived)
 
     @property
+    def release_requested(self) -> bool:
+        """Whether the diff explicitly prepares a release commit.
+
+        Documentation and metadata can remain under ``Unreleased``.  If both
+        release identity files are part of such a diff, however, the author
+        has intentionally selected a stable release and the SemVer policy
+        applies to it as well.
+        """
+
+        return (
+            self.release_required
+            or str(VERSION_PATH) in self.paths and str(CHANGELOG_PATH) in self.paths
+        )
+
+    @property
     def kind(self) -> str:
         if self.release_required:
             return "release-required"
+        content_documentation = tuple(
+            path for path in self.documentation if path != str(CHANGELOG_PATH)
+        )
+        content_metadata = tuple(
+            path for path in self.metadata if path != str(VERSION_PATH)
+        )
+        if content_documentation and not (content_metadata or self.other):
+            return "documentation-only"
+        if content_metadata and not (content_documentation or self.other):
+            return "metadata-only"
         if self.documentation and not (self.metadata or self.other):
             return "documentation-only"
         if self.metadata and not (self.documentation or self.other):
@@ -98,6 +139,15 @@ class PreflightReport:
     version: str | None
     changelog_heading: str | None
     publication_workflow: Path | None
+    required_bump: str | None
+
+
+@dataclass(frozen=True)
+class PathChange:
+    """A Git path change, including both sides of a rename or copy."""
+
+    status: str
+    paths: tuple[str, ...]
 
 
 def _normalize_path(path: str | Path) -> str:
@@ -109,6 +159,74 @@ def _normalize_path(path: str | Path) -> str:
 
 def _is_under(path: str, directory: str) -> bool:
     return path == directory or path.startswith(f"{directory}/")
+
+
+def _version_key(version: str, *, label: str) -> tuple[int, int, int]:
+    match = VERSION_PATTERN.fullmatch(version)
+    if not match:
+        raise ReleasePreflightError(
+            f"{label} must contain exactly one vMAJOR.MINOR.PATCH line"
+        )
+    return tuple(int(match.group(part)) for part in ("major", "minor", "patch"))
+
+
+def _bump_kind(previous: tuple[int, int, int], current: tuple[int, int, int]) -> str:
+    if current[0] != previous[0]:
+        return "major"
+    if current[1] != previous[1]:
+        return "minor"
+    return "patch"
+
+
+def _path_bump(path: str, status: str) -> str | None:
+    """Return the minimum ADR-5 bump implied by one changed path."""
+
+    status = status[:1] or "M"
+    if path in SCHEMA_PATHS:
+        return "major"
+    if _is_under(path, "source"):
+        if status in {"D", "R"}:
+            return "major"
+        if path.endswith(".sha256"):
+            return "patch"
+        if path in SOURCE_ARTWORK_PATHS or path.startswith("source/"):
+            return "minor"
+    if path in DERIVED_FILES or any(
+        _is_under(path, directory) for directory in DERIVED_DIRECTORIES
+    ):
+        if status in {"D", "R"}:
+            return "major"
+        if status == "A":
+            return "minor"
+        return "patch"
+    return None
+
+
+def _required_bump(
+    classification: DiffClassification,
+    change_statuses: Mapping[str, str] | None = None,
+) -> str | None:
+    """Classify the minimum release bump required by a candidate diff.
+
+    Direct callers normally provide only paths, so ordinary source changes are
+    treated as minor and ordinary derived-output changes as patch.  The CLI
+    supplies Git statuses to distinguish additions (minor) and removals or
+    renames (major), as required by ADR-5.
+    """
+
+    if not classification.release_requested:
+        return None
+
+    statuses = change_statuses or {}
+    levels: list[str] = []
+    for path in classification.paths:
+        level = _path_bump(path, statuses.get(path, "M"))
+        if level is not None:
+            levels.append(level)
+
+    if not levels:
+        return "patch"
+    return max(levels, key=BUMP_RANK.__getitem__)
 
 
 def classify_paths(paths: Iterable[str | Path]) -> DiffClassification:
@@ -174,8 +292,8 @@ def _git(*arguments: str, root: Path) -> str:
     return result.stdout
 
 
-def changed_paths(root: Path, base: str, head: str = "HEAD") -> tuple[str, ...]:
-    """Return every old and new path touched by a Git diff.
+def changed_path_changes(root: Path, base: str, head: str = "HEAD") -> tuple[PathChange, ...]:
+    """Return Git path changes, including both sides of renames.
 
     Including both sides of renames/deletions prevents a source or generated
     file from escaping the release gate merely because it was renamed.
@@ -191,17 +309,32 @@ def changed_paths(root: Path, base: str, head: str = "HEAD") -> tuple[str, ...]:
         "--",
         root=root,
     )
-    paths: list[str] = []
+    changes: list[PathChange] = []
     for line in output.splitlines():
         fields = line.split("\t")
         if len(fields) < 2:
             continue
         status = fields[0]
         if status.startswith(("R", "C")) and len(fields) >= 3:
-            paths.extend(fields[1:3])
+            paths = tuple(_normalize_path(path) for path in fields[1:3])
         else:
-            paths.append(fields[1])
-    return tuple(sorted({_normalize_path(path) for path in paths}))
+            paths = (_normalize_path(fields[1]),)
+        changes.append(PathChange(status[:1], paths))
+    return tuple(changes)
+
+
+def changed_paths(root: Path, base: str, head: str = "HEAD") -> tuple[str, ...]:
+    """Return every old and new path touched by a Git diff."""
+
+    return tuple(
+        sorted(
+            {
+                path
+                for change in changed_path_changes(root, base, head)
+                for path in change.paths
+            }
+        )
+    )
 
 
 def _read_candidate(root: Path, relative: Path) -> str:
@@ -215,10 +348,9 @@ def _read_candidate(root: Path, relative: Path) -> str:
 def _read_version(root: Path) -> str:
     content = _read_candidate(root, VERSION_PATH)
     lines = content.splitlines()
-    if len(lines) != 1 or not VERSION_PATTERN.fullmatch(lines[0]):
-        raise ReleasePreflightError(
-            "VERSION must contain exactly one vMAJOR.MINOR.PATCH line"
-        )
+    if len(lines) != 1:
+        raise ReleasePreflightError("VERSION must contain exactly one vMAJOR.MINOR.PATCH line")
+    _version_key(lines[0], label="VERSION")
     return lines[0]
 
 
@@ -226,11 +358,19 @@ def _base_version(root: Path, base: str) -> str | None:
     try:
         content = _git("show", f"{base}:VERSION", root=root)
     except ReleasePreflightError:
+        # The first release may predate the canonical VERSION file.  When the
+        # comparison ref itself is a stable SemVer tag, its name is still a
+        # trustworthy base version for the increment check.
+        if VERSION_PATTERN.fullmatch(base):
+            return base
         return None
     lines = content.splitlines()
-    if len(lines) == 1 and VERSION_PATTERN.fullmatch(lines[0]):
-        return lines[0]
-    return None
+    if len(lines) != 1:
+        raise ReleasePreflightError(
+            f"base VERSION must contain exactly one vMAJOR.MINOR.PATCH line ({base})"
+        )
+    _version_key(lines[0], label=f"base VERSION ({base})")
+    return lines[0]
 
 
 def _matching_changelog_heading(changelog: str, version: str) -> str:
@@ -291,24 +431,59 @@ def _validate_publication_workflow(root: Path, relative: Path) -> Path:
     return relative
 
 
+def _validate_release_tag(tag: str, version: str) -> None:
+    _version_key(tag, label="release tag")
+    if tag != version:
+        raise ReleasePreflightError(
+            f"release tag {tag} does not match VERSION {version}; the eventual tag must be derived from VERSION"
+        )
+
+
+def _validate_bump(version: str, base_version: str, required_bump: str) -> None:
+    if required_bump not in BUMP_RANK:
+        raise ReleasePreflightError(f"unknown required SemVer bump: {required_bump}")
+
+    current = _version_key(version, label="VERSION")
+    previous = _version_key(base_version, label="base VERSION")
+    if current == previous:
+        raise ReleasePreflightError(
+            f"VERSION remains {version}; release-required changes require a new release version"
+        )
+    if current < previous:
+        raise ReleasePreflightError(
+            f"VERSION {version} is lower than base VERSION {base_version}; release versions must increase"
+        )
+
+    actual_bump = _bump_kind(previous, current)
+    if BUMP_RANK[actual_bump] < BUMP_RANK[required_bump]:
+        raise ReleasePreflightError(
+            f"VERSION {version} is only a {actual_bump} bump from {base_version}; "
+            f"{required_bump} is required for this classified change"
+        )
+
+
 def check_preflight(
     root: Path,
     paths: Iterable[str | Path],
     *,
     base_version: str | None = None,
     publication_workflow: Path = PUBLICATION_WORKFLOW_PATH,
+    change_statuses: Mapping[str, str] | None = None,
+    tag: str | None = None,
 ) -> PreflightReport:
     """Validate release requirements for *paths* in the candidate tree.
 
     ``base_version`` is the version from the last published tree.  When it is
-    supplied, a source/derived diff must bump ``VERSION`` rather than merely
-    repeating the old release number.
+    supplied, the selected version must increase by the bump required by the
+    classified change.  ``tag`` is optional so callers that already selected
+    an eventual tag can verify it is exactly the canonical ``VERSION`` value.
     """
 
     root = root.resolve()
     classification = classify_paths(paths)
-    if not classification.release_required:
-        return PreflightReport(classification, None, None, None)
+    required_bump = _required_bump(classification, change_statuses)
+    if not classification.release_requested:
+        return PreflightReport(classification, None, None, None, None)
 
     changed = set(classification.paths)
     missing = [
@@ -322,14 +497,14 @@ def check_preflight(
         )
 
     version = _read_version(root)
-    if base_version is not None and version == base_version:
-        raise ReleasePreflightError(
-            f"VERSION remains {version}; source or derived-asset changes require a new release version"
-        )
+    if tag is not None:
+        _validate_release_tag(tag, version)
+    if base_version is not None and required_bump is not None:
+        _validate_bump(version, base_version, required_bump)
 
     heading = _matching_changelog_heading(_read_candidate(root, CHANGELOG_PATH), version)
     workflow = _validate_publication_workflow(root, publication_workflow)
-    return PreflightReport(classification, version, heading, workflow)
+    return PreflightReport(classification, version, heading, workflow, required_bump)
 
 
 def _format_paths(label: str, paths: Sequence[str]) -> str:
@@ -346,6 +521,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--base",
         required=True,
         help="last published commit or tag to compare with the candidate",
+    )
+    parser.add_argument(
+        "--tag",
+        help="optional eventual release tag; it must match VERSION exactly",
     )
     parser.add_argument("--head", default="HEAD", help="candidate commit (default: HEAD)")
     parser.add_argument(
@@ -370,13 +549,23 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root = args.root.resolve()
     try:
-        paths = changed_paths(root, args.base, args.head)
+        changes = changed_path_changes(root, args.base, args.head)
+        paths = tuple(
+            sorted({path for change in changes for path in change.paths})
+        )
+        change_statuses = {
+            path: change.status
+            for change in changes
+            for path in change.paths
+        }
         base_version = _base_version(root, args.base)
         report = check_preflight(
             root,
             paths,
             base_version=base_version,
             publication_workflow=args.publication_workflow,
+            change_statuses=change_statuses,
+            tag=args.tag,
         )
     except ReleasePreflightError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -391,6 +580,7 @@ def main(argv: list[str] | None = None) -> int:
     print(_format_paths("other", classification.other))
     if report.version is not None:
         print(f"PASS VERSION={report.version}")
+        print(f"PASS required-bump={report.required_bump}")
         print(f"PASS changelog={report.changelog_heading}")
         print(f"PASS publication-workflow={report.publication_workflow}")
     else:
