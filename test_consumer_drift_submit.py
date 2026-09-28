@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -62,6 +63,108 @@ def existing_workflow(
             },
         },
     }
+
+
+def _assert_submitter_argo_request(
+    method, url, payload, kwargs, *, api_url, workflow_name, read_token, submit_token
+):
+    """Enforce the submitter's read-only reconciliation and one-write boundary."""
+    expected_origin = urlsplit(api_url)
+    parsed = urlsplit(url)
+    assert (parsed.scheme, parsed.netloc) == (
+        expected_origin.scheme,
+        expected_origin.netloc,
+    )
+    assert parsed.username is None
+    assert parsed.password is None
+    assert not parsed.fragment
+
+    workflow_list_path = "/api/v1/workflows/argo-workflows"
+    if method == "GET":
+        assert kwargs == {
+            "token": read_token,
+            "authorization_scheme": "Bearer",
+            "service": "Argo API",
+        }
+        assert payload is None
+        if parsed.path == workflow_list_path:
+            query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+            assert set(query) == {"labelSelector", "limit"}
+            assert query["labelSelector"] == [
+                "workflows.argoproj.io/workflow-template=brand-kit-consumer-drift"
+            ]
+            assert query["limit"] == ["1000"]
+        else:
+            assert parsed.path == f"{workflow_list_path}/{workflow_name}"
+            assert not parsed.query
+        return
+
+    assert method == "POST"
+    assert parsed.path == workflow_list_path
+    assert not parsed.query
+    assert kwargs == {
+        "token": submit_token,
+        "authorization_scheme": "Bearer",
+        "service": "Argo API",
+    }
+    assert payload["workflow"]["spec"]["workflowTemplateRef"] == {
+        "name": "brand-kit-consumer-drift"
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "token"),
+    [
+        (
+            "POST",
+            "https://argo.example/api/v1/workflows/argo-workflows?unexpected=true",
+            ARGO_SUBMIT_TOKEN,
+        ),
+        (
+            "PATCH",
+            "https://argo.example/api/v1/workflows/argo-workflows",
+            ARGO_SUBMIT_TOKEN,
+        ),
+        (
+            "PUT",
+            "https://argo.example/api/v1/workflows/argo-workflows",
+            ARGO_SUBMIT_TOKEN,
+        ),
+        (
+            "DELETE",
+            "https://argo.example/api/v1/workflows/argo-workflows",
+            ARGO_SUBMIT_TOKEN,
+        ),
+        (
+            "GET",
+            "https://argo.example/api/v1/workflows/other-namespace",
+            ARGO_READ_TOKEN,
+        ),
+        (
+            "GET",
+            "https://argo.example/api/v1/workflows/argo-workflows",
+            ARGO_SUBMIT_TOKEN,
+        ),
+    ],
+)
+def test_submitter_argo_contract_rejects_unexpected_method_endpoint_or_credential(
+    method, url, token
+):
+    with pytest.raises(AssertionError):
+        _assert_submitter_argo_request(
+            method,
+            url,
+            {},
+            {
+                "token": token,
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+            },
+            api_url="https://argo.example",
+            workflow_name=consumer_drift_submit.workflow_name(COMMIT),
+            read_token=ARGO_READ_TOKEN,
+            submit_token=ARGO_SUBMIT_TOKEN,
+        )
 
 
 def test_workflow_payload_propagates_the_exact_release_tag():
@@ -155,6 +258,16 @@ def test_submitter_allowlists_one_workflowtemplate_post_and_read_reconciliation(
 
     def request(method, url, payload=None, token=None, **kwargs):
         calls.append((method, url, payload, token, kwargs))
+        _assert_submitter_argo_request(
+            method,
+            url,
+            payload,
+            {"token": token, **kwargs},
+            api_url="https://argo.example",
+            workflow_name=workflow_name,
+            read_token=ARGO_READ_TOKEN,
+            submit_token=ARGO_SUBMIT_TOKEN,
+        )
         if method == "GET" and url == exact_url:
             raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
         if method == "GET" and url == list_url:
@@ -214,6 +327,16 @@ def test_ambiguous_submit_reconciles_with_read_token_without_reposting(monkeypat
     def request(method, url, payload=None, token=None, **kwargs):
         nonlocal exact_reads
         calls.append((method, url, payload, token, kwargs))
+        _assert_submitter_argo_request(
+            method,
+            url,
+            payload,
+            {"token": token, **kwargs},
+            api_url="https://argo.example",
+            workflow_name=workflow_name,
+            read_token=ARGO_READ_TOKEN,
+            submit_token=ARGO_SUBMIT_TOKEN,
+        )
         if method == "GET" and url == exact_url:
             exact_reads += 1
             if exact_reads == 1:
