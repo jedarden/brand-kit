@@ -313,6 +313,16 @@ pipeline instead of a manual after-step.
 
 ## CI regression gate
 
+Run the repository documentation smoke check locally with:
+
+```bash
+python3 tools/check_documentation.py
+```
+
+It checks relative Markdown links, documented repository paths and script entry
+points, schema references, and the required pinned virtual-environment commands
+for asset generation and the Python regression suite.
+
 The Argo `brand-kit-ci` WorkflowTemplate in `jedarden/declarative-config`
 (`k8s/iad-ci/argo-workflows/brand-kit-ci-workflowtemplate.yml`) applies the
 pinned toolchain and runs this acceptance sequence in order:

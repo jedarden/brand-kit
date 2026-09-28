@@ -105,7 +105,7 @@ behavior are defined in
 `origin` is the canonical Forgejo repository at
 `https://git.ardenone.com/jedarden/brand-kit.git`; `github` is its read-only,
 server-side push mirror. The repeatable operator procedure is
-[`docs/notes/release-publication.md`](notes/release-publication.md), backed by
+[`docs/notes/release-publication.md`](../notes/release-publication.md), backed by
 `tools/release_publish.py`. It runs only after the `brand-kit-ci` Argo run for
 the exact release commit has succeeded. The publisher performs a read-only
 Argo API attestation of that run: it requires `Succeeded` plus a structured

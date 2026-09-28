@@ -10,7 +10,7 @@ contract drift, test failures, unexpected generated files, or regenerated
 diffs, so a commit whose assets or checks did not pass this toolchain is a
 broken commit.
 The ordered commands and required Argo log evidence are documented under
-[CI regression gate](../README.md#ci-regression-gate).
+[CI regression gate](../../README.md#ci-regression-gate).
 
 ## CI failure routing and owner follow-up
 
