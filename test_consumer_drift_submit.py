@@ -194,6 +194,74 @@ def test_submitter_allowlists_one_workflowtemplate_post_and_read_reconciliation(
     }
 
 
+def test_ambiguous_submit_reconciles_with_read_token_without_reposting(monkeypatch):
+    _prepare_submit_gates(monkeypatch)
+    calls = []
+    workflow_name = consumer_drift_submit.workflow_name(COMMIT)
+    exact_url = (
+        "https://argo.example/api/v1/workflows/argo-workflows/"
+        f"{workflow_name}"
+    )
+    list_url = (
+        "https://argo.example/api/v1/workflows/argo-workflows?"
+        "labelSelector=workflows.argoproj.io%2Fworkflow-template%3D"
+        "brand-kit-consumer-drift&limit=1000"
+    )
+    submit_url = "https://argo.example/api/v1/workflows/argo-workflows"
+    reconciled = existing_workflow(name=workflow_name)
+    exact_reads = 0
+
+    def request(method, url, payload=None, token=None, **kwargs):
+        nonlocal exact_reads
+        calls.append((method, url, payload, token, kwargs))
+        if method == "GET" and url == exact_url:
+            exact_reads += 1
+            if exact_reads == 1:
+                raise release_publish.HttpFailure(
+                    404, "workflow not found", service="Argo API"
+                )
+            return reconciled
+        if method == "GET" and url == list_url:
+            return {"items": []}
+        if method == "POST" and url == submit_url:
+            raise release_publish.HttpFailure(
+                503, "submission outcome is ambiguous", service="Argo API"
+            )
+        pytest.fail(f"unexpected consumer submitter request: {method} {url}")
+
+    result = consumer_drift_submit.submit_consumer_drift(
+        "v1.1.0",
+        forgejo_token=FORGEJO_TOKEN,
+        argo_token=ARGO_SUBMIT_TOKEN,
+        argo_read_token=ARGO_READ_TOKEN,
+        argo_api_url="https://argo.example",
+        request=request,
+    )
+
+    assert result == reconciled
+    assert [(method, url) for method, url, *_ in calls] == [
+        ("GET", exact_url),
+        ("GET", list_url),
+        ("POST", submit_url),
+        ("GET", exact_url),
+    ]
+    assert sum(method == "POST" for method, *_ in calls) == 1
+    assert [token for method, _, _, token, _ in calls if method == "GET"] == [
+        ARGO_READ_TOKEN,
+        ARGO_READ_TOKEN,
+        ARGO_READ_TOKEN,
+    ]
+    post = next(call for call in calls if call[0] == "POST")
+    assert post[3] == ARGO_SUBMIT_TOKEN
+    assert post[2]["workflow"]["spec"]["workflowTemplateRef"] == {
+        "name": "brand-kit-consumer-drift"
+    }
+    assert all(
+        call[4] == {"authorization_scheme": "Bearer", "service": "Argo API"}
+        for call in calls
+    )
+
+
 def test_submit_requires_dedicated_argo_submit_credential(monkeypatch):
     monkeypatch.setenv("FORGEJO_TOKEN", FORGEJO_TOKEN)
     monkeypatch.setenv("ARGO_TOKEN", "read-only-token-must-not-be-reused")
