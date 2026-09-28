@@ -192,6 +192,31 @@ file's SHA-256, and the declared transform. `--check` compares that manifest
 with the current checkout and reports a missing, malformed, old-reference, or
 changed-digest manifest as `STALE`; it never silently refreshes it.
 
+### Transactional apply and reruns
+
+The mutating `--apply` path is transactional for the files owned by
+`consumer_sync.py`. It first builds changed byte copies and JPEG conversions in
+a checkout-local staging directory, then builds the provenance manifest from
+that staged result plus the untouched `related_assets`. No consumer file is
+written while staging. A missing input, failed copy, failed conversion, missing
+related asset, or manifest error discards the staging directory and leaves the
+checkout at its previous release.
+
+After every staged file is ready, the command installs only files whose bytes
+would change. It keeps temporary backups while replacing the destinations; if
+an installation replacement fails partway through, already-replaced files are
+restored from those backups and the command exits non-zero. A rollback failure
+is reported explicitly and the checkout must be inspected before retrying.
+The transaction does not commit or push the consumer repository, and it does
+not include site-owned favicon generation. A sync that was already committed
+is rolled back with the consumer repository's normal `git revert`/review flow,
+not by changing the brand-kit release tag.
+
+Rerunning the exact same `--release-tag` is idempotent: current copies,
+derivatives, and provenance are reused, no replacement is performed, and the
+command reports that the checkout is already current. This makes a retry after
+repair safe without leaving a mixed-version set of managed assets.
+
 To register a future consumer, add a stable identifier and its checkout-relative
 paths to `consumer_registry.json`, choose the appropriate transform, and commit
 the registry change. Add a `related_assets` entry for generated files and a
@@ -262,12 +287,15 @@ GitHub Release object; Forgejo is the sole release record.
    ```
    The release-record check runs before this command touches the checkout. If it
    fails, publish the Forgejo Release or fix API access and run it again.
-   This copies the two logo files byte-for-byte and regenerates both hero JPEGs
-   from `source/hero.png`. Files already in sync are left untouched, so the
-   resulting site diff contains only what actually changed. If the site-owned
-   favicon files are already present, this first run also records their current
-   bytes; rerun the command after the favicon step below so the final manifest
-   captures the regenerated outputs.
+   This stages the two logo files byte-for-byte and both hero JPEGs from
+   `source/hero.png`, then installs the complete managed set and provenance in
+   one rollback-capable transaction. Files already in sync are left untouched,
+   so the resulting site diff contains only what actually changed. If a copy,
+   conversion, or manifest step fails, the staging directory is discarded and
+   the previous consumer checkout remains intact. If the site-owned favicon
+   files are already present, this first run also records their current bytes;
+   rerun the command after the favicon step below so the final manifest captures
+   the regenerated outputs.
 
 2. **If the logo changed, refresh the site-owned favicon set.** Run the
    consumer repository's own command after step 1 has copied the new
@@ -341,8 +369,10 @@ an indeterminate live check does not authorize switching to `main` or a newer
 tag. Rerun the release publisher with `--verify-only` first; it must print
 `READY` for the same `$VERSION` before any consumer write or retry.
 
-`consumer_sync.py --apply` is repeatable. Inspect the consumer checkout after a
-failure, repair only the reported local problem, and rerun the exact command:
+`consumer_sync.py --apply` is repeatable and idempotent. A failed copy or
+conversion is discarded before installation; a replacement failure is rolled
+back to the previous checkout. Inspect the reported local problem, repair only
+that problem, and rerun the exact command:
 
 ```bash
 .venv/bin/python tools/consumer_sync.py --apply \

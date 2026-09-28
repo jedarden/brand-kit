@@ -55,6 +55,37 @@ def write_current_provenance(site, config=None, reference=None):
     )
 
 
+def write_previous_release(site, config=None):
+    config = consumer_sync.DEFAULT_CONFIG if config is None else config
+    for asset in config["assets"]:
+        destination = site / asset["path"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if asset["transform"]["type"] == "copy":
+            destination.write_bytes(f"previous:{asset['path']}".encode())
+        else:
+            Image.new(
+                "RGB",
+                (asset["transform"]["width"], asset["transform"]["height"]),
+                (0, 0, 0),
+            ).save(destination, "JPEG", quality=asset["transform"]["quality"])
+    write_related_assets(site, config)
+    provenance = site / config["provenance"]
+    provenance.parent.mkdir(parents=True, exist_ok=True)
+    provenance.write_text('{"brand_kit":{"release":"previous"}}\n', encoding="utf-8")
+
+
+def apply_argv(site):
+    return [
+        "consumer_sync.py",
+        "--apply",
+        "--offline",
+        "--release-tag",
+        "v1.0.0",
+        "--site",
+        str(site),
+    ]
+
+
 def test_registry_covers_every_documented_jedarden_copy():
     config = consumer_sync.load_consumer("jedarden.com")
 
@@ -364,6 +395,110 @@ def test_consumer_sync_retry_keeps_the_same_release_tag_after_a_local_failure(
     second_output = capsys.readouterr().out
     assert "@v9.9.9" in second_output
     assert "Applied. Finish by hand:" in second_output
+
+
+def test_apply_discards_all_staged_assets_when_a_conversion_fails_partway(
+    tmp_path, monkeypatch, capsys
+):
+    site = make_site(tmp_path)
+    write_previous_release(site)
+    managed = [
+        site / asset["path"]
+        for asset in consumer_sync.registered_assets(consumer_sync.DEFAULT_CONFIG)
+    ]
+    managed.append(site / consumer_sync.DEFAULT_CONFIG["provenance"])
+    before = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns) for path in managed
+    }
+
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
+    original_save = Image.Image.save
+
+    def fail_staged_conversion(image, destination, format=None, **kwargs):
+        if ".brand-kit-consumer-sync-" in str(destination):
+            raise OSError("simulated conversion failure")
+        return original_save(image, destination, format, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", fail_staged_conversion)
+    monkeypatch.setattr(sys, "argv", apply_argv(site))
+
+    assert consumer_sync.main() == 1
+    assert {
+        path: (path.read_bytes(), path.stat().st_mtime_ns) for path in managed
+    } == before
+    assert not list(site.glob(".brand-kit-consumer-sync-*"))
+    assert "ABORT consumer sync" in capsys.readouterr().out
+
+
+def test_apply_rolls_back_previous_release_when_install_fails_mid_commit(
+    tmp_path, monkeypatch, capsys
+):
+    site = make_site(tmp_path)
+    write_previous_release(site)
+    managed = [
+        site / asset["path"]
+        for asset in consumer_sync.registered_assets(consumer_sync.DEFAULT_CONFIG)
+    ]
+    managed.append(site / consumer_sync.DEFAULT_CONFIG["provenance"])
+    before = {path: path.read_bytes() for path in managed}
+
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
+    original_replace = consumer_sync.os.replace
+    replacements = 0
+
+    def fail_second_install(source, destination):
+        nonlocal replacements
+        if ".brand-kit-consumer-sync-" in str(source) and str(destination).startswith(
+            str(site)
+        ):
+            replacements += 1
+            if replacements == 2:
+                raise OSError("simulated install failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(consumer_sync.os, "replace", fail_second_install)
+    monkeypatch.setattr(sys, "argv", apply_argv(site))
+
+    assert consumer_sync.main() == 1
+    assert {path: path.read_bytes() for path in managed} == before
+    assert not list(site.glob(".brand-kit-consumer-sync-*"))
+    assert "ROLLBACK consumer sync" in capsys.readouterr().out
+
+
+def test_apply_is_idempotent_after_a_successful_transaction(tmp_path, monkeypatch, capsys):
+    site = make_site(tmp_path)
+    write_previous_release(site)
+    monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
+    monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
+    monkeypatch.setattr(sys, "argv", apply_argv(site))
+
+    assert consumer_sync.main() == 0
+    capsys.readouterr()
+    managed = [
+        site / asset["path"]
+        for asset in consumer_sync.registered_assets(consumer_sync.DEFAULT_CONFIG)
+    ]
+    managed.append(site / consumer_sync.DEFAULT_CONFIG["provenance"])
+    after_first = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns) for path in managed
+    }
+
+    def unexpected_write(*args, **kwargs):
+        raise AssertionError("idempotent apply attempted a file write")
+
+    monkeypatch.setattr(Path, "write_bytes", unexpected_write)
+    monkeypatch.setattr(Path, "write_text", unexpected_write)
+    monkeypatch.setattr(consumer_sync.os, "replace", unexpected_write)
+
+    assert consumer_sync.main() == 0
+    assert {
+        path: (path.read_bytes(), path.stat().st_mtime_ns) for path in managed
+    } == after_first
+    output = capsys.readouterr().out
+    assert "checkout already current" in output
+    assert "SYNC  " not in output
 
 
 def test_logo_copies_require_exact_bytes_and_apply_refreshes_only_drift(

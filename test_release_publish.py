@@ -1166,6 +1166,10 @@ def test_consumer_recovery_documentation_keeps_the_exact_tag_and_requires_reveri
     assert "Keep the release tag fixed" in document
     assert "--verify-only" in document
     assert "consumer_sync.py --apply" in document
+    assert "transactional" in document
+    assert "staging directory is discarded" in document
+    assert "replacement failure is rolled" in document
+    assert "idempotent" in document
     assert "force-push" in document
     assert "all-PASS, exit-0 verification" in document
 

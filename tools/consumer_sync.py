@@ -40,7 +40,16 @@ Site-owned favicon refresh:
 
 Modes:
   --check  verify only (default); exits 1 on any stale/mismatched consumer
-  --apply  refresh the registered checkout in place (never commits), then verify
+  --apply  transactionally refresh the registered checkout (never commits), then verify
+
+Apply transaction behavior:
+  all changed copies, JPEG derivatives, and the provenance manifest are built in
+  a checkout-local staging directory first. A staging or conversion failure
+  leaves the checkout unchanged. Installation replaces changed files only after
+  the complete staged set is ready; if a replacement fails, backups restore the
+  files already replaced and the command exits non-zero. A successful rerun of
+  the same release compares the staged result and performs no writes when the
+  checkout is already current.
 
 A published Forgejo release record is required before either mode runs. Set
 FORGEJO_TOKEN to a read-only Forgejo API token when the Forgejo instance requires
@@ -58,8 +67,10 @@ import io
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -338,10 +349,12 @@ def brand_kit_reference(repository, release=None):
     }
 
 
-def provenance_manifest(site, consumer_id, config, reference):
+def provenance_manifest(site, consumer_id, config, reference, asset_paths=None):
+    """Build provenance using staged paths where an apply transaction provided them."""
+    asset_paths = {} if asset_paths is None else asset_paths
     assets = {}
     for asset in registered_assets(config):
-        destination = site / asset["path"]
+        destination = asset_paths.get(asset["path"], site / asset["path"])
         if not destination.is_file():
             raise FileNotFoundError(destination)
         assets[asset["path"]] = {
@@ -494,6 +507,244 @@ def check_hero_derivatives(site, apply, derivatives=None, config=None):
                   f"(tolerance {tolerance}) — run --apply")
             ok = False
     return ok
+
+
+def _stage_path(stage_root, relative):
+    staged = stage_root / relative
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    return staged
+
+
+def _stage_copy_assets(site, copies, stage_root, changes):
+    """Validate and stage byte copies without touching the consumer checkout."""
+    ok = True
+    for repo_rel, site_rel, desc in copies:
+        repo_f, site_f = ROOT / repo_rel, site / site_rel
+        if not site_f.is_file():
+            print(f"FAIL  {site_rel}: missing (expected copy of {repo_rel})")
+            ok = False
+            continue
+        try:
+            source = repo_f.read_bytes()
+            current = site_f.read_bytes()
+        except OSError as exc:
+            print(f"FAIL  {site_rel}: cannot read copy inputs ({exc})")
+            ok = False
+            continue
+        if source == current:
+            print(f"PASS  {site_rel}: byte-identical to {repo_rel}")
+            continue
+        try:
+            staged = _stage_path(stage_root, site_rel)
+            staged.write_bytes(source)
+            if staged.read_bytes() != source:
+                raise OSError("staged copy does not match its source")
+        except Exception as exc:
+            print(f"FAIL  {site_rel}: could not stage copy of {repo_rel} ({exc})")
+            ok = False
+            continue
+        changes[site_rel] = staged
+        print(f"SYNC  {site_rel}: staged refresh from {repo_rel} (was byte-different)")
+    return ok
+
+
+def _stage_hero_derivatives(site, derivatives, config, stage_root, changes):
+    """Validate and stage JPEG conversions without touching the consumer checkout."""
+    settings = {
+        asset["path"]: (
+            asset["transform"]["quality"],
+            asset["transform"]["tolerance"],
+        )
+        for asset in config["assets"]
+        if asset["transform"]["type"] == "jpeg-crop"
+    }
+    ok = True
+    for tw, th, fy, site_rel, desc in derivatives:
+        quality, tolerance = settings[site_rel]
+        site_f = site / site_rel
+        if not site_f.is_file():
+            print(f"FAIL  {site_rel}: missing ({desc})")
+            ok = False
+            continue
+        fresh = None
+        try:
+            with Image.open(site_f) as current_image:
+                current = current_image.convert("RGB")
+            fresh = hero_crop(tw, th, fy)
+            diff = mean_luma_diff(current, fresh)
+            if diff <= tolerance:
+                print(f"PASS  {site_rel}: matches source/hero.png crop "
+                      f"({tw}x{th}, fy={fy}, mean diff {diff:.2f})")
+                continue
+            staged = _stage_path(stage_root, site_rel)
+            fresh.save(staged, "JPEG", quality=quality)
+            with Image.open(staged) as staged_image:
+                staged_decoded = staged_image.convert("RGB")
+            if staged_decoded.size != fresh.size:
+                raise OSError("staged JPEG has unexpected dimensions")
+            staged_diff = mean_luma_diff(staged_decoded, fresh)
+            if staged_diff > tolerance:
+                raise OSError(
+                    f"staged JPEG mean luma diff {staged_diff:.2f} exceeds "
+                    f"tolerance {tolerance}"
+                )
+        except Exception as exc:
+            print(f"FAIL  {site_rel}: could not stage JPEG conversion ({exc})")
+            ok = False
+            continue
+        finally:
+            if fresh is not None:
+                fresh.close()
+        changes[site_rel] = staged
+        print(f"SYNC  {site_rel}: staged regeneration from source/hero.png "
+              f"({tw}x{th}, quality {quality}; was off by {diff:.2f})")
+    return ok
+
+
+def _stage_provenance(site, consumer_id, config, reference, stage_root, changes):
+    """Stage a manifest that hashes the final staged and consumer-generated files."""
+    path = site / config["provenance"]
+    if path.exists() and not path.is_file():
+        print(f"FAIL  consumer provenance: destination is not a file: {config['provenance']}")
+        return False
+    staged_assets = {
+        relative: staged
+        for relative, staged in changes.items()
+        if relative in {asset["path"] for asset in config["assets"]}
+    }
+    try:
+        expected = provenance_manifest(
+            site, consumer_id, config, reference, asset_paths=staged_assets
+        )
+    except FileNotFoundError as exc:
+        print(f"FAIL  consumer provenance: cannot record missing asset {exc}")
+        return False
+    payload = json.dumps(expected, indent=2, sort_keys=True) + "\n"
+    try:
+        current = path.read_text(encoding="utf-8") if path.is_file() else None
+    except (OSError, UnicodeDecodeError):
+        current = None
+    if current == payload:
+        print(
+            f"PASS  consumer provenance: {config['provenance']} records "
+            f"brand-kit @{provenance_label(reference)}"
+        )
+        return True
+    try:
+        staged = _stage_path(stage_root, config["provenance"])
+        staged.write_text(payload, encoding="utf-8")
+        if staged.read_text(encoding="utf-8") != payload:
+            raise OSError("staged manifest does not match its expected contents")
+    except Exception as exc:
+        print(f"FAIL  consumer provenance: could not stage manifest ({exc})")
+        return False
+    changes[config["provenance"]] = staged
+    print(
+        f"SYNC  consumer provenance: staged {config['provenance']} for "
+        f"brand-kit @{provenance_label(reference)}"
+    )
+    return True
+
+
+def _ensure_parent(path, created_directories):
+    missing = []
+    parent = path.parent
+    while not parent.exists():
+        missing.append(parent)
+        parent = parent.parent
+    for directory in reversed(missing):
+        directory.mkdir()
+        created_directories.append(directory)
+
+
+def _remove_created_directories(created_directories):
+    for directory in reversed(created_directories):
+        try:
+            directory.rmdir()
+        except (FileNotFoundError, OSError):
+            pass
+
+
+def _install_staged(site, changes, transaction_root):
+    """Install staged files and restore every prior file if replacement fails."""
+    backups = transaction_root / "backups"
+    entries = []
+    created_directories = []
+    installed = []
+    try:
+        backups.mkdir()
+        for index, (relative, staged) in enumerate(changes.items()):
+            destination = site / relative
+            backup = None
+            if destination.exists() or destination.is_symlink():
+                if not destination.is_file() and not destination.is_symlink():
+                    raise OSError(f"destination is not a file: {relative}")
+                backup = backups / str(index)
+                shutil.copy2(destination, backup, follow_symlinks=False)
+            _ensure_parent(destination, created_directories)
+            entries.append((relative, staged, destination, backup))
+
+        for entry in entries:
+            relative, staged, destination, _ = entry
+            os.replace(staged, destination)
+            installed.append(entry)
+    except Exception as exc:
+        rollback_errors = []
+        for relative, _, destination, backup in reversed(installed):
+            try:
+                if backup is None:
+                    destination.unlink()
+                else:
+                    os.replace(backup, destination)
+            except (FileNotFoundError, OSError) as rollback_exc:
+                rollback_errors.append(f"{relative}: {rollback_exc}")
+        _remove_created_directories(created_directories)
+        detail = f"{exc}"
+        if rollback_errors:
+            detail += "; rollback failed for " + ", ".join(rollback_errors)
+        else:
+            detail += "; all replaced files restored"
+        raise RuntimeError(detail) from exc
+
+
+def apply_consumer_transaction(site, consumer_id, config, reference):
+    """Stage all managed output, then commit it as one rollback-capable operation."""
+    changes = {}
+    with tempfile.TemporaryDirectory(
+        prefix=".brand-kit-consumer-sync-", dir=site
+    ) as temporary:
+        stage_root = Path(temporary) / "files"
+        print("registered byte copies (byte-identical required):")
+        copies_ok = _stage_copy_assets(
+            site, copy_assets(config), stage_root, changes
+        )
+        print("\nregistered JPEG derivatives (regenerated from source/hero.png):")
+        derivatives_ok = _stage_hero_derivatives(
+            site, hero_derivatives(config), config, stage_root, changes
+        )
+
+        print("\nconsumer provenance (release or commit plus per-file digests):")
+        if copies_ok and derivatives_ok:
+            provenance_ok = _stage_provenance(
+                site, consumer_id, config, reference, stage_root, changes
+            )
+        else:
+            print("FAIL  consumer provenance: not recorded until every asset check passes")
+            provenance_ok = False
+
+        if not (copies_ok and derivatives_ok and provenance_ok):
+            print("ABORT consumer sync: staged files discarded; checkout unchanged")
+            return False
+        if not changes:
+            print("PASS  consumer sync transaction: checkout already current")
+            return True
+        try:
+            _install_staged(site, changes, Path(temporary))
+        except RuntimeError as exc:
+            print(f"ROLLBACK consumer sync: {exc}")
+            return False
+        print(f"COMMIT consumer sync: installed {len(changes)} staged file(s)")
+        return True
 
 
 def fetch(url, headers=None):
@@ -692,24 +943,29 @@ def main():
     print(f"consumer:  {site} ({args.consumer}, mode: "
           f"{'apply' if args.apply else 'check'})\n")
 
-    local_ok = True
-    copies = copy_assets(config)
-    derivatives = hero_derivatives(config)
-    print("registered byte copies (byte-identical required):")
-    copies_ok = check_copies(site, args.apply, copies)
-    local_ok &= copies_ok
-    print("\nregistered JPEG derivatives (regenerated from source/hero.png):")
-    derivatives_ok = check_hero_derivatives(site, args.apply, derivatives, config)
-    local_ok &= derivatives_ok
-
-    print("\nconsumer provenance (release or commit plus per-file digests):")
-    if copies_ok and derivatives_ok:
-        local_ok &= check_provenance(
-            site, args.consumer, config, reference, args.apply
+    if args.apply:
+        local_ok = apply_consumer_transaction(
+            site, args.consumer, config, reference
         )
     else:
-        print("FAIL  consumer provenance: not recorded until every asset check passes")
-        local_ok = False
+        local_ok = True
+        copies = copy_assets(config)
+        derivatives = hero_derivatives(config)
+        print("registered byte copies (byte-identical required):")
+        copies_ok = check_copies(site, False, copies)
+        local_ok &= copies_ok
+        print("\nregistered JPEG derivatives (regenerated from source/hero.png):")
+        derivatives_ok = check_hero_derivatives(site, False, derivatives, config)
+        local_ok &= derivatives_ok
+
+        print("\nconsumer provenance (release or commit plus per-file digests):")
+        if copies_ok and derivatives_ok:
+            local_ok &= check_provenance(
+                site, args.consumer, config, reference, False
+            )
+        else:
+            print("FAIL  consumer provenance: not recorded until every asset check passes")
+            local_ok = False
 
     live_checks = config.get("live_checks", {})
     live_ok = True
@@ -740,7 +996,7 @@ def main():
                 )
 
     print()
-    if args.apply:
+    if args.apply and local_ok:
         quoted_tag = shlex.quote(tag)
         label = provenance_label(reference)
         commit_message = shlex.quote(f"chore(brand): sync to brand-kit @{label}")
@@ -766,6 +1022,8 @@ def main():
         print(f"  {python} {ROOT / 'tools/consumer_drift.py'} --release-tag {quoted_tag} "
               "--site \"$SITE\"   # both must be all-CURRENT after deploy")
         return 0 if local_ok and live_ok else 1
+    if args.apply:
+        return 1
     ok = local_ok and live_ok
     print("All consumer copies and provenance in sync." if ok else
           "Consumer drift found — see the STALE/FAIL lines above, or the checklist in "

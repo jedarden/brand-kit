@@ -589,17 +589,24 @@ def test_release_to_consumer_refresh_only_remediation_writes(
     remediation_output = capsys.readouterr().out
     assert "PASS  Forgejo release: v1.0.0 is published" in remediation_output
     assert remediation_output.count("SYNC  ") == 5
-    assert write_events == [
-        ("remediate", "write_bytes", site / "public/brand/logo.svg"),
-        ("remediate", "write_bytes", site / "public/brand/logo-512.png"),
-        ("remediate", "image.save", site / "public/brand/og.jpg"),
-        ("remediate", "image.save", site / "src/assets/brand-hero.jpg"),
-        (
-            "remediate",
-            "write_text",
-            site / "public/brand/brand-kit-provenance.json",
-        ),
+    assert [(stage, event) for stage, event, _ in write_events] == [
+        ("remediate", "write_bytes"),
+        ("remediate", "write_bytes"),
+        ("remediate", "image.save"),
+        ("remediate", "image.save"),
+        ("remediate", "write_text"),
     ]
+    staged_suffixes = [
+        Path("files/public/brand/logo.svg"),
+        Path("files/public/brand/logo-512.png"),
+        Path("files/public/brand/og.jpg"),
+        Path("files/src/assets/brand-hero.jpg"),
+        Path("files/public/brand/brand-kit-provenance.json"),
+    ]
+    for (_, _, path), suffix in zip(write_events, staged_suffixes):
+        assert ".brand-kit-consumer-sync-" in str(path)
+        assert Path(*path.parts[-len(suffix.parts) :]) == suffix
+        assert not path.exists()
     assert (site / "public/brand/logo.svg").read_bytes() == (
         root / "logo/logo.svg"
     ).read_bytes()
