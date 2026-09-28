@@ -327,6 +327,20 @@ def _assert_liveness_argo_request(method, url, kwargs, *, api_url, token):
     }
 
 
+def _consumer_audit_forgejo_release_url(tag):
+    return (
+        "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/"
+        f"releases/tags/{tag}"
+    )
+
+
+def _assert_consumer_audit_forgejo_request(method, url, authorization):
+    """Enforce the consumer audit's single read-only Forgejo release lookup."""
+    assert method == "GET"
+    assert url == _consumer_audit_forgejo_release_url("v1.1.0")
+    assert authorization == "token consumer-audit-readonly"
+
+
 def _assert_liveness_argo_contract(calls, *, api_url, token):
     assert calls, "the liveness workload should query Argo"
     assert len(calls) == len(brand_kit_workflow_liveness.TARGETS)
@@ -418,7 +432,11 @@ def test_consumer_audit_uses_only_the_documented_forgejo_release_get(monkeypatch
             ).encode()
 
     def urlopen(request, timeout):
-        requests.append((request.get_method(), request.full_url, request, timeout))
+        method = request.get_method()
+        url = request.full_url
+        authorization = request.get_header("Authorization")
+        _assert_consumer_audit_forgejo_request(method, url, authorization)
+        requests.append((method, url, authorization))
         return Response()
 
     monkeypatch.setattr(consumer_drift.release_publish.urllib.request, "urlopen", urlopen)
@@ -432,16 +450,39 @@ def test_consumer_audit_uses_only_the_documented_forgejo_release_get(monkeypatch
     assert consumer_drift.fetch_release(
         "v1.1.0",
         config,
-        token="forgejo-readonly",
+        token="consumer-audit-readonly",
     )["tag_name"] == "v1.1.0"
-    assert len(requests) == 1
-    method, url, request, _ = requests[0]
-    assert method == "GET"
-    assert url == (
-        "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/"
-        "releases/tags/v1.1.0"
-    )
-    assert ("Authorization", "token forgejo-readonly") in request.header_items()
+    assert requests == [
+        (
+            "GET",
+            _consumer_audit_forgejo_release_url("v1.1.0"),
+            "token consumer-audit-readonly",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("method", "url"),
+    [
+        ("POST", _consumer_audit_forgejo_release_url("v1.1.0")),
+        ("PATCH", _consumer_audit_forgejo_release_url("v1.1.0")),
+        ("PUT", _consumer_audit_forgejo_release_url("v1.1.0")),
+        ("DELETE", _consumer_audit_forgejo_release_url("v1.1.0")),
+        (
+            "GET",
+            "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases?limit=1",
+        ),
+    ],
+)
+def test_consumer_audit_forgejo_contract_rejects_unexpected_method_or_endpoint(
+    method, url
+):
+    with pytest.raises(AssertionError):
+        _assert_consumer_audit_forgejo_request(
+            method,
+            url,
+            "token consumer-audit-readonly",
+        )
 
 
 def test_workload_token_cannot_be_promoted_to_a_submit_credential(monkeypatch):
