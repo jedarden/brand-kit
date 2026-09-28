@@ -11,6 +11,10 @@ source.
 ## [Unreleased]
 
 ### Added
+- The release and consumer handoff gates now verify the expected Forgejo and
+  GitHub repository identities, exact `main` propagation, and expected release
+  tag commit agreement. Partial or stale server-side mirror propagation blocks
+  handoff independently of the scheduled mirror-health monitor.
 - Versioned consumer-drift report contract (`brand-kit-consumer-drift/v1`) with
   a strict JSON Schema, detector-side validation, explicit skipped checks, and
   WorkflowTemplate artifact validation for release-triggered and scheduled runs.

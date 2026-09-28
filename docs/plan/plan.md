@@ -532,8 +532,10 @@ describe behavior that is easy to mistake for optional ceremony.
    Forgejo's, but it must never receive a second GitHub Release object. A
    pushed tag without the matching published Forgejo record is incomplete.
 2. **Publication is a fail-closed, idempotent gate.**
-   `tools/release_publish.py` requires an annotated tag at `HEAD`, waits for
-   the canonical and mirror peeled refs to agree, and reads the exact
+   `tools/release_publish.py` requires an annotated tag at `HEAD`, validates
+   the canonical Forgejo and GitHub remote identities, requires the canonical
+   and mirror `main` refs to agree, waits for the expected canonical and mirror
+   peeled refs to agree, and reads the exact
    changelog section for the release body. Before any Forgejo write, it
    performs a read-only Argo attestation of the named `brand-kit-ci` run: the
    run must be `Succeeded` and expose a structured full commit SHA matching
@@ -556,13 +558,14 @@ describe behavior that is easy to mistake for optional ceremony.
    deleting an object.
 3. **The consumer handoff uses the same identity and propagation gates.**
    `tools/consumer_drift_submit.py` first requires a published Forgejo record
-   with a verifiable full target commit, then waits for the canonical and
-   read-only mirror tags to agree before submitting the exact release tag to
-   the Argo `brand-kit-consumer-drift` WorkflowTemplate. The workflow waits
-   again for mirror visibility before checking out that tag. This duplicate
-   visibility check is intentional: it protects both the submitting operator
-   and the isolated workflow from starting against a tag that is still
-   propagating.
+   with a verifiable full target commit, revalidates the canonical Forgejo and
+   GitHub remote identities, then requires canonical and read-only mirror
+   `main` refs plus the exact release tags to agree before submitting the exact
+   release tag to the Argo `brand-kit-consumer-drift` WorkflowTemplate. The
+   workflow waits again for mirror visibility before checking out that tag.
+   This duplicate visibility check is intentional: it protects both the
+   submitting operator and the isolated workflow from starting against a
+   missing, stale, or partially propagated mirror.
 4. **Consumer drift is read-only and tri-state.**
    `tools/consumer_drift.py` audits the selected release checkout and the
    registered consumer/live assets without applying, committing, or pushing

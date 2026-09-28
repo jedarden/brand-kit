@@ -106,6 +106,11 @@ def test_submit_retries_until_canonical_and_mirror_tags_agree(monkeypatch):
         return next(observed_commits)
 
     monkeypatch.setattr(release_publish, "remote_tag_commit", remote_tag_commit)
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: COMMIT,
+    )
 
     def request(method, url, payload=None, **kwargs):
         events.append(("submit", method, payload))
@@ -206,6 +211,11 @@ def test_canonical_tag_mismatch_never_submits(monkeypatch):
         "remote_tag_commit",
         lambda *args, **kwargs: "b" * 40,
     )
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: COMMIT,
+    )
 
     with pytest.raises(release_publish.ReleaseError, match="origin .* expected"):
         consumer_drift_submit.submit_consumer_drift(
@@ -230,6 +240,11 @@ def test_mirror_timeout_never_submits(monkeypatch):
         release_publish,
         "remote_tag_commit",
         lambda *args, **kwargs: next(observed),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: COMMIT,
     )
 
     with pytest.raises(release_publish.ReleaseError, match="has not caught up"):
@@ -315,6 +330,37 @@ def test_mirror_failure_never_submits(monkeypatch):
     )
 
     with pytest.raises(release_publish.ReleaseError, match="mirror has not caught up"):
+        consumer_drift_submit.submit_consumer_drift(
+            "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
+            request=lambda *args, **kwargs: submits.append(args),
+        )
+
+    assert submits == []
+
+
+def test_remote_identity_failure_never_submits_a_consumer_workflow(monkeypatch):
+    submits = []
+    monkeypatch.setattr(
+        release_publish,
+        "get_release",
+        lambda *args, **kwargs: published(),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "validate_remote_roles",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            release_publish.ReleaseError("github remote is not the expected repository identity")
+        ),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "wait_for_mirror",
+        lambda *args, **kwargs: pytest.fail("mirror propagation must not run after identity failure"),
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="repository identity"):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,

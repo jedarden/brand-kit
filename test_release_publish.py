@@ -94,6 +94,57 @@ def test_tag_validation_requires_an_exact_stable_tag():
             release_publish.validate_tag(tag)
 
 
+@pytest.mark.parametrize(
+    ("origin_url", "mirror_url", "message"),
+    [
+        (
+            "https://git.ardenone.com/jedarden/other-repo.git",
+            release_publish.DEFAULT_MIRROR_REPOSITORY,
+            "origin.*identity",
+        ),
+        (
+            release_publish.DEFAULT_CANONICAL_REPOSITORY,
+            "https://github.com/jedarden/other-repo.git",
+            "github.*identity",
+        ),
+        (
+            "https://user:secret@git.ardenone.com/jedarden/brand-kit.git",
+            release_publish.DEFAULT_MIRROR_REPOSITORY,
+            "origin.*identity",
+        ),
+    ],
+)
+def test_validate_remote_roles_enforces_the_canonical_and_mirror_identities(
+    monkeypatch, origin_url, mirror_url, message
+):
+    urls = {"origin": origin_url, "github": mirror_url}
+    monkeypatch.setattr(
+        release_publish,
+        "remote_url",
+        lambda remote, root=release_publish.ROOT: urls[remote],
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match=message):
+        release_publish.validate_remote_roles("origin", "github")
+
+
+def test_validate_remote_roles_accepts_git_suffix_and_trailing_slash(monkeypatch):
+    urls = {
+        "origin": "https://git.ardenone.com/jedarden/brand-kit/",
+        "github": "https://github.com/jedarden/brand-kit",
+    }
+    monkeypatch.setattr(
+        release_publish,
+        "remote_url",
+        lambda remote, root=release_publish.ROOT: urls[remote],
+    )
+
+    assert release_publish.validate_remote_roles("origin", "github") == (
+        urls["origin"],
+        urls["github"],
+    )
+
+
 def test_release_notes_are_taken_from_the_matching_changelog_section(tmp_path):
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text(
@@ -547,6 +598,11 @@ def test_mirror_gate_requires_exact_peeled_refs(monkeypatch):
         return next(observed)
 
     monkeypatch.setattr(release_publish, "remote_tag_commit", remote)
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: COMMIT,
+    )
 
     with pytest.raises(release_publish.ReleaseError, match="has not caught up"):
         release_publish.wait_for_mirror(
@@ -565,6 +621,11 @@ def test_mirror_timeout_can_be_retried_without_changing_the_release_ref(monkeypa
         release_publish,
         "remote_tag_commit",
         lambda remote_name, tag, root=release_publish.ROOT: next(observed),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: COMMIT,
     )
 
     with pytest.raises(release_publish.ReleaseError, match="has not caught up"):
@@ -585,6 +646,11 @@ def test_mirror_gate_rejects_a_canonical_tag_at_the_wrong_commit(monkeypatch):
         return "b" * 40
 
     monkeypatch.setattr(release_publish, "remote_tag_commit", remote)
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: COMMIT,
+    )
 
     with pytest.raises(release_publish.ReleaseError, match="origin .* expected"):
         release_publish.wait_for_mirror("v1.1.0", COMMIT, timeout=0, interval=0)
@@ -599,8 +665,75 @@ def test_mirror_gate_accepts_matching_canonical_and_mirror_commits(monkeypatch):
         return COMMIT
 
     monkeypatch.setattr(release_publish, "remote_tag_commit", remote)
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: COMMIT,
+    )
     release_publish.wait_for_mirror("v1.1.0", COMMIT, timeout=0, interval=0)
     assert observed == ["origin", "github"]
+
+
+def test_mirror_gate_blocks_partial_main_propagation_even_when_the_tag_matches(
+    monkeypatch,
+):
+    def branch(remote_name, branch, root=release_publish.ROOT):
+        return COMMIT if remote_name == "origin" else "b" * 40
+
+    monkeypatch.setattr(release_publish, "remote_branch_commit", branch)
+    monkeypatch.setattr(
+        release_publish,
+        "remote_tag_commit",
+        lambda *args, **kwargs: COMMIT,
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="has not caught up.*main"):
+        release_publish.wait_for_mirror(
+            "v1.1.0",
+            COMMIT,
+            timeout=0,
+            interval=0,
+        )
+
+
+def test_mirror_gate_requires_the_canonical_main_ref_to_match_the_expected_commit(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        release_publish,
+        "remote_branch_commit",
+        lambda *args, **kwargs: "b" * 40,
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "remote_tag_commit",
+        lambda *args, **kwargs: pytest.fail("tag should not be checked after main mismatch"),
+    )
+
+    with pytest.raises(release_publish.ReleaseError, match="main.*expected"):
+        release_publish.wait_for_mirror(
+            "v1.1.0",
+            COMMIT,
+            expected_main_commit=COMMIT,
+            timeout=0,
+            interval=0,
+        )
+
+
+def test_verify_ready_passes_the_release_commit_as_the_expected_main_commit(
+    monkeypatch,
+):
+    calls = []
+    monkeypatch.setattr(release_publish, "local_tag_info", lambda *args, **kwargs: COMMIT)
+    monkeypatch.setattr(release_publish, "validate_remote_roles", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        release_publish,
+        "wait_for_mirror",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert release_publish.verify_ready("v1.1.0", timeout=0, interval=0) == COMMIT
+    assert calls[0][1]["expected_main_commit"] == COMMIT
 
 
 def test_argo_attestation_reads_one_workflow_and_accepts_exact_succeeded_commit(monkeypatch):
@@ -955,10 +1088,11 @@ def test_readiness_checks_only_use_read_commands_and_never_push_to_a_remote(monk
     def run_git_optional(arguments, root=release_publish.ROOT):
         commands.append(arguments)
         assert arguments[:2] == ["ls-remote", "--exit-code"]
+        reference = arguments[3]
         return subprocess.CompletedProcess(
             ["git", *arguments],
             0,
-            stdout=f"{COMMIT} refs/tags/v1.1.0^{{}}\n",
+            stdout=f"{COMMIT} {reference}\n",
             stderr="",
         )
 

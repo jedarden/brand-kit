@@ -19,8 +19,11 @@ from typing import Any, Callable
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_API_URL = "https://git.ardenone.com/api/v1"
 DEFAULT_REPOSITORY = "jedarden/brand-kit"
+DEFAULT_CANONICAL_REPOSITORY = "https://git.ardenone.com/jedarden/brand-kit.git"
+DEFAULT_MIRROR_REPOSITORY = "https://github.com/jedarden/brand-kit.git"
 DEFAULT_ORIGIN_REMOTE = "origin"
 DEFAULT_MIRROR_REMOTE = "github"
+DEFAULT_MAIN_BRANCH = "main"
 DEFAULT_ARGO_API_URL = "https://argo-ci.ardenone.com"
 DEFAULT_ARGO_NAMESPACE = "argo-workflows"
 DEFAULT_ARGO_WORKFLOW_TEMPLATE = "brand-kit-ci"
@@ -149,13 +152,50 @@ def remote_url(remote: str, root: Path = ROOT) -> str:
     return run_git(["remote", "get-url", remote], root)
 
 
-def remote_tag_commit(
+def _repository_identity(url: str) -> tuple[str, str]:
+    """Return the host/path identity of an expected HTTPS Git repository."""
+    parsed = urllib.parse.urlsplit(url.strip())
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ReleaseError("remote URL must be an HTTPS repository URL without credentials")
+    path = urllib.parse.unquote(parsed.path).strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if not path or "/" not in path or any(
+        part in {"", ".", ".."} for part in path.split("/")
+    ):
+        raise ReleaseError("remote URL does not contain a valid repository path")
+    return parsed.hostname.lower(), path
+
+
+def _require_repository_identity(
     remote: str,
-    tag: str,
+    actual: str,
+    expected: str,
+) -> None:
+    try:
+        actual_identity = _repository_identity(actual)
+        expected_identity = _repository_identity(expected)
+    except ReleaseError as error:
+        raise ReleaseError(f"{remote} remote identity is invalid: {error}") from error
+    if actual_identity != expected_identity:
+        raise ReleaseError(
+            f"{remote} remote is not the expected repository identity"
+        )
+
+
+def remote_ref_commit(
+    remote: str,
+    reference: str,
     root: Path = ROOT,
 ) -> str | None:
-    validate_tag(tag)
-    reference = f"refs/tags/{tag}^{{}}"
+    """Read one exact peeled/branch ref without mutating the remote."""
     result = run_git_optional(
         ["ls-remote", "--exit-code", remote, reference],
         root,
@@ -164,14 +204,35 @@ def remote_tag_commit(
         return None
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
-        raise ReleaseError(f"cannot read {tag} from remote {remote}: {detail}")
+        raise ReleaseError(f"cannot read {reference} from remote {remote}: {detail}")
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     if len(lines) != 1:
-        raise ReleaseError(f"remote {remote} returned {len(lines)} records for {tag}")
+        raise ReleaseError(
+            f"remote {remote} returned {len(lines)} records for {reference}"
+        )
     fields = lines[0].split()
-    if len(fields) != 2 or fields[1] != reference:
-        raise ReleaseError(f"remote {remote} returned an invalid record for {tag}")
-    return fields[0]
+    if len(fields) != 2 or fields[1] != reference or not OBJECT_ID_PATTERN.fullmatch(fields[0]):
+        raise ReleaseError(f"remote {remote} returned an invalid record for {reference}")
+    return fields[0].lower()
+
+
+def remote_tag_commit(
+    remote: str,
+    tag: str,
+    root: Path = ROOT,
+) -> str | None:
+    validate_tag(tag)
+    return remote_ref_commit(remote, f"refs/tags/{tag}^{{}}", root)
+
+
+def remote_branch_commit(
+    remote: str,
+    branch: str = DEFAULT_MAIN_BRANCH,
+    root: Path = ROOT,
+) -> str | None:
+    if not isinstance(branch, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", branch):
+        raise ReleaseError(f"branch name is malformed: {branch!r}")
+    return remote_ref_commit(remote, f"refs/heads/{branch}", root)
 
 
 def validate_remote_roles(
@@ -179,12 +240,23 @@ def validate_remote_roles(
     mirror_remote: str,
     root: Path = ROOT,
 ) -> tuple[str, str]:
+    """Require the local remotes to name the canonical Forgejo/GitHub pair."""
     if origin_remote == mirror_remote:
         raise ReleaseError("origin and mirror remotes must be different")
     origin = remote_url(origin_remote, root)
     mirror = remote_url(mirror_remote, root)
     if origin == mirror:
         raise ReleaseError("origin and mirror remotes must point to different repositories")
+    _require_repository_identity(
+        origin_remote,
+        origin,
+        DEFAULT_CANONICAL_REPOSITORY,
+    )
+    _require_repository_identity(
+        mirror_remote,
+        mirror,
+        DEFAULT_MIRROR_REPOSITORY,
+    )
     return origin, mirror
 
 
@@ -197,13 +269,45 @@ def wait_for_mirror(
     timeout: float = 300.0,
     interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
+    expected_main_commit: str | None = None,
 ) -> None:
+    """Wait until canonical and mirror ``main`` plus the exact release tag agree.
+
+    This is an authorization gate used by release publication and consumer
+    submission. It is intentionally separate from the scheduled all-ref health
+    monitor so a stale or partially propagated mirror cannot be handed to a
+    consumer merely because the last monitor run was green.
+    """
     validate_tag(tag)
+    if not OBJECT_ID_PATTERN.fullmatch(commit):
+        raise ReleaseError(f"release commit is not a full object ID: {commit!r}")
+    commit = commit.lower()
+    if expected_main_commit is not None and not OBJECT_ID_PATTERN.fullmatch(
+        expected_main_commit
+    ):
+        raise ReleaseError(
+            f"expected main commit is not a full object ID: {expected_main_commit!r}"
+        )
+    if expected_main_commit is not None:
+        expected_main_commit = expected_main_commit.lower()
     if timeout < 0 or interval < 0:
         raise ReleaseError("mirror timeout and interval must not be negative")
     deadline = time.monotonic() + timeout
+    last_main = "not visible"
     last_mirror = "not visible"
     while True:
+        origin_main = remote_branch_commit(origin_remote, DEFAULT_MAIN_BRANCH, root)
+        if origin_main is None:
+            raise ReleaseError(
+                f"{DEFAULT_MAIN_BRANCH} is not pushed to the canonical origin remote "
+                f"{origin_remote}"
+            )
+        if expected_main_commit is not None and origin_main != expected_main_commit.lower():
+            raise ReleaseError(
+                f"origin {origin_remote} has {DEFAULT_MAIN_BRANCH} at {origin_main}, "
+                f"expected {expected_main_commit.lower()}"
+            )
+        mirror_main = remote_branch_commit(mirror_remote, DEFAULT_MAIN_BRANCH, root)
         origin_commit = remote_tag_commit(origin_remote, tag, root)
         if origin_commit is None:
             raise ReleaseError(
@@ -214,13 +318,15 @@ def wait_for_mirror(
                 f"origin {origin_remote} has {tag} at {origin_commit}, expected {commit}"
             )
         mirror_commit = remote_tag_commit(mirror_remote, tag, root)
-        if mirror_commit == commit:
+        if mirror_main == origin_main and mirror_commit == commit:
             return
+        last_main = "not visible" if mirror_main is None else mirror_main
         last_mirror = "not visible" if mirror_commit is None else mirror_commit
         if time.monotonic() >= deadline:
             raise ReleaseError(
-                f"mirror {mirror_remote} has not caught up with {tag} at {commit} "
-                f"(last observed: {last_mirror})"
+                f"mirror {mirror_remote} has not caught up with {DEFAULT_MAIN_BRANCH} "
+                f"at {origin_main} and {tag} at {commit} "
+                f"(last observed: main={last_main}, tag={last_mirror})"
             )
         sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
@@ -937,6 +1043,7 @@ def verify_ready(
         timeout=timeout,
         interval=interval,
         sleep=sleep,
+        expected_main_commit=commit,
     )
     return commit
 
@@ -1055,7 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"PASS  Argo CI run {args.ci_run} succeeded for commit {commit}")
         print(f"PASS  exact annotated tag {args.tag} at {commit}")
-        print("PASS  origin and mirror advertise the same peeled tag")
+        print("PASS  canonical and mirror remotes advertise main and the expected peeled tag")
 
         if args.verify_only:
             record = get_release(

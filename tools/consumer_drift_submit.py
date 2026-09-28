@@ -119,6 +119,10 @@ def submit_consumer_drift(
         )
     commit = _release_commit(record, release_tag)
 
+    # This is the release handoff gate, not the scheduled mirror-health
+    # monitor. Validate the configured repository identities before accepting
+    # any ref from either remote, then require exact main/tag propagation.
+    release_publish.validate_remote_roles(origin_remote, mirror_remote, root)
     release_publish.wait_for_mirror(
         release_tag,
         commit,

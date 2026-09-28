@@ -98,9 +98,12 @@ audit means only that all configured checks passed.
 source artifact for a release-triggered read-only run. Run
 `tools/consumer_drift_submit.py --release-tag "$VERSION"` after the published
 Forgejo release is verified. It refuses failed or unverifiable release records,
-waits for the canonical and read-only mirror tags to agree, and submits the
-exact tag as the `release-tag` workflow parameter. The workflow itself waits
-again for mirror visibility before checking out the tag. The companion
+revalidates the Forgejo/GitHub repository identities, waits for the canonical and read-only mirror tags
+to agree with the published commit, requires their `main` refs to agree, and
+submits the exact tag as the `release-tag`
+workflow parameter. A missing, stale, or partially propagated mirror therefore
+cannot receive a consumer handoff. The workflow itself waits again for mirror
+visibility before checking out the tag. The companion
 `automation/brand-kit-consumer-drift-cronworkflow.yml` retains the daily
 read-only run as a fallback. It runs at **06:17 UTC** and uses the configured
 **24-hour propagation delay** (`release.minimum_age_hours` in

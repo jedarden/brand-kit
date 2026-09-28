@@ -77,9 +77,11 @@ use the patch rule and this same ordering.
    `attestations/brand-kit-ci/v1/<watcher-workflow-uid>/attestations.json`.
    Keep that URL with the release evidence: it is the recovery input if Argo
    reaps the named Workflow before publication.
-4. Make sure `origin` is the canonical Forgejo remote and `github` is the
-   read-only tag mirror. The publisher reads both remotes and never pushes to
-   either remote.
+4. Make sure `origin` is the canonical Forgejo remote
+   (`https://git.ardenone.com/jedarden/brand-kit.git`) and `github` is the
+   read-only tag mirror (`https://github.com/jedarden/brand-kit.git`). The
+   publisher verifies those identities, reads both remotes, and never pushes
+   to either remote as part of the gate.
 5. Provision the three release credentials according to
    [`release-token-provisioning.md`](release-token-provisioning.md). The
    publisher requires `FORGEJO_TOKEN` and `ARGO_TOKEN`; the consumer handoff
@@ -101,8 +103,11 @@ git push origin "refs/tags/$VERSION"
 ```
 
 The publisher requires the current `HEAD` to be the tagged commit and checks
-that both remotes expose the same peeled commit. It waits for the mirror rather
-than allowing a consumer workflow to start during propagation.
+that the canonical Forgejo `main` branch is at the expected release commit,
+that the GitHub mirror has the same `main` commit, and that both remotes expose
+the exact expected peeled tag commit. It waits for the complete branch-and-tag
+mirror state rather than allowing publication or a consumer workflow to start
+during partial propagation.
 
 ## Publish the Forgejo Release
 
@@ -141,22 +146,25 @@ watcher/archive path so the evidence is unambiguous.
 The publisher performs these checks in order:
 
 1. `$VERSION` is an annotated tag at the current `HEAD`.
-2. The canonical `origin` and read-only `github` remotes advertise the same
-   peeled commit for that exact tag.
-3. The read-only Argo API confirms that the named run is `Succeeded` and
+2. `origin` and `github` have the expected Forgejo/GitHub repository identities.
+3. The canonical `origin` and read-only `github` remotes advertise the same
+   `main` commit, and both advertise the expected peeled commit for the exact
+   release tag. Missing, stale, divergent, or only partially propagated refs
+   fail closed.
+4. The read-only Argo API confirms that the named run is `Succeeded` and
    carries the exact release commit in a structured output. If Argo returns
    `404` because the run was reaped, the optional `--ci-attestation-url`
    fallback must instead return a validated durable `Succeeded` record for the
    exact commit. A failed run, missing output, mismatched SHA, malformed
    response, invalid artifact URL, or API error fails closed.
-4. The exact changelog section is retained as the release body. Forgejo's
+5. The exact changelog section is retained as the release body. Forgejo's
    release-by-tag endpoint either finds the matching published record, publishes
    an existing matching draft, or creates a non-draft stable release with
    `tag_name`, full `target_commitish`, and `body` equal to the exact tag,
    commit, and changelog notes. Existing records with a different tag, target,
    or body fail closed before any write.
-5. Forgejo is queried again after the write, and both remotes are checked again
-   for the tag.
+6. Forgejo is queried again after the write, and the complete branch/tag mirror
+   gate is checked again for the tag.
 
 A missing or mismatched tag, an inaccessible Argo or Forgejo API, a
 non-`Succeeded` run, missing or mismatched run commit, wrong release tag, a
@@ -204,22 +212,24 @@ consumer run:
 ```
 
 A successful verification prints `READY` only after the Argo attestation, the
-Forgejo record is published, and the canonical and mirror refs still point to
-the same commit. `--verify-only` still performs the Argo check, but does not
+Forgejo record is published, and the expected canonical/mirror `main` and tag
+refs still agree. `--verify-only` still performs the Argo check, but does not
 write to Forgejo.
 
 After `READY`, submit the release-triggered read-only consumer audit. The
-submitter reads the exact published Forgejo record, requires its full target
-commit, waits for the canonical and GitHub mirror tags to agree, and passes the
-exact tag to the Argo `WorkflowTemplate`:
+submitter reads the exact published Forgejo record, revalidates the remote
+identities, requires canonical and GitHub `main` plus tag refs to agree with
+the release commit, and only then passes the exact tag to the Argo
+`WorkflowTemplate`:
 
 ```bash
 .venv/bin/python tools/consumer_drift_submit.py \
   --release-tag "$VERSION"
 ```
 
-The Argo workflow retries mirror visibility for up to ten minutes before its
-audit starts as an additional propagation guard. A failed, draft, prerelease,
+The Argo workflow retries release-tag mirror visibility for up to ten minutes
+before its audit starts as an additional isolated propagation guard. A failed,
+draft, prerelease,
 malformed, or otherwise unverifiable Forgejo record never submits a workflow.
 The daily `CronWorkflow` remains enabled as a fallback; it discovers the
 newest stable release after the configured 24-hour propagation age.

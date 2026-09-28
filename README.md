@@ -467,12 +467,18 @@ retains its JSON report at
 `BrandKitMirrorHealth` exit-handler alert routes to the `jedarden` owner
 channel. A healthy report requires exact parity for all branches and tags;
 an unavailable remote or inconclusive ancestry comparison is indeterminate and
-also fails closed.
+also fails closed. This is monitoring and alerting; it is not the release
+authorization boundary.
 
-The release handoff has an additional exact-tag audit in
-`tools/check_release_mirror.py`. It reads only the peeled Forgejo and GitHub
-tag refs, treats transient mirror lag as indeterminate, and never queries or
-creates a GitHub Release; Forgejo remains the only release authority.
+The release gate in `tools/release_publish.py` independently validates that
+`origin` is the expected Forgejo repository and `github` is the expected
+GitHub repository, then requires the server-side mirror to expose the same
+`main` commit and the exact expected peeled release tag on both remotes. A
+missing, stale, divergent, or partially propagated branch/tag blocks both
+publication readiness and the release-triggered consumer handoff. The
+standalone exact-tag audit in `tools/check_release_mirror.py` remains useful for
+diagnosis, but it is not the sole gate and Forgejo remains the only release
+authority.
 
 ## Forgejo release publication
 
@@ -491,9 +497,11 @@ write: the named run must be `Succeeded` and expose the exact release commit as
 a structured full-SHA output. It then requires the unique, non-empty matching
 `CHANGELOG.md` section, the exact annotated `vX.Y.Z` tag at `HEAD`, and a
 Forgejo Release whose tag, full target commit, and body exactly match those
-inputs. It creates or reuses the non-draft release and confirms that the
-canonical Forgejo tag and the read-only GitHub mirror advertise the same
-peeled commit. It is idempotent and never creates a GitHub Release. Set
+inputs. It also validates the configured remote identities and independently
+confirms that canonical Forgejo and the read-only GitHub mirror agree on
+`main` and on the expected peeled release commit. Missing or partial
+propagation blocks the gate. It is idempotent and never creates a GitHub
+Release. Set
 `FORGEJO_TOKEN` and `ARGO_TOKEN` using the
 [`release-token-provisioning.md`](docs/notes/release-token-provisioning.md)
 contract; both are required and are never accepted as command-line options.
@@ -602,8 +610,9 @@ committing its site diff. The command uses that repository's Sharp toolchain;
 
 The release-triggered Argo handoff is
 `.venv/bin/python tools/consumer_drift_submit.py --release-tag "$VERSION"`.
-It requires a published, verifiable Forgejo release, waits for the exact tag to
-reach the read-only mirror, and submits that tag to
+It requires a published, verifiable Forgejo release, revalidates the expected
+Forgejo/GitHub remote identities, waits for exact `main` and release-tag
+propagation, and submits that tag to
 `automation/brand-kit-consumer-drift-workflowtemplate.yml`. The daily Argo
 `CronWorkflow` source remains
 `automation/brand-kit-consumer-drift-cronworkflow.yml` as a fallback; it clones
