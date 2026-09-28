@@ -97,6 +97,29 @@ def _validate_https_url(value: Any, name: str) -> str:
     return url
 
 
+def _validate_forgejo_release_url(
+    value: Any, name: str, repository: str, tag: str
+) -> str:
+    url = _validate_https_url(value, name)
+    owner, repository_name = repository.split("/", 1)
+    expected_path = "/".join(
+        (
+            "",
+            urllib.parse.quote(owner, safe=""),
+            urllib.parse.quote(repository_name, safe=""),
+            "releases",
+            "tag",
+            urllib.parse.quote(tag, safe=""),
+        )
+    )
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.path != expected_path:
+        raise EvidenceError(
+            f"{name} must identify {repository}/releases/tag/{tag}"
+        )
+    return url
+
+
 def _reject_credentials(value: Any, location: str = "record") -> None:
     """Enforce the credential-free boundary independently of the field shape."""
     if isinstance(value, dict):
@@ -177,7 +200,9 @@ def validate_record(record: Any) -> dict[str, Any]:
         raise EvidenceError("forgejo.repository must be owner/name")
     if _require_tag(forgejo["tag"], "forgejo.tag") != tag:
         raise EvidenceError("forgejo.tag must match release.tag")
-    release_url = _validate_https_url(forgejo["release_url"], "forgejo.release_url")
+    release_url = _validate_forgejo_release_url(
+        forgejo["release_url"], "forgejo.release_url", repository, tag
+    )
     if _require_commit(forgejo["target_commit"], "forgejo.target_commit") != commit:
         raise EvidenceError("forgejo.target_commit must match release.commit")
     if forgejo["published"] is not True:

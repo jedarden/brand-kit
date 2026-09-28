@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -57,6 +58,44 @@ def test_record_contains_each_required_release_evidence_section():
     )
 
 
+def test_record_links_every_completion_fact_to_the_exact_release_identity():
+    evidence = record(consumer_status="passed")
+
+    assert evidence["release"] == {"tag": "v1.2.0", "commit": COMMIT}
+    assert evidence["ci"] == {
+        "run_name": "brand-kit-ci/run-123",
+        "attestation_url": ATTESTATION_URL,
+        "workflow_uid": "watcher-uid",
+        "phase": "Succeeded",
+        "finished_at": "2026-09-27T17:00:00Z",
+        "commit": COMMIT,
+    }
+    assert evidence["forgejo"] == {
+        "repository": "jedarden/brand-kit",
+        "tag": "v1.2.0",
+        "release_url": (
+            "https://git.ardenone.com/jedarden/brand-kit/releases/tag/v1.2.0"
+        ),
+        "target_commit": COMMIT,
+        "published": True,
+    }
+    assert evidence["mirror"] == {
+        "tag": "v1.2.0",
+        "canonical_remote": "origin",
+        "canonical_commit": COMMIT,
+        "mirror_remote": "github",
+        "mirror_commit": COMMIT,
+        "agrees": True,
+    }
+    assert evidence["consumer_drift"] == {
+        "release_tag": "v1.2.0",
+        "workflow_name": "brand-kit-consumer-drift-release-123",
+        "submitted": True,
+        "status": "passed",
+        "report_url": REPORT_URL,
+    }
+
+
 def test_record_contract_is_strict_and_credential_free():
     evidence = record()
     assert not any(
@@ -95,6 +134,74 @@ def test_record_requires_complete_sections(section, replacement):
 
     with pytest.raises(release_evidence.EvidenceError, match="missing required fields"):
         release_evidence.validate_record(evidence)
+
+
+def _with_evidence_value(section, field, value):
+    evidence = deepcopy(record())
+    evidence[section][field] = value
+    return evidence
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value", "message"),
+    [
+        ("release", "tag", "v1.2.1", "forgejo.tag must match"),
+        ("release", "commit", "b" * 40, "ci.commit must match"),
+        ("ci", "commit", "b" * 40, "ci.commit must match"),
+        ("ci", "phase", "Failed", "ci.phase must be Succeeded"),
+        ("ci", "finished_at", "2026-09-27T17:00:00", "timezone"),
+        ("forgejo", "repository", "someone/else", "release_url must identify"),
+        ("forgejo", "tag", "v1.2.1", "forgejo.tag must match"),
+        (
+            "forgejo",
+            "release_url",
+            "https://git.ardenone.com/jedarden/other/releases/tag/v1.2.0",
+            "release_url must identify",
+        ),
+        ("forgejo", "target_commit", "b" * 40, "target_commit must match"),
+        ("forgejo", "published", False, "published must be true"),
+        ("mirror", "tag", "v1.2.1", "mirror.tag must match"),
+        ("mirror", "canonical_remote", "github", "canonical_remote must be origin"),
+        ("mirror", "canonical_commit", "b" * 40, "canonical_commit must match"),
+        ("mirror", "mirror_remote", "origin", "mirror_remote must be github"),
+        ("mirror", "mirror_commit", "b" * 40, "mirror_commit must match"),
+        ("mirror", "agrees", False, "agrees must be true"),
+        ("consumer_drift", "release_tag", "v1.2.1", "release_tag must match"),
+        ("consumer_drift", "workflow_name", "wrong-workflow", "workflow_name is malformed"),
+        ("consumer_drift", "submitted", False, "submitted must be true"),
+        ("consumer_drift", "status", "unknown", "status is not a supported"),
+        (
+            "consumer_drift",
+            "report_url",
+            "https://example.test/report?token=redacted",
+            "credential material",
+        ),
+    ],
+)
+def test_record_rejects_partial_or_mismatched_identity(
+    section, field, value, message
+):
+    with pytest.raises(release_evidence.EvidenceError, match=message):
+        release_evidence.validate_record(_with_evidence_value(section, field, value))
+
+
+def test_publication_is_not_complete_until_a_complete_versioned_record_exists(tmp_path):
+    path = release_evidence.evidence_path("v1.2.0", tmp_path)
+
+    with pytest.raises(release_evidence.EvidenceError, match="cannot read release evidence"):
+        release_evidence.load_record(path)
+
+    path.write_text(
+        json.dumps({"schema_version": 1, "release": {"tag": "v1.2.0"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(release_evidence.EvidenceError, match="missing required fields"):
+        release_evidence.load_record(path)
+
+    path.unlink()
+    evidence = record()
+    release_evidence.write_record(evidence, path)
+    assert release_evidence.load_record(path) == evidence
 
 
 def test_write_record_persists_a_versioned_json_record_and_is_idempotent(tmp_path):
