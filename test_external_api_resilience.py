@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 import urllib.error
+import urllib.parse
 
 import pytest
 
@@ -207,6 +208,92 @@ def test_garage_listing_retries_but_garage_delete_does_not(monkeypatch):
         publisher.delete_objects(["prefix/report.json"])
     assert delete_calls == [("POST", http_policy.GARAGE_TIMEOUT_SECONDS)]
     assert delete_delays == []
+
+
+def test_ambiguous_garage_delete_is_reconciled_by_listing_exact_prefix():
+    prefix = "failures/brand-kit-ci-failure-watch/v1/"
+    attempted = [f"{prefix}old/report-a.json", f"{prefix}old/report-b.json"]
+    recent = f"{prefix}recent/report.json"
+    objects = {
+        attempted[0],
+        attempted[1],
+        recent,
+        "failures/brand-kit-consumer-drift/v1/other/report.json",
+    }
+    delete_requests = []
+    list_requests = []
+
+    def opener(request, timeout):
+        if request.method == "POST":
+            delete_requests.append(request)
+            # Garage applied part of the batch, then the response was lost.
+            objects.remove(attempted[0])
+            raise _http_error(request.full_url, 503)
+
+        list_requests.append(request)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+        expected_query = {"list-type": ["2"], "prefix": [prefix]}
+        page_number = len(list_requests) - 1
+        if page_number:
+            expected_query["continuation-token"] = [f"page-{page_number}"]
+        assert query == expected_query
+        remaining = sorted(key for key in objects if key.startswith(prefix))
+        key = remaining[page_number]
+        contents = (
+            f"<Contents><Key>{key}</Key>"
+            "<LastModified>2026-09-27T12:00:00.000Z</LastModified></Contents>"
+        ).encode()
+        truncated = page_number + 1 < len(remaining)
+        continuation = (
+            f"<NextContinuationToken>page-{page_number + 1}</NextContinuationToken>"
+            if truncated
+            else ""
+        )
+        return _Response(
+            b'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+            + contents
+            + f"<IsTruncated>{str(truncated).lower()}</IsTruncated>{continuation}".encode()
+            + b"</ListBucketResult>"
+        )
+
+    client = prune_ci_failure_watch_reports.S3Client(
+        "https://garage.example",
+        "needle-ci-artifacts",
+        prune_ci_failure_watch_reports.S3Credentials("publisher", "secret"),
+        opener=opener,
+    )
+
+    with pytest.raises(prune_ci_failure_watch_reports.RetentionError):
+        client.delete_objects(attempted)
+
+    # Recovery is a complete read-only inspection. It determines current
+    # survivors without replaying the old multi-delete request.
+    listed = client.list_objects(prefix)
+    remaining_attempted = sorted(
+        set(attempted) & {item.key for item in listed}
+    )
+
+    assert remaining_attempted == [attempted[1]]
+    assert {item.key for item in listed} == {attempted[1], recent}
+    assert len(delete_requests) == 1
+    assert len(list_requests) == 2
+    assert all(request.method == "GET" for request in list_requests)
+
+
+def test_ambiguous_garage_delete_recovery_is_documented():
+    note = Path("docs/notes/external-api-resilience.md").read_text(encoding="utf-8")
+    note = " ".join(note.split())
+
+    for prefix in (
+        "failures/brand-kit-ci-failure-watch/v1/",
+        "attestations/brand-kit-ci/v1/",
+        "failures/brand-kit-consumer-drift/v1/",
+    ):
+        assert prefix in note
+    assert "Read every page" in note
+    assert "the remaining keys" in note
+    assert "Record the observation" in note
+    assert "Never replay the old" in note
 
 
 def test_external_api_timeout_and_retry_contract_is_documented():

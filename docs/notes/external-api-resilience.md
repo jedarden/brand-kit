@@ -31,6 +31,53 @@ validates the existing release before creating anything, and reconciles a
 `409 Conflict` by reading the named release. An ambiguous Argo submission or
 Garage deletion must be inspected before an operator repeats it.
 
+## Recovering an ambiguous Garage deletion
+
+If a Garage `DeleteObjects` request times out, returns a transport error, or
+returns an unusable response, stop the cleanup pass. The request may have
+deleted none, some, or all of its keys. Do not resend the failed request body,
+and do not blindly restart the old deletion batch.
+
+Reconcile the current object state with a read-only Garage credential:
+
+1. Identify the exact bucket and key prefix used by the failed cleanup. The
+   built-in artifact prefixes are:
+
+   | Artifact | Bucket | Exact key prefix |
+   | --- | --- | --- |
+   | CI failure-watch reports | `needle-ci-artifacts` | `failures/brand-kit-ci-failure-watch/v1/` |
+   | CI attestations | `needle-ci-artifacts` | `attestations/brand-kit-ci/v1/` |
+   | Consumer-drift reports | `needle-ci-artifacts` | `failures/brand-kit-consumer-drift/v1/` |
+
+   For an invocation with a configured `--prefix`, use that exact value. Do
+   not widen the listing to the bucket root or a shared parent such as
+   `failures/`.
+2. Complete a read-only `ListObjectsV2` for that bucket and exact prefix. Read
+   every page and confirm the listing finished successfully. If any page
+   fails, the response is truncated without a continuation token, or the
+   result otherwise cannot be trusted, stop without issuing another delete.
+3. Treat the complete listing as the current state: keys present in it remain
+   in Garage; keys absent from it are not present at observation time. Review
+   each remaining key against the cleanup's retention cutoff and all retention
+   holds before deciding it is still eligible. A listed key is not by itself
+   permission to delete it.
+4. Record the observation in the incident or workflow record: UTC time,
+   workflow/run identifier, endpoint, bucket, exact prefix, original error,
+   whether every listing page completed, the remaining keys, which remaining
+   keys still meet the retention rule, and the follow-up action. Do not include
+   credentials or secret values.
+5. Only after the complete listing and eligibility review may cleanup continue.
+   Build a fresh deletion set from keys that are still present and still
+   eligible under the current retention and hold checks. Never replay the old
+   multi-delete payload or delete every key returned by the listing. If a key
+   may have been rewritten or its identity is uncertain, leave it in place and
+   escalate for review.
+
+An incomplete or failed inspection remains indeterminate: preserve the record,
+leave deletion stopped, and retry the read-only inspection later. This
+procedure is an operator gate; the client continues to make only one
+`DeleteObjects` attempt per request.
+
 ## Fail-closed outcomes
 
 - Argo watcher and workflow-liveness reads that exhaust retries produce an

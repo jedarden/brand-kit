@@ -614,8 +614,12 @@ There is no automatic retry for a `POST`, `PATCH`, or S3 multi-delete because
 the first attempt may have committed a mutation before its response was lost.
 The Forgejo publisher reconciles an ambiguous release through its read-before-
 create and `409` lookup contract; inspect an ambiguous Argo submission or
-Garage deletion before repeating it. The complete contract and the executable
-tests are in
+Garage deletion before repeating it. For Garage, stop the cleanup pass, list
+every page under the exact artifact prefix with the read-only credential,
+review each remaining key against the retention cutoff and holds, and record
+the observation. Continue only with a fresh deletion set of keys still present
+and eligible; never replay the old multi-delete payload. The complete recovery
+procedure, artifact prefixes, contract, and executable tests are in
 [`docs/notes/external-api-resilience.md`](docs/notes/external-api-resilience.md)
 and `test_external_api_resilience.py`.
 
