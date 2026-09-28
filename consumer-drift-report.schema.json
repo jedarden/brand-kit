@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://git.ardenone.com/jedarden/brand-kit/consumer-drift-report/v1",
+  "title": "brand-kit consumer-drift audit report",
+  "description": "Strict version 1 contract for detector and scheduled consumer-drift reports.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "checked_at",
+    "status",
+    "release",
+    "site",
+    "source_digests",
+    "checks",
+    "consumers",
+    "coverage",
+    "errors"
+  ],
+  "properties": {
+    "schema": {
+      "const": "brand-kit-consumer-drift/v1"
+    },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "current",
+        "stale",
+        "indeterminate"
+      ]
+    },
+    "release": {
+      "$ref": "#/$defs/release"
+    },
+    "site": {
+      "$ref": "#/$defs/site"
+    },
+    "source_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sourceDigest"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "consumers": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/consumerSummary"
+      }
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag",
+        "published_at",
+        "record_target",
+        "checkout"
+      ],
+      "properties": {
+        "tag": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "published_at": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "record_target": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/checkout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "checkout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "tag_commit",
+        "matches"
+      ],
+      "properties": {
+        "head": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "tag_commit": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "matches": {
+          "type": "boolean"
+        }
+      }
+    },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "commit"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "commit": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "sourceDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "role",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consumer",
+        "asset",
+        "source",
+        "status"
+      ],
+      "properties": {
+        "consumer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "asset": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "current",
+            "stale",
+            "unavailable",
+            "skipped"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "media_url": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "observed_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "observed_size": {
+          "$ref": "#/$defs/size"
+        },
+        "expected_size": {
+          "$ref": "#/$defs/size"
+        },
+        "mean_luma": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_channel": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ],
+          "not": {
+            "required": [
+              "url"
+            ]
+          }
+        },
+        {
+          "required": [
+            "url"
+          ],
+          "not": {
+            "required": [
+              "path"
+            ]
+          }
+        }
+      ]
+    },
+    "size": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "integer",
+          "minimum": 1
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "consumerSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "checks"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "current",
+            "stale",
+            "unavailable",
+            "skipped"
+          ]
+        },
+        "checks": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "out_of_scope"
+      ],
+      "properties": {
+        "out_of_scope": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/outOfScope"
+          }
+        }
+      }
+    },
+    "outOfScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "surfaces",
+        "reason"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

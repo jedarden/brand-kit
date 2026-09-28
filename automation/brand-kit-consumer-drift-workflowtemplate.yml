@@ -33,8 +33,11 @@ spec:
             # even when package installation, cloning, or mirror polling
             # fails before the detector can run. The report is uploaded by
             # Argo after the pod exits, so it must never be /tmp-only state.
-            printf '%s\n' '{"schema":"brand-kit-consumer-drift/v1","status":"indeterminate","errors":["workflow did not reach the detector"]}' \
-              > /tmp/consumer-drift-report.json
+            write_fallback_report() {
+              printf '{"schema":"brand-kit-consumer-drift/v1","checked_at":"%s","status":"indeterminate","release":{"tag":null,"published_at":null,"record_target":null,"checkout":null},"site":{"name":"jedarden.com","path":null,"commit":null},"source_digests":[],"checks":[],"consumers":{},"coverage":{"out_of_scope":[]},"errors":["%s"]}\n' \
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > /tmp/consumer-drift-report.json
+            }
+            write_fallback_report "workflow did not reach the detector"
             printf '2\n' > /tmp/consumer-drift-exit-code
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
@@ -47,8 +50,9 @@ spec:
             PRUNE_EXIT=$?
             set -e
             if [ "$PRUNE_EXIT" -ne 0 ]; then
-              printf '%s\n' '{"schema":"brand-kit-consumer-drift/v1","status":"indeterminate","errors":["consumer-drift report retention cleanup did not complete"],"checks":[]}' \
-                > /tmp/consumer-drift-report.json
+              write_fallback_report "consumer-drift report retention cleanup did not complete"
+              python3 /brand-kit/tools/validate_consumer_drift_report.py \
+                /tmp/consumer-drift-report.json
               printf '%s\n' '2' > /tmp/consumer-drift-exit-code
               exit 2
             fi
@@ -93,6 +97,20 @@ spec:
               --json
             DETECTOR_EXIT=$?
             set -e
+            # Validate the exact JSON that Argo will upload. A detector bug or
+            # a partial report must become INDETERMINATE, never a misleading
+            # artifact that consumers cannot safely interpret.
+            set +e
+            python3 /brand-kit/tools/validate_consumer_drift_report.py \
+              /tmp/consumer-drift-report.json
+            REPORT_VALIDATE_EXIT=$?
+            set -e
+            if [ "$REPORT_VALIDATE_EXIT" -ne 0 ]; then
+              write_fallback_report "detector produced an invalid report"
+              python3 /brand-kit/tools/validate_consumer_drift_report.py \
+                /tmp/consumer-drift-report.json
+              DETECTOR_EXIT=2
+            fi
             printf '%s\n' "$DETECTOR_EXIT" > /tmp/consumer-drift-exit-code
             exit "$DETECTOR_EXIT"
         outputs:

@@ -22,6 +22,12 @@ from typing import Any, Callable
 from PIL import Image, ImageChops, ImageStat
 
 ROOT = Path(__file__).resolve().parent.parent
+if __package__ in (None, ""):
+    sys.path.insert(0, str(ROOT))
+
+from tools.consumer_drift_report import REPORT_SCHEMA, validate_report
+
+
 DEFAULT_CONFIG = ROOT / "consumer-drift.json"
 DEFAULT_SITE = Path.home() / "jedarden.com"
 DEFAULT_API_URL = "https://git.ardenone.com/api/v1"
@@ -580,7 +586,7 @@ def audit_live_assets(
             "source": source,
         }
         if offline:
-            result.update(status="unavailable", reason="offline mode was requested")
+            result.update(status="skipped", reason="offline mode was requested")
             checks.append(result)
             continue
         try:
@@ -625,7 +631,7 @@ def audit_live_assets(
 
 def _consumer_summary(checks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     summary: dict[str, dict[str, Any]] = {}
-    precedence = {"current": 0, "unavailable": 1, "stale": 2}
+    precedence = {"current": 0, "skipped": 1, "unavailable": 2, "stale": 3}
     for check in checks:
         name = str(check.get("consumer", "unknown"))
         status = str(check.get("status", "unavailable"))
@@ -640,7 +646,7 @@ def _report_status(checks: list[dict[str, Any]], errors: list[str]) -> str:
     statuses = {str(check.get("status")) for check in checks}
     if "stale" in statuses:
         return "stale"
-    if errors or "unavailable" in statuses:
+    if errors or statuses & {"unavailable", "skipped"}:
         return "indeterminate"
     return "current"
 
@@ -651,11 +657,16 @@ def _base_report(
     release_tag: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema": REPORT_SCHEMA,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "status": "indeterminate",
-        "release": {"tag": release_tag},
-        "site": {"name": "jedarden.com", "path": str(site)},
+        "release": {
+            "tag": release_tag,
+            "published_at": None,
+            "record_target": None,
+            "checkout": None,
+        },
+        "site": {"name": "jedarden.com", "path": str(site), "commit": None},
         "source_digests": [],
         "checks": [],
         "consumers": {},
@@ -732,7 +743,7 @@ def run_audit(
         errors.append(str(exc))
         report["errors"] = errors
         report["status"] = _report_status([], errors)
-        return report
+        return validate_report(report)
 
     try:
         report["source_digests"] = _source_digests(root, config)
@@ -744,7 +755,7 @@ def run_audit(
         errors.append(str(exc))
     report["consumers"] = _consumer_summary(report["checks"])
     report["status"] = _report_status(report["checks"], errors)
-    return report
+    return validate_report(report)
 
 
 def _render_human(report: dict[str, Any]) -> None:
@@ -821,12 +832,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["errors"] = [str(exc)]
         report["status"] = "indeterminate"
+        report = validate_report(report)
     if args.as_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         _render_human(report)
     if args.report:
         try:
+            validate_report(report)
             args.report.write_text(
                 json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )

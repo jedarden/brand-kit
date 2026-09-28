@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 
 from tools import consumer_drift, consumer_sync
+from tools import consumer_drift_report
 
 
 def image_bytes(image, image_format="PNG"):
@@ -847,10 +848,135 @@ def test_main_returns_two_when_offline_mode_skips_live_checks(
         "https://forgejo.example/api/v1/repos/jedarden/brand-kit/releases/tags/v1.0.0"
     ]
     assert all(
-        check["status"] == "unavailable"
+        check["status"] == "skipped"
         for check in report["checks"]
         if "url" in check
     )
+
+
+def test_detector_report_uses_the_versioned_contract_and_validates_all_outcomes(
+    tmp_path, monkeypatch, capsys
+):
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+
+    exit_code, report = invoke_main(
+        monkeypatch, capsys, root, site, make_fetcher(root)
+    )
+
+    assert exit_code == 0
+    assert report["schema"] == consumer_drift_report.REPORT_SCHEMA
+    assert report["status"] == "current"
+    assert report["coverage"]["out_of_scope"] == []
+    consumer_drift_report.validate_report(report)
+
+    exit_code, offline_report = invoke_main(
+        monkeypatch,
+        capsys,
+        root,
+        site,
+        make_fetcher(root),
+        extra_args=("--offline",),
+    )
+
+    assert exit_code == 2
+    assert offline_report["status"] == "indeterminate"
+    assert all(
+        check["status"] == "skipped"
+        for check in offline_report["checks"]
+        if "url" in check
+    )
+    consumer_drift_report.validate_report(offline_report)
+
+    invalid = dict(report)
+    invalid["schema"] = "brand-kit-consumer-drift/v2"
+    with pytest.raises(consumer_drift_report.ReportError, match="schema"):
+        consumer_drift_report.validate_report(invalid)
+
+
+def test_report_schema_file_matches_the_runtime_contract():
+    schema = json.loads(
+        Path("consumer-drift-report.schema.json").read_text(encoding="utf-8")
+    )
+
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["schema"] == {
+        "const": consumer_drift_report.REPORT_SCHEMA
+    }
+    assert schema["properties"]["status"]["enum"] == [
+        "current",
+        "stale",
+        "indeterminate",
+    ]
+    assert schema["$defs"]["check"]["properties"]["status"]["enum"] == [
+        "current",
+        "stale",
+        "unavailable",
+        "skipped",
+    ]
+    assert schema["$defs"]["outOfScope"]["required"] == [
+        "platform",
+        "surfaces",
+        "reason",
+    ]
+
+
+def test_detector_report_is_accepted_by_the_checked_in_json_schema(
+    tmp_path, monkeypatch, capsys
+):
+    jsonschema = pytest.importorskip("jsonschema")
+    root = make_root(tmp_path)
+    site = make_site(root, tmp_path)
+    exit_code, report = invoke_main(
+        monkeypatch, capsys, root, site, make_fetcher(root)
+    )
+
+    assert exit_code == 0
+    schema = json.loads(
+        Path("consumer-drift-report.schema.json").read_text(encoding="utf-8")
+    )
+    jsonschema.Draft202012Validator(schema).validate(report)
+
+
+def test_saved_report_cli_validates_the_same_artifact_contract(tmp_path):
+    report = {
+        "schema": consumer_drift_report.REPORT_SCHEMA,
+        "checked_at": "2026-09-27T17:00:00Z",
+        "status": "indeterminate",
+        "release": {
+            "tag": None,
+            "published_at": None,
+            "record_target": None,
+            "checkout": None,
+        },
+        "site": {"name": "jedarden.com", "path": None, "commit": None},
+        "source_digests": [],
+        "checks": [],
+        "consumers": {},
+        "coverage": {
+            "out_of_scope": [
+                {
+                    "platform": "Example",
+                    "surfaces": ["profile"],
+                    "reason": "No stable public endpoint is available.",
+                }
+            ]
+        },
+        "errors": ["workflow did not reach the detector"],
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, "tools/validate_consumer_drift_report.py", str(report_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "PASS  validated brand-kit-consumer-drift/v1 report" in result.stdout
 
 
 def test_release_discovery_ignores_drafts_and_waits_for_the_configured_age():
@@ -1279,6 +1405,14 @@ def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     # result as a machine-readable artifact for later inspection.
     assert "--json" in workflow
     assert "--report /tmp/consumer-drift-report.json" in workflow
+    assert '"schema":"brand-kit-consumer-drift/v1"' in workflow
+    assert "tools/validate_consumer_drift_report.py" in workflow
+    assert workflow.count("validate_consumer_drift_report.py") >= 3
+
+    # The CronWorkflow delegates to the same versioned template, so scheduled
+    # runs receive the detector-side and artifact-side validation guarantees.
+    assert "brand-kit-consumer-drift/v1" in workflow
+    assert "workflowTemplateRef:" in cron
 
 
 def test_scheduled_workflow_routes_failures_and_retains_report():

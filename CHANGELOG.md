@@ -11,6 +11,9 @@ source.
 ## [Unreleased]
 
 ### Added
+- Versioned consumer-drift report contract (`brand-kit-consumer-drift/v1`) with
+  a strict JSON Schema, detector-side validation, explicit skipped checks, and
+  WorkflowTemplate artifact validation for release-triggered and scheduled runs.
 - Versioned, credential-free release evidence records under
   release-evidence/v1/<tag>.json, with a strict schema and persistence helper
   covering the release commit, CI attestation, Forgejo publication, mirror

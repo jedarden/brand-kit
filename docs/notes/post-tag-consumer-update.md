@@ -50,6 +50,42 @@ is newer than the release being audited, pass
 `--source-root <checkout-of-the-release-tag>` while keeping the detector itself
 on the current checkout; this is what the scheduled workflow does.
 
+### Consumer-drift report contract
+
+The detector's JSON output and the scheduled artifact use the versioned
+contract in [`consumer-drift-report.schema.json`](../../consumer-drift-report.schema.json).
+Every report has `schema: "brand-kit-consumer-drift/v1"` and the same required
+top-level fields: `checked_at`, `status`, `release`, `site`, `source_digests`,
+`checks`, `consumers`, `coverage`, and `errors`. A report is valid even when
+release setup fails: the fallback report retains the same shape with unresolved
+release/site fields set to `null`, empty check collections, and an explanatory
+`errors` entry.
+
+The JSON `status` values are deliberately stable and lower-case for machine
+consumers. `current` is the PASS outcome (exit `0`), `stale` is the DRIFT
+outcome (exit `1`), and `indeterminate` is the INDETERMINATE outcome (exit
+`2`). A check has `current`, `stale`, `unavailable`, or `skipped` status.
+`unavailable` means the check could not establish a result (for example, a
+network failure); `skipped` is reserved for an intentional omission such as
+`--offline`. Either state makes the report `indeterminate`; neither can make a
+run PASS. Every `coverage.out_of_scope` entry retains its `platform`, affected
+`surfaces`, and non-empty human-readable `reason`, so PASS never implies full
+platform coverage.
+
+Version 1 is strict: producers must emit only fields defined by the schema,
+and consumers must reject an unknown `schema` identifier or an invalid v1
+shape. Required fields, status meanings, and the meaning of an omitted or
+out-of-scope check cannot change within v1. A backward-incompatible field,
+enum, or meaning change creates `brand-kit-consumer-drift/v2` and a new
+artifact prefix; v1 readers are not required to interpret v2. The detector
+validates before writing, and the WorkflowTemplate validates the exact file
+again immediately before Argo uploads the durable artifact. Validate a saved
+report manually with:
+
+```bash
+python3 tools/validate_consumer_drift_report.py /tmp/brand-kit-consumer-drift.json
+```
+
 This is deliberately not full platform coverage. Instagram, Threads, TikTok,
 Facebook, YouTube, Mastodon, Bluesky, Discord, and the GitHub repository social
 preview remain out of scope because their documented uploads do not have a
