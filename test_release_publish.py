@@ -2,6 +2,7 @@ import io
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import urllib.error
 
 import pytest
@@ -153,11 +154,86 @@ def test_release_notes_are_taken_from_the_matching_changelog_section(tmp_path):
         "## [v1.0.0]\n\nold\n",
         encoding="utf-8",
     )
-
     assert release_publish.release_notes_from_changelog(changelog, "v1.1.0") == (
         "### Added\n- release item"
     )
 
+
+def test_release_payload_is_derived_from_the_exact_commit_and_is_deterministic(tmp_path):
+    commit = initialize_git_repository(tmp_path)
+    first = release_publish.build_release_payload("v1.1.0", commit, tmp_path)
+
+    (tmp_path / "release.txt").write_text("working tree drift\n", encoding="utf-8")
+    repeated = release_publish.build_release_payload("v1.1.0", commit, tmp_path)
+
+    assert first["manifest"] == repeated["manifest"]
+    assert [item.content for item in first["attachments"]] == [
+        item.content for item in repeated["attachments"]
+    ]
+    assert first["manifest"]["commit"] == commit
+    assert first["manifest"]["files"] == [
+        {
+            "path": "release.txt",
+            "sha256": "3933e3274b63dc01fd286d6d939a626867c83a4603fc4347e0f8b8856f1b98fd",
+            "size": 8,
+        }
+    ]
+    names = release_publish.release_payload_names("v1.1.0")
+    assert [item.name for item in first["attachments"]] == list(names.values())
+
+    archive = next(
+        item.content for item in first["attachments"] if item.name == names["archive"]
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        assert tar.extractfile(f"brand-kit-v1.1.0/release.txt").read() == b"release\n"
+
+
+def test_publish_release_uploads_missing_payload_once_and_reuses_it_on_republish(
+    tmp_path, monkeypatch
+):
+    commit = initialize_git_repository(tmp_path)
+    payload = release_publish.build_release_payload("v1.1.0", commit, tmp_path)
+    record = published(target_commitish=commit, id=17, body="release notes", assets=[])
+    calls = []
+    uploads = []
+
+    def request(method, url, payload=None, token=None, timeout=20.0):
+        calls.append((method, url, payload))
+        return record
+
+    def upload(api_url, repository, release_id, attachment, token):
+        uploads.append(attachment.name)
+        record["assets"].append(
+            {
+                "name": attachment.name,
+                "size": attachment.size,
+                "sha256": attachment.sha256,
+            }
+        )
+        return {"name": attachment.name}
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+    monkeypatch.setattr(release_publish, "upload_release_asset", upload)
+
+    assert release_publish.publish_release(
+        "v1.1.0",
+        commit,
+        "release notes",
+        token="secret",
+        payload=payload,
+    ) == record
+    assert len(uploads) == 3
+
+    calls.clear()
+    assert release_publish.publish_release(
+        "v1.1.0",
+        commit,
+        "release notes",
+        token="secret",
+        payload=payload,
+    ) == record
+    assert uploads == list(release_publish.release_payload_names("v1.1.0").values())
+    assert [method for method, _, _ in calls] == ["GET", "GET"]
 
 @pytest.mark.parametrize(
     ("contents", "message"),

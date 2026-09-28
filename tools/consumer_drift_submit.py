@@ -118,6 +118,19 @@ def submit_consumer_drift(
             f"Forgejo has no published release record for {release_tag}"
         )
     commit = _release_commit(record, release_tag)
+    if "assets" in record:
+        release_publish.verify_release_payload(
+            record,
+            release_tag,
+            commit,
+            lambda asset_url: release_publish.request_bytes(
+                asset_url,
+                headers={"Authorization": f"token {forgejo_token}"},
+                service="Forgejo release attachment",
+            ),
+            api_url=forgejo_api_url,
+            repository=repository,
+        )
 
     # This is the release handoff gate, not the scheduled mirror-health
     # monitor. Validate the configured repository identities before accepting

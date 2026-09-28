@@ -1,13 +1,14 @@
 import io
 import json
 import shlex
+import subprocess
 import sys
 import urllib.error
 from pathlib import Path
 
 from PIL import Image
 
-from tools import consumer_sync
+from tools import consumer_sync, release_publish
 
 
 REFERENCE = {
@@ -72,6 +73,46 @@ def write_previous_release(site, config=None):
     provenance = site / config["provenance"]
     provenance.parent.mkdir(parents=True, exist_ok=True)
     provenance.write_text('{"brand_kit":{"release":"previous"}}\n', encoding="utf-8")
+
+
+def forgejo_payload_fixture(tmp_path, tag="v1.0.0"):
+    root = tmp_path / "payload-repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "payload-test"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "payload-test@example.test"],
+        cwd=root,
+        check=True,
+    )
+    (root / "release.txt").write_text("release payload\n", encoding="utf-8")
+    subprocess.run(["git", "add", "release.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "payload"], cwd=root, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    payload = release_publish.build_release_payload(tag, commit, root)
+    blobs = {attachment.name: attachment.content for attachment in payload["attachments"]}
+    record = {
+        "tag_name": tag,
+        "draft": False,
+        "prerelease": False,
+        "target_commitish": commit,
+        "body": "release notes",
+        "assets": [
+            {
+                "name": attachment.name,
+                "size": attachment.size,
+                "browser_download_url": f"https://git.ardenone.com/assets/{attachment.name}",
+            }
+            for attachment in payload["attachments"]
+        ],
+    }
+    return record, blobs
 
 
 def apply_argv(site):
@@ -217,20 +258,24 @@ def test_future_consumer_registration_is_loaded_from_the_registry(tmp_path):
 
 
 def test_forgejo_release_check_accepts_only_a_published_matching_record(
-    monkeypatch, capsys
+    tmp_path, monkeypatch, capsys
 ):
     calls = []
+    record, blobs = forgejo_payload_fixture(tmp_path)
 
-    def fake_fetch(url):
+    def fake_fetch(url, headers=None):
         calls.append(url)
-        return b'{"tag_name":"v1.0.0","draft":false}'
+        if url.endswith("/releases/tags/v1.0.0"):
+            return json.dumps(record).encode()
+        return blobs[url.rsplit("/", 1)[-1]]
 
     monkeypatch.setattr(consumer_sync, "fetch", fake_fetch)
 
     assert consumer_sync.check_forgejo_release("v1.0.0") is True
-    assert calls == [
+    assert calls[0] == (
         "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases/tags/v1.0.0"
-    ]
+    )
+    assert len(calls) == 4
     assert "PASS  Forgejo release: v1.0.0 is published" in capsys.readouterr().out
 
 

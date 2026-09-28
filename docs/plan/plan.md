@@ -551,6 +551,15 @@ describe behavior that is easy to mistake for optional ceremony.
    exact matching draft, accepts a create race only after an exact reread, and
    verifies the record and both remotes again after the write. It never calls
    the GitHub Releases API or pushes the mirror itself.
+   The Forgejo Release also carries the versioned distribution payload:
+   `brand-kit-$VERSION.tar.gz`, `brand-kit-$VERSION.manifest.json`, and
+   `brand-kit-$VERSION.sha256`. The archive is a deterministic snapshot of
+   every tracked file at the exact commit; the manifest records every path,
+   size, and SHA-256; and the sidecar checksums the archive and manifest.
+   Attachment names are exact, extra or duplicate assets fail closed, and a
+   retry reuses matching attachments without creating another copy. Consumers
+   verify this payload before changing a checkout. Forgejo-generated source
+   download links are not distribution-contract assets.
    `artifactGC: Never` is only the handoff from Argo to Garage: the watcher
    separately retains unheld attestations for 30 days, runs a prefix-scoped
    pruner, and treats every attestation URL in release evidence as an

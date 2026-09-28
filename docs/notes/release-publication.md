@@ -117,6 +117,32 @@ before creating the tag. The heading must be a valid stable-release heading,
 the section must be unique and non-empty, and any `--notes` value is accepted
 only when it is byte-for-byte equal to the extracted section.
 
+### Forgejo distribution payload
+
+The published Forgejo Release has one immutable payload contract in addition
+to its tag, target commit, and changelog body. The publisher derives these
+three attachments from the exact tagged commit (never from uncommitted files):
+
+| Attachment | Contract |
+| --- | --- |
+| `brand-kit-$VERSION.tar.gz` | Deterministic gzip-compressed tar archive of every tracked file at the exact commit, rooted at `brand-kit-$VERSION/`. |
+| `brand-kit-$VERSION.manifest.json` | UTF-8, sorted-key JSON with schema `brand-kit-release/v1`, the canonical repository, exact tag and full commit, the archive name, and a sorted list of every tracked path with its byte length and SHA-256. |
+| `brand-kit-$VERSION.sha256` | Exactly two `sha256  filename` lines, covering the archive and manifest attachment by their exact names. |
+
+The attachment names are exact: no additional release assets are allowed, and
+the checksum file does not checksum itself. A republish of the same tag and
+commit reuses matching attachments and uploads no second copy. An existing
+asset with a different declared size, an unexpected name, or duplicate name
+fails closed. Forgejo's automatically generated source-download links are
+not part of this contract because their bytes and naming are controlled by
+Forgejo rather than this repository.
+
+Consumers must download all three attachments, verify the SHA-256 sidecar,
+verify that the manifest names the release's full target commit, and compare
+the archive's complete file set and per-file hashes to the manifest before
+changing a consumer checkout. A missing, extra, malformed, or corrupted
+attachment blocks synchronization.
+
 ```bash
 .venv/bin/python tools/release_publish.py \
   --tag "$VERSION" \

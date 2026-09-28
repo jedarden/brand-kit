@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime, timezone
+import gzip
+import hashlib
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -62,6 +67,11 @@ COMMIT_PARAMETER_NAMES = {
     "headsha",
     "releasecommit",
 }
+RELEASE_PAYLOAD_SCHEMA = "brand-kit-release/v1"
+RELEASE_PAYLOAD_ARCHIVE_SUFFIX = ".tar.gz"
+RELEASE_PAYLOAD_MANIFEST_SUFFIX = ".manifest.json"
+RELEASE_PAYLOAD_CHECKSUMS_SUFFIX = ".sha256"
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ReleaseError(RuntimeError):
@@ -80,6 +90,22 @@ class HttpFailure(ReleaseError):
 
 class ArgoWorkflowNotFound(ReleaseError):
     """The named Argo Workflow was reaped before the release was published."""
+
+
+@dataclass(frozen=True)
+class ReleaseAttachment:
+    """One deterministic attachment in the Forgejo distribution contract."""
+
+    name: str
+    content: bytes
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.content).hexdigest()
+
+    @property
+    def size(self) -> int:
+        return len(self.content)
 
 
 def require_token(token: str | None, variable: str) -> str:
@@ -136,6 +162,125 @@ def run_git_optional(arguments: list[str], root: Path = ROOT) -> subprocess.Comp
         )
     except OSError as error:
         raise ReleaseError(f"cannot run git {' '.join(arguments)}: {error}") from error
+
+
+def run_git_bytes(arguments: list[str], root: Path = ROOT) -> bytes:
+    """Run a read-only git command whose output is binary content."""
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            capture_output=True,
+        )
+    except OSError as error:
+        raise ReleaseError(f"cannot run git {' '.join(arguments)}: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        suffix = f": {detail}" if detail else ""
+        raise ReleaseError(f"git {' '.join(arguments)} failed{suffix}")
+    return result.stdout
+
+
+def release_payload_names(tag: str) -> dict[str, str]:
+    """Return the exact attachment names required for one release tag."""
+    tag = validate_tag(tag)
+    stem = f"brand-kit-{tag}"
+    return {
+        "archive": f"{stem}{RELEASE_PAYLOAD_ARCHIVE_SUFFIX}",
+        "manifest": f"{stem}{RELEASE_PAYLOAD_MANIFEST_SUFFIX}",
+        "checksums": f"{stem}{RELEASE_PAYLOAD_CHECKSUMS_SUFFIX}",
+    }
+
+
+def _validate_release_commit(commit: str) -> str:
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
+        raise ReleaseError(f"release commit is not a full object ID: {commit!r}")
+    return commit.lower()
+
+
+def _release_tree_files(commit: str, root: Path) -> list[str]:
+    output = run_git_bytes(["ls-tree", "-r", "--name-only", "-z", commit], root)
+    try:
+        paths = [path for path in output.decode("utf-8").split("\0") if path]
+    except UnicodeDecodeError as error:
+        raise ReleaseError("release commit contains a non-UTF-8 path") from error
+    if not paths:
+        raise ReleaseError(f"release commit {commit} has no tracked files")
+    if any(Path(path).is_absolute() or ".." in Path(path).parts for path in paths):
+        raise ReleaseError("release commit contains an unsafe tracked path")
+    return sorted(paths)
+
+
+def _release_blob(commit: str, path: str, root: Path) -> bytes:
+    return run_git_bytes(["show", f"{commit}:{path}"], root)
+
+
+def _canonical_json(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def build_release_payload(
+    tag: str,
+    commit: str,
+    root: Path = ROOT,
+    repository: str = DEFAULT_CANONICAL_REPOSITORY,
+) -> dict[str, Any]:
+    """Build the deterministic archive, manifest, and checksum attachments.
+
+    The archive and manifest are derived exclusively from ``commit``.  The
+    working tree is never read, so a dirty checkout cannot change the bytes
+    published for an already-authorized exact commit.
+    """
+    tag = validate_tag(tag)
+    commit = _validate_release_commit(commit)
+    names = release_payload_names(tag)
+    paths = _release_tree_files(commit, root)
+    files = []
+    for path in paths:
+        content = _release_blob(commit, path, root)
+        files.append(
+            {
+                "path": path,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            }
+        )
+
+    prefix = f"brand-kit-{tag}/"
+    tar_bytes = run_git_bytes(
+        ["archive", "--format=tar", f"--prefix={prefix}", commit],
+        root,
+    )
+    archive_buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=archive_buffer, mode="wb", mtime=0) as compressed:
+        compressed.write(tar_bytes)
+    archive = archive_buffer.getvalue()
+
+    manifest = {
+        "schema": RELEASE_PAYLOAD_SCHEMA,
+        "repository": repository,
+        "tag": tag,
+        "commit": commit,
+        "archive": names["archive"],
+        "files": files,
+    }
+    manifest_bytes = _canonical_json(manifest)
+    checksums = (
+        f"{hashlib.sha256(archive).hexdigest()}  {names['archive']}\n"
+        f"{hashlib.sha256(manifest_bytes).hexdigest()}  {names['manifest']}\n"
+    ).encode("utf-8")
+    attachments = [
+        ReleaseAttachment(names["archive"], archive),
+        ReleaseAttachment(names["manifest"], manifest_bytes),
+        ReleaseAttachment(names["checksums"], checksums),
+    ]
+    return {
+        "schema": RELEASE_PAYLOAD_SCHEMA,
+        "tag": tag,
+        "commit": commit,
+        "manifest": manifest,
+        "attachments": attachments,
+    }
 
 
 def local_tag_info(tag: str, root: Path = ROOT) -> str:
@@ -363,6 +508,242 @@ def release_id_url(api_url: str, repository: str, release_id: str) -> str:
     return f"{api_url.rstrip('/')}/repos/{owner}/{name}/releases/{release_id}"
 
 
+def release_asset_upload_url(
+    api_url: str,
+    repository: str,
+    release_id: str,
+    name: str,
+) -> str:
+    """Return Forgejo's multipart upload endpoint for one release asset."""
+    if not isinstance(name, str) or not re.fullmatch(
+        r"brand-kit-v[0-9]+\.[0-9]+\.[0-9]+\.(?:tar\.gz|manifest\.json|sha256)",
+        name,
+    ):
+        raise ReleaseError("Forgejo release attachment name is malformed")
+    return (
+        f"{release_id_url(api_url, repository, release_id)}/assets?name="
+        f"{urllib.parse.quote(name, safe='')}"
+    )
+
+
+def _release_asset_index(
+    record: dict[str, Any],
+    tag: str,
+    expected_sizes: dict[str, int] | None = None,
+) -> dict[str, dict[str, Any]]:
+    names = release_payload_names(tag)
+    expected_names = set(names.values())
+    assets = record.get("assets")
+    if not isinstance(assets, list):
+        raise ReleaseError(f"Forgejo release {tag} has no release payload attachments")
+    indexed: dict[str, dict[str, Any]] = {}
+    for asset in assets:
+        if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
+            raise ReleaseError(f"Forgejo release {tag} has a malformed attachment")
+        name = asset["name"]
+        if name not in expected_names:
+            raise ReleaseError(f"Forgejo release {tag} has unexpected attachment {name!r}")
+        if name in indexed:
+            raise ReleaseError(f"Forgejo release {tag} has duplicate attachment {name!r}")
+        size = asset.get("size")
+        if size is not None and (not isinstance(size, int) or size < 0):
+            raise ReleaseError(f"Forgejo release {tag} attachment {name} has invalid size")
+        digest = asset.get("sha256")
+        if digest is not None and (
+            not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest)
+        ):
+            raise ReleaseError(f"Forgejo release {tag} attachment {name} has invalid SHA-256")
+        if expected_sizes is not None and size is not None and size != expected_sizes[name]:
+            raise ReleaseError(
+                f"Forgejo release {tag} attachment {name} has size {size}, "
+                f"expected {expected_sizes[name]}"
+            )
+        indexed[name] = asset
+    missing = sorted(expected_names - set(indexed))
+    if missing:
+        raise ReleaseError(
+            f"Forgejo release {tag} is missing attachment(s): {', '.join(missing)}"
+        )
+    return indexed
+
+
+def _release_asset_download_url(
+    asset: dict[str, Any],
+    api_url: str,
+    repository: str,
+) -> str:
+    for field in ("browser_download_url", "download_url", "url"):
+        value = asset.get(field)
+        if isinstance(value, str) and value:
+            parsed = urllib.parse.urlsplit(value)
+            api_host = urllib.parse.urlsplit(api_url).hostname
+            if (
+                parsed.scheme in {"http", "https"}
+                and parsed.hostname
+                and parsed.hostname.lower() == (api_host or "").lower()
+                and not parsed.username
+                and not parsed.password
+                and not parsed.fragment
+            ):
+                return value
+    release_id = asset.get("release_id")
+    asset_id = asset.get("id")
+    if isinstance(release_id, (str, int)) and isinstance(asset_id, (str, int)):
+        owner, name = repository_parts(repository)
+        return (
+            f"{api_url.rstrip('/')}/repos/{owner}/{name}/releases/assets/"
+            f"{urllib.parse.quote(str(asset_id), safe='')}"
+        )
+    raise ReleaseError(f"release attachment {asset.get('name')!r} has no download URL")
+
+
+def _validate_release_manifest(
+    manifest: Any,
+    tag: str,
+    commit: str,
+    archive_name: str,
+    repository: str,
+) -> dict[str, Any]:
+    if not isinstance(manifest, dict):
+        raise ReleaseError("release manifest is not a JSON object")
+    expected_keys = {"schema", "repository", "tag", "commit", "archive", "files"}
+    if set(manifest) != expected_keys:
+        raise ReleaseError("release manifest has unexpected or missing fields")
+    if manifest["schema"] != RELEASE_PAYLOAD_SCHEMA:
+        raise ReleaseError("release manifest schema is unsupported")
+    if manifest["repository"] != repository:
+        raise ReleaseError("release manifest names the wrong repository")
+    manifest_commit = manifest["commit"]
+    if (
+        not isinstance(manifest["tag"], str)
+        or not isinstance(manifest_commit, str)
+        or manifest["tag"] != tag
+        or manifest_commit.lower() != commit.lower()
+    ):
+        raise ReleaseError("release manifest does not identify the exact release tag and commit")
+    if manifest["archive"] != archive_name:
+        raise ReleaseError("release manifest names the wrong archive attachment")
+    files = manifest["files"]
+    if not isinstance(files, list) or not files:
+        raise ReleaseError("release manifest files must be a non-empty list")
+    paths: list[str] = []
+    for entry in files:
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256", "size"}:
+            raise ReleaseError("release manifest has a malformed file entry")
+        path = entry["path"]
+        if (
+            not isinstance(path, str)
+            or not path
+            or Path(path).is_absolute()
+            or ".." in Path(path).parts
+        ):
+            raise ReleaseError("release manifest contains an unsafe file path")
+        digest = entry["sha256"]
+        size = entry["size"]
+        if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
+            raise ReleaseError(f"release manifest entry {path!r} has an invalid SHA-256")
+        if not isinstance(size, int) or size < 0:
+            raise ReleaseError(f"release manifest entry {path!r} has an invalid size")
+        paths.append(path)
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise ReleaseError("release manifest file paths must be unique and sorted")
+    return manifest
+
+
+def _parse_release_checksums(content: bytes, names: dict[str, str]) -> dict[str, str]:
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ReleaseError("release checksum attachment is not UTF-8") from error
+    if len(lines) != 2:
+        raise ReleaseError("release checksum attachment must contain exactly two entries")
+    checksums: dict[str, str] = {}
+    for line in lines:
+        match = re.fullmatch(r"([0-9a-fA-F]{64})  (.+)", line)
+        if match is None:
+            raise ReleaseError("release checksum attachment has a malformed entry")
+        digest, name = match.groups()
+        if name not in {names["archive"], names["manifest"]} or name in checksums:
+            raise ReleaseError("release checksum attachment names an unexpected file")
+        checksums[name] = digest.lower()
+    if set(checksums) != {names["archive"], names["manifest"]}:
+        raise ReleaseError("release checksum attachment is incomplete")
+    return checksums
+
+
+def verify_release_payload(
+    record: dict[str, Any],
+    tag: str,
+    commit: str,
+    fetch_bytes: Callable[[str], bytes],
+    api_url: str = DEFAULT_API_URL,
+    repository: str = DEFAULT_REPOSITORY,
+) -> dict[str, Any]:
+    """Verify every Forgejo payload byte and return its exact manifest."""
+    commit = _validate_release_commit(commit)
+    validate_release_record(record, tag, expected_commit=commit)
+    assets = _release_asset_index(record, tag)
+    names = release_payload_names(tag)
+
+    downloaded: dict[str, bytes] = {}
+    for role in ("manifest", "checksums", "archive"):
+        name = names[role]
+        url = _release_asset_download_url(assets[name], api_url, repository)
+        try:
+            downloaded[name] = fetch_bytes(url)
+        except Exception as error:
+            raise ReleaseError(f"cannot download Forgejo attachment {name}: {error}") from error
+
+    checksums = _parse_release_checksums(downloaded[names["checksums"]], names)
+    for name, expected in checksums.items():
+        actual = hashlib.sha256(downloaded[name]).hexdigest()
+        if actual != expected:
+            raise ReleaseError(f"Forgejo attachment {name} failed its SHA-256 checksum")
+
+    try:
+        manifest = json.loads(downloaded[names["manifest"]].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseError("release manifest is not valid UTF-8 JSON") from error
+    manifest = _validate_release_manifest(
+        manifest,
+        tag,
+        commit,
+        names["archive"],
+        DEFAULT_CANONICAL_REPOSITORY,
+    )
+
+    prefix = f"brand-kit-{tag}/"
+    expected_files = {entry["path"]: entry for entry in manifest["files"]}
+    try:
+        archive = tarfile.open(fileobj=io.BytesIO(downloaded[names["archive"]]), mode="r:gz")
+    except (tarfile.TarError, OSError) as error:
+        raise ReleaseError("release archive is not a valid gzip tar archive") from error
+    with archive:
+        observed: set[str] = set()
+        for member in archive.getmembers():
+            member_path = Path(member.name)
+            if member_path.is_absolute() or ".." in member_path.parts:
+                raise ReleaseError("release archive contains an unsafe path")
+            if member.isdir():
+                continue
+            if not member.isreg() or not member.name.startswith(prefix):
+                raise ReleaseError("release archive contains a non-regular or misplaced entry")
+            path = member.name[len(prefix) :]
+            if path not in expected_files or path in observed:
+                raise ReleaseError("release archive contents do not match the release manifest")
+            source = archive.extractfile(member)
+            if source is None:
+                raise ReleaseError(f"release archive entry {path} cannot be read")
+            content = source.read()
+            entry = expected_files[path]
+            if len(content) != entry["size"] or hashlib.sha256(content).hexdigest() != entry["sha256"]:
+                raise ReleaseError(f"release archive entry {path} failed the manifest integrity check")
+            observed.add(path)
+    if observed != set(expected_files):
+        raise ReleaseError("release archive is missing files from the release manifest")
+    return manifest
+
+
 def request_json(
     method: str,
     url: str,
@@ -423,6 +804,58 @@ def request_json(
         raise ReleaseError(f"{service} returned invalid JSON: {error}") from error
 
 
+def upload_release_asset(
+    api_url: str,
+    repository: str,
+    release_id: str,
+    attachment: ReleaseAttachment,
+    token: str,
+) -> dict[str, Any]:
+    """Upload one release attachment using Forgejo's multipart API."""
+    url = release_asset_upload_url(api_url, repository, release_id, attachment.name)
+    boundary = f"brand-kit-{hashlib.sha256(attachment.content).hexdigest()[:24]}"
+    body = b"".join(
+        [
+            (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="attachment"; '
+            f'filename="{attachment.name}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n"
+            ).encode("utf-8"),
+            attachment.content,
+            f"\r\n--{boundary}--\r\n".encode("ascii"),
+        ]
+    )
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"token {token}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": "brand-kit-release-publisher",
+    }
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS) as response:
+            response_body = response.read()
+    except urllib.error.HTTPError as error:
+        detail = _redact(
+            error.read().decode("utf-8", errors="replace"),
+            token,
+        )[:300]
+        raise HttpFailure(
+            error.code,
+            detail or _redact(error.reason, token) or "Forgejo asset upload failed",
+        ) from error
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise ReleaseError(f"cannot reach Forgejo API: {_redact(error, token)}") from error
+    try:
+        result = json.loads(response_body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ReleaseError(f"Forgejo asset upload returned invalid JSON: {error}") from error
+    if not isinstance(result, dict):
+        raise ReleaseError("Forgejo asset upload returned a non-object")
+    return result
+
+
 def request_bytes(
     url: str,
     headers: dict[str, str] | None = None,
@@ -481,11 +914,11 @@ def validate_release_record(
         raise ReleaseError(
             f"Forgejo release names {record.get('tag_name')!r}, expected {tag!r}"
         )
-    if record.get("prerelease") is not False:
-        raise ReleaseError(f"Forgejo release {tag} is not a stable published release")
     draft = record.get("draft")
     if draft is not False and not (allow_draft and draft is True):
         raise ReleaseError(f"Forgejo release {tag} is not published")
+    if record.get("prerelease") is not False:
+        raise ReleaseError(f"Forgejo release {tag} is not a stable published release")
     target_commit = record.get("target_commitish")
     if not isinstance(target_commit, str) or not OBJECT_ID_PATTERN.fullmatch(target_commit):
         raise ReleaseError(
@@ -1001,6 +1434,109 @@ def release_notes_from_changelog(path: Path, tag: str) -> str:
     return notes
 
 
+def _attach_release_payload(
+    record: dict[str, Any],
+    payload: dict[str, Any],
+    api_url: str,
+    repository: str,
+    token: str,
+) -> None:
+    """Upload only missing deterministic attachments for an exact release."""
+    tag = payload.get("tag")
+    if not isinstance(tag, str) or tag != record.get("tag_name"):
+        raise ReleaseError("release payload tag does not match the Forgejo release")
+    payload_commit = payload.get("commit")
+    if not isinstance(payload_commit, str) or payload_commit.lower() != str(
+        record.get("target_commitish", "")
+    ).lower():
+        raise ReleaseError("release payload commit does not match the Forgejo release")
+    attachments = payload.get("attachments")
+    if not isinstance(attachments, list) or not all(
+        isinstance(item, ReleaseAttachment) for item in attachments
+    ):
+        raise ReleaseError("release payload attachments are malformed")
+    expected_sizes = {item.name: item.size for item in attachments}
+    expected_digests = {item.name: item.sha256 for item in attachments}
+    current_assets = record.get("assets", [])
+    if current_assets is None:
+        current_assets = []
+    if not isinstance(current_assets, list):
+        raise ReleaseError(f"Forgejo release {tag} has malformed attachment metadata")
+    current_names = {
+        asset.get("name")
+        for asset in current_assets
+        if isinstance(asset, dict) and isinstance(asset.get("name"), str)
+    }
+    unexpected = sorted(current_names - set(expected_sizes))
+    if unexpected:
+        raise ReleaseError(
+            f"Forgejo release {tag} has unexpected attachment(s): {', '.join(unexpected)}"
+        )
+    for asset in current_assets:
+        if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
+            raise ReleaseError(f"Forgejo release {tag} has a malformed attachment")
+        name = asset["name"]
+        size = asset.get("size")
+        if size is not None and size != expected_sizes[name]:
+            raise ReleaseError(
+                f"Forgejo release {tag} attachment {name} has size {size}, "
+                f"expected {expected_sizes[name]}"
+            )
+        digest = asset.get("sha256")
+        if digest is not None and (
+            not isinstance(digest, str)
+            or not SHA256_PATTERN.fullmatch(digest)
+            or digest.lower() != expected_digests[name]
+        ):
+            raise ReleaseError(
+                f"Forgejo release {tag} attachment {name} has the wrong SHA-256"
+            )
+    missing = [item for item in attachments if item.name not in current_names]
+    if not missing:
+        return
+    release_id = record.get("id")
+    if not isinstance(release_id, (str, int)):
+        raise ReleaseError(f"Forgejo release {tag} has no usable id for attachment upload")
+    for attachment in missing:
+        try:
+            uploaded = upload_release_asset(
+                api_url,
+                repository,
+                str(release_id),
+                attachment,
+                token,
+            )
+        except HttpFailure as error:
+            if error.status == 409:
+                reread = get_release(
+                    tag,
+                    api_url,
+                    repository,
+                    token,
+                    expected_commit=payload_commit,
+                )
+                reread_assets = reread.get("assets", []) if reread else []
+                if isinstance(reread_assets, list) and any(
+                    isinstance(asset, dict)
+                    and asset.get("name") == attachment.name
+                    and asset.get("size") in (None, attachment.size)
+                    for asset in reread_assets
+                ):
+                    continue
+                raise ReleaseError(
+                    f"Forgejo reported a conflict while uploading attachment {attachment.name}; "
+                    "the reread did not contain the exact attachment"
+                ) from error
+            raise ReleaseError(
+                f"cannot upload Forgejo attachment {attachment.name}: {error}"
+            ) from error
+        if isinstance(uploaded.get("name"), str) and uploaded["name"] != attachment.name:
+            raise ReleaseError(
+                f"Forgejo uploaded attachment as {uploaded['name']!r}, "
+                f"expected {attachment.name!r}"
+            )
+
+
 def publish_release(
     tag: str,
     commit: str,
@@ -1008,6 +1544,8 @@ def publish_release(
     api_url: str = DEFAULT_API_URL,
     repository: str = DEFAULT_REPOSITORY,
     token: str | None = None,
+    payload: dict[str, Any] | None = None,
+    root: Path = ROOT,
 ) -> dict[str, Any]:
     validate_tag(tag)
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
@@ -1015,6 +1553,10 @@ def publish_release(
     if not isinstance(notes, str) or not notes.strip():
         raise ReleaseError("release notes must not be empty")
     token = require_token(token, "FORGEJO_TOKEN")
+    if payload is None and (root / ".git").exists():
+        head = run_git(["rev-parse", "--verify", "HEAD^{commit}"], root)
+        if head.lower() == commit.lower():
+            payload = build_release_payload(tag, commit, root)
 
     existing = get_release(
         tag,
@@ -1026,7 +1568,7 @@ def publish_release(
         expected_notes=notes,
     )
     if existing is None:
-        payload = {
+        create_payload = {
             "tag_name": tag,
             "target_commitish": commit,
             "name": tag,
@@ -1038,7 +1580,7 @@ def publish_release(
             record = request_json(
                 "POST",
                 releases_url(api_url, repository),
-                payload=payload,
+                payload=create_payload,
                 token=token,
             )
         except HttpFailure as error:
@@ -1080,6 +1622,9 @@ def publish_release(
     else:
         record = existing
 
+    if payload is not None:
+        _attach_release_payload(record, payload, api_url, repository, token)
+
     final = get_release(
         tag,
         api_url,
@@ -1090,6 +1635,13 @@ def publish_release(
     )
     if final is None:
         raise ReleaseError(f"Forgejo release {tag} disappeared after publication")
+    if payload is not None:
+        attachments = payload["attachments"]
+        _release_asset_index(
+            final,
+            tag,
+            expected_sizes={item.name: item.size for item in attachments},
+        )
     return final
 
 
@@ -1234,6 +1786,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PASS  exact annotated tag {args.tag} at {commit}")
         print("PASS  canonical and mirror remotes advertise main and the expected peeled tag")
 
+        # verify_ready normally guarantees this equality through local_tag_info.
+        # Keeping the guard makes the payload builder safe for callers that
+        # replace the readiness gate in a unit test or embedding process.
+        payload = None
+        if (ROOT / ".git").exists() and run_git(
+            ["rev-parse", "--verify", "HEAD^{commit}"]
+        ) == commit:
+            payload = build_release_payload(args.tag, commit)
+
         if args.verify_only:
             record = get_release(
                 args.tag,
@@ -1245,6 +1806,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             if record is None:
                 raise ReleaseError(f"Forgejo has no published release record for {args.tag}")
+            if payload is not None:
+                verify_release_payload(
+                    record,
+                    args.tag,
+                    commit,
+                    lambda url: request_bytes(
+                        url,
+                        headers={"Authorization": f"token {token}"},
+                        service="Forgejo release attachment",
+                    ),
+                    api_url=args.api_url,
+                    repository=args.repository,
+                )
             print(f"PASS  Forgejo release {args.tag} is published")
         else:
             record = publish_release(
@@ -1254,6 +1828,7 @@ def main(argv: list[str] | None = None) -> int:
                 api_url=args.api_url,
                 repository=args.repository,
                 token=token,
+                payload=payload,
             )
             print(f"PASS  Forgejo release {args.tag} is published (Forgejo is authoritative)")
 

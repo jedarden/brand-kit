@@ -12,7 +12,7 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from PIL import Image
 
-from tools import consumer_drift, consumer_sync
+from tools import consumer_drift, consumer_sync, release_publish
 from tools import consumer_drift_report
 
 
@@ -495,6 +495,33 @@ def test_release_to_consumer_refresh_only_remediation_writes(
             "published_at": "2026-09-01T00:00:00Z",
         }
     ).encode()
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    payload = release_publish.build_release_payload("v1.0.0", commit, root)
+    payload_blobs = {
+        attachment.name: attachment.content for attachment in payload["attachments"]
+    }
+    sync_release = {
+        "tag_name": "v1.0.0",
+        "draft": False,
+        "prerelease": False,
+        "target_commitish": commit,
+        "body": "release notes",
+        "assets": [
+            {
+                "name": attachment.name,
+                "size": attachment.size,
+                "browser_download_url": f"https://git.ardenone.com/assets/{attachment.name}",
+            }
+            for attachment in payload["attachments"]
+        ],
+    }
+    sync_release_body = json.dumps(sync_release).encode()
     base_fetcher = make_fetcher(root)
     calls = []
     detector_release_url = consumer_drift.release_url("v1.0.0", config)
@@ -502,8 +529,12 @@ def test_release_to_consumer_refresh_only_remediation_writes(
 
     def fetcher(url, headers=None):
         calls.append(url)
-        if url in {detector_release_url, sync_release_url}:
+        if url == detector_release_url:
             return release_body
+        if url == sync_release_url:
+            return sync_release_body
+        if "/assets/" in url:
+            return payload_blobs[url.rsplit("/", 1)[-1]]
         return base_fetcher(url, headers)
 
     monkeypatch.setattr(consumer_sync, "ROOT", root)

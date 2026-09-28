@@ -817,15 +817,24 @@ def check_forgejo_release(tag, api_url=None, token=None):
     if not isinstance(record, dict):
         print(f"FAIL  Forgejo release: response for {tag} is not an object; refusing to sync")
         return False
-    if record.get("tag_name") != tag:
-        print(f"FAIL  Forgejo release: response names {record.get('tag_name')!r}, "
-              f"expected {tag!r}; refusing to sync")
+    try:
+        release_publish.validate_release_record(record, tag)
+        commit = record["target_commitish"]
+        release_publish.verify_release_payload(
+            record,
+            tag,
+            commit,
+            lambda attachment_url: fetch(attachment_url, headers),
+            api_url=api_url or FORGEJO_API_URL,
+            repository=FORGEJO_REPOSITORY,
+        )
+    except release_publish.ReleaseError as exc:
+        print(f"FAIL  Forgejo release: {exc}; refusing to sync")
         return False
-    if record.get("draft") is not False:
-        print(f"FAIL  Forgejo release: {tag} is not published (draft must be false); "
-              "publish the Forgejo Release before running consumer_sync")
-        return False
-    print(f"PASS  Forgejo release: {tag} is published (read-only record found)")
+    print(
+        f"PASS  Forgejo release: {tag} is published (read-only record found; "
+        "verified exact-commit archive, manifest, and SHA-256 sidecar)"
+    )
     return True
 
 

@@ -194,6 +194,19 @@ def fetch_release(
     _release_tag(record, tag)
     if not isinstance(record, dict):
         raise ReleaseError(f"release {tag} is not an object")
+    if "assets" in record:
+        try:
+            release_publish.validate_release_record(record, tag)
+            release_publish.verify_release_payload(
+                record,
+                tag,
+                record["target_commitish"],
+                lambda attachment_url: _call_fetcher(fetcher, attachment_url, headers),
+                api_url=_api_base(config),
+                repository=_repository(config),
+            )
+        except release_publish.ReleaseError as exc:
+            raise ReleaseError(f"release {tag} payload is invalid: {exc}") from exc
     return record
 
 
