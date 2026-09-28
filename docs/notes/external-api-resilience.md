@@ -57,10 +57,11 @@ Reconcile the current object state with a read-only Garage credential:
    fails, the response is truncated without a continuation token, or the
    result otherwise cannot be trusted, stop without issuing another delete.
 3. Treat the complete listing as the current state: keys present in it remain
-   in Garage; keys absent from it are not present at observation time. Review
-   each remaining key against the cleanup's retention cutoff and all retention
-   holds before deciding it is still eligible. A listed key is not by itself
-   permission to delete it.
+   in Garage; keys absent from it are not present at observation time. Reload
+   and validate `retention-holds.json`, and review each remaining key against
+   the cleanup's retention cutoff and every release-evidence hold before
+   deciding it is still eligible. A listed key is not by itself permission to
+   delete it.
 4. Record the observation in the incident or workflow record: UTC time,
    workflow/run identifier, endpoint, bucket, exact prefix, original error,
    whether every listing page completed, the remaining keys, which remaining
@@ -68,10 +69,11 @@ Reconcile the current object state with a read-only Garage credential:
    credentials or secret values.
 5. Only after the complete listing and eligibility review may cleanup continue.
    Build a fresh deletion set from keys that are still present and still
-   eligible under the current retention and hold checks. Never replay the old
-   multi-delete payload or delete every key returned by the listing. If a key
-   may have been rewritten or its identity is uncertain, leave it in place and
-   escalate for review.
+   eligible under the current retention and hold checks. The shared recovery
+   check reloads active holds and returns eligible survivors without issuing a
+   delete. Never replay the old multi-delete payload or delete every key
+   returned by the listing. If a key may have been rewritten or its identity
+   is uncertain, leave it in place and escalate for review.
 
 An incomplete or failed inspection remains indeterminate: preserve the record,
 leave deletion stopped, and retry the read-only inspection later. This

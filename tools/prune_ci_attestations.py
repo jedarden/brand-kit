@@ -21,7 +21,7 @@ import urllib.parse
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tools import release_evidence, release_publish
+from tools import release_evidence, release_publish, retention_holds
 from tools.prune_ci_failure_watch_reports import (
     RetentionError,
     S3Client,
@@ -135,6 +135,7 @@ def prune_attestations(
     retention_days: int = DEFAULT_RETENTION_DAYS,
     now: datetime | None = None,
     dry_run: bool = False,
+    retention_holds_path: Path = retention_holds.DEFAULT_HOLDS_PATH,
 ) -> tuple[int, datetime]:
     """Delete expired, unheld CI attestations, preserving the exact cutoff."""
     _validate_retention(retention_days)
@@ -146,16 +147,24 @@ def prune_attestations(
         bucket=bucket,
         prefix=prefix,
     )
-    cutoff = _utc_now(now) - timedelta(days=retention_days)
-    expired = [
-        item
-        for item in reader.list_objects(prefix)
-        if item.key.endswith("/attestations.json")
-        and item.last_modified < cutoff
-        and item.key not in protected
-    ]
+    current = _utc_now(now)
+    protected.update(
+        retention_holds.active_hold_keys(
+            retention_holds_path,
+            endpoint=endpoint,
+            bucket=bucket,
+            now=current,
+        )
+    )
+    cutoff = current - timedelta(days=retention_days)
+    expired = retention_holds.expired_candidate_keys(
+        reader.list_objects(prefix),
+        cutoff=cutoff,
+        filename="attestations.json",
+        held_keys=protected,
+    )
     if not dry_run:
-        publisher.delete_objects([item.key for item in expired])
+        publisher.delete_objects(expired)
     return len(expired), cutoff
 
 
@@ -180,6 +189,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_EVIDENCE_ROOT,
         help="directory containing versioned release-evidence JSON records",
+    )
+    parser.add_argument(
+        "--retention-holds",
+        type=Path,
+        default=retention_holds.DEFAULT_HOLDS_PATH,
+        help="versioned manifest of exact Garage objects under retention hold",
     )
     parser.add_argument(
         "--dry-run",
@@ -226,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
             retention_days=args.retention_days,
             now=now,
             dry_run=args.dry_run,
+            retention_holds_path=args.retention_holds,
         )
     except (RetentionError, ValueError) as error:
         print(f"ERROR  CI attestation retention cleanup did not complete: {error}", file=sys.stderr)

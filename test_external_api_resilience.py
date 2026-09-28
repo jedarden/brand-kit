@@ -1,4 +1,6 @@
 import io
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 import urllib.error
 import urllib.parse
@@ -8,6 +10,7 @@ import pytest
 from tools import consumer_drift
 from tools import http_policy
 from tools import prune_ci_failure_watch_reports
+from tools import retention_holds
 from tools import release_publish
 
 
@@ -210,15 +213,24 @@ def test_garage_listing_retries_but_garage_delete_does_not(monkeypatch):
     assert delete_delays == []
 
 
-def test_ambiguous_garage_delete_is_reconciled_by_listing_exact_prefix():
-    prefix = "failures/brand-kit-ci-failure-watch/v1/"
-    attempted = [f"{prefix}old/report-a.json", f"{prefix}old/report-b.json"]
+@pytest.mark.parametrize(
+    ("prefix", "filename"),
+    (
+        ("failures/brand-kit-ci-failure-watch/v1/", "report.json"),
+        ("attestations/brand-kit-ci/v1/", "attestations.json"),
+        ("failures/brand-kit-consumer-drift/v1/", "report.json"),
+    ),
+)
+def test_ambiguous_garage_delete_recovery_rechecks_active_holds(
+    tmp_path, prefix, filename
+):
+    attempted = [f"{prefix}old-a/{filename}", f"{prefix}old-b/{filename}"]
     recent = f"{prefix}recent/report.json"
     objects = {
         attempted[0],
         attempted[1],
         recent,
-        "failures/brand-kit-consumer-drift/v1/other/report.json",
+        "unrelated/artifact/report.json",
     }
     delete_requests = []
     list_requests = []
@@ -239,9 +251,12 @@ def test_ambiguous_garage_delete_is_reconciled_by_listing_exact_prefix():
         assert query == expected_query
         remaining = sorted(key for key in objects if key.startswith(prefix))
         key = remaining[page_number]
+        last_modified = (
+            "2026-08-27T12:00:00.000Z" if key in attempted else "2026-09-27T12:00:00.000Z"
+        )
         contents = (
             f"<Contents><Key>{key}</Key>"
-            "<LastModified>2026-09-27T12:00:00.000Z</LastModified></Contents>"
+            f"<LastModified>{last_modified}</LastModified></Contents>"
         ).encode()
         truncated = page_number + 1 < len(remaining)
         continuation = (
@@ -266,15 +281,43 @@ def test_ambiguous_garage_delete_is_reconciled_by_listing_exact_prefix():
     with pytest.raises(prune_ci_failure_watch_reports.RetentionError):
         client.delete_objects(attempted)
 
-    # Recovery is a complete read-only inspection. It determines current
-    # survivors without replaying the old multi-delete request.
-    listed = client.list_objects(prefix)
-    remaining_attempted = sorted(
-        set(attempted) & {item.key for item in listed}
+    # A hold can be recorded while an ambiguous request is being investigated.
+    # Recovery reloads it, lists the exact prefix, and never replays the batch.
+    holds_path = tmp_path / "retention-holds.json"
+    held_key = attempted[1]
+    holds_path.write_text(
+        json.dumps(
+            {
+                "schema": retention_holds.SCHEMA,
+                "holds": [
+                    {
+                        "url": f"https://garage.example/needle-ci-artifacts/{held_key}",
+                        "reason": "Preserve during ambiguous deletion review",
+                        "expires_at": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
     )
+    evidence_root = tmp_path / "release-evidence" / "v1"
+    evidence_root.mkdir(parents=True)
+    survivors, eligible = retention_holds.reconcile_ambiguous_delete(
+        client,
+        prefix=prefix,
+        attempted_keys=attempted,
+        cutoff=datetime(2026, 8, 28, 13, 0, tzinfo=timezone.utc),
+        filename=filename,
+        holds_path=holds_path,
+        evidence_root=evidence_root,
+        endpoint="https://garage.example",
+        bucket="needle-ci-artifacts",
+        now=datetime(2026, 9, 27, 13, 0, tzinfo=timezone.utc),
+    )
+    remaining_attempted = sorted(item.key for item in survivors)
 
     assert remaining_attempted == [attempted[1]]
-    assert {item.key for item in listed} == {attempted[1], recent}
+    assert eligible == []
     assert len(delete_requests) == 1
     assert len(list_requests) == 2
     assert all(request.method == "GET" for request in list_requests)

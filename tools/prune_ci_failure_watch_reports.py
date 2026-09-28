@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import os
+from pathlib import Path
 import sys
 import time
 import urllib.error
@@ -25,6 +26,7 @@ import urllib.request
 from xml.etree import ElementTree
 
 from tools import http_policy
+from tools import retention_holds
 
 DEFAULT_ENDPOINT = "https://s3.ardenone.com"
 DEFAULT_BUCKET = "needle-ci-artifacts"
@@ -36,8 +38,7 @@ AWS_TERMINATOR = "aws4_request"
 S3_XML_NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/"
 
 
-class RetentionError(RuntimeError):
-    """Raised when the retention pass cannot safely complete."""
+RetentionError = retention_holds.RetentionError
 
 
 @dataclass(frozen=True)
@@ -316,6 +317,9 @@ def prune_reports(
     prefix: str = DEFAULT_PREFIX,
     retention_days: int = DEFAULT_RETENTION_DAYS,
     now: datetime | None = None,
+    endpoint: str = DEFAULT_ENDPOINT,
+    bucket: str = DEFAULT_BUCKET,
+    retention_holds_path: Path = retention_holds.DEFAULT_HOLDS_PATH,
 ) -> tuple[int, datetime]:
     if not isinstance(retention_days, int) or isinstance(retention_days, bool):
         raise RetentionError("retention days must be an integer")
@@ -323,13 +327,21 @@ def prune_reports(
         raise RetentionError("retention days must be between 1 and 3650")
     if not prefix.endswith("/"):
         raise RetentionError("report prefix must end with /")
-    cutoff = _utc_now(now) - timedelta(days=retention_days)
-    expired = [
-        item
-        for item in reader.list_objects(prefix)
-        if item.key.endswith("/report.json") and item.last_modified < cutoff
-    ]
-    publisher.delete_objects([item.key for item in expired])
+    current = _utc_now(now)
+    held = retention_holds.active_hold_keys(
+        retention_holds_path,
+        endpoint=endpoint,
+        bucket=bucket,
+        now=current,
+    )
+    cutoff = current - timedelta(days=retention_days)
+    expired = retention_holds.expired_candidate_keys(
+        reader.list_objects(prefix),
+        cutoff=cutoff,
+        filename="report.json",
+        held_keys=held,
+    )
+    publisher.delete_objects(expired)
     return len(expired), cutoff
 
 
@@ -347,6 +359,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefix", default=DEFAULT_PREFIX)
     parser.add_argument("--region", default=os.environ.get("S3_REGION", "garage"))
     parser.add_argument("--retention-days", type=int, default=DEFAULT_RETENTION_DAYS)
+    parser.add_argument(
+        "--retention-holds",
+        type=Path,
+        default=retention_holds.DEFAULT_HOLDS_PATH,
+        help="versioned manifest of exact Garage objects under retention hold",
+    )
     return parser
 
 
@@ -380,6 +398,9 @@ def main(argv: list[str] | None = None) -> int:
             prefix=args.prefix,
             retention_days=args.retention_days,
             now=now,
+            endpoint=args.endpoint,
+            bucket=args.bucket,
+            retention_holds_path=args.retention_holds,
         )
     except (RetentionError, ValueError) as error:
         print(f"ERROR  failure-watch report pruning did not complete: {error}", file=sys.stderr)

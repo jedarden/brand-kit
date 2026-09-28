@@ -70,6 +70,23 @@ def test_prune_reports_keeps_expired_release_evidence_holds_and_only_owns_prefix
 ):
     evidence_root = tmp_path / "release-evidence" / "v1"
     _write_evidence(evidence_root)
+    explicit_held_key = f"{PREFIX}manual-hold/report.json"
+    holds_path = tmp_path / "retention-holds.json"
+    holds_path.write_text(
+        json.dumps(
+            {
+                "schema": "brand-kit-retention-holds/v1",
+                "holds": [
+                    {
+                        "url": f"{ENDPOINT}/{BUCKET}/{explicit_held_key}",
+                        "reason": "Keep this report available for an investigation",
+                        "expires_at": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     requests = []
     responses = iter(
         [
@@ -80,6 +97,8 @@ def test_prune_reports_keeps_expired_release_evidence_holds_and_only_owns_prefix
                     f"<Contents><Key>{PREFIX}old/report.json</Key>"
                     "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
                     f"<Contents><Key>{HELD_KEY}</Key>"
+                    "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
+                    f"<Contents><Key>{explicit_held_key}</Key>"
                     "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
                     f"<Contents><Key>{PREFIX}new/report.json</Key>"
                     "<LastModified>2026-09-27T12:59:59.000Z</LastModified></Contents>"
@@ -118,6 +137,7 @@ def test_prune_reports_keeps_expired_release_evidence_holds_and_only_owns_prefix
         prefix=PREFIX,
         retention_days=30,
         now=NOW,
+        retention_holds_path=holds_path,
     )
 
     assert pruned == 1
@@ -132,6 +152,7 @@ def test_prune_reports_keeps_expired_release_evidence_holds_and_only_owns_prefix
     assert "Credential=publisher/" in requests[1].headers["Authorization"]
     assert PREFIX.encode() + b"old/report.json" in requests[1].data
     assert HELD_KEY.encode() not in requests[1].data
+    assert explicit_held_key.encode() not in requests[1].data
     assert PREFIX.encode() + b"boundary/report.json" not in requests[1].data
     assert b"brand-kit-ci-failure-watch" not in requests[1].data
 

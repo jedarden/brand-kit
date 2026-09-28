@@ -1,4 +1,5 @@
 import io
+import json
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 
@@ -110,3 +111,56 @@ def test_prune_reports_rejects_an_unusable_retention_window(retention_days):
             retention_days=retention_days,
             now=NOW,
         )
+
+
+def test_active_retention_hold_preserves_failure_watch_report(tmp_path):
+    held_key = f"{PREFIX}held/report.json"
+    holds_path = tmp_path / "retention-holds.json"
+    holds_path.write_text(
+        json.dumps(
+            {
+                "schema": "brand-kit-retention-holds/v1",
+                "holds": [
+                    {
+                        "url": f"https://s3.example.test/needle-ci-artifacts/{held_key}",
+                        "reason": "Investigating a CI regression",
+                        "expires_at": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Reader:
+        def list_objects(self, prefix):
+            assert prefix == PREFIX
+            return [
+                prune_ci_failure_watch_reports.S3Object(
+                    held_key, datetime(2026, 8, 1, tzinfo=timezone.utc)
+                ),
+                prune_ci_failure_watch_reports.S3Object(
+                    f"{PREFIX}expired/report.json",
+                    datetime(2026, 8, 1, tzinfo=timezone.utc),
+                ),
+            ]
+
+    class Publisher:
+        deleted = None
+
+        def delete_objects(self, keys):
+            self.deleted = keys
+
+    publisher = Publisher()
+    pruned, _ = prune_ci_failure_watch_reports.prune_reports(
+        Reader(),
+        publisher,
+        now=NOW,
+        endpoint="https://s3.example.test",
+        bucket="needle-ci-artifacts",
+        retention_holds_path=holds_path,
+    )
+
+    assert pruned == 1
+    assert publisher.deleted == [f"{PREFIX}expired/report.json"]
+    assert held_key not in publisher.deleted

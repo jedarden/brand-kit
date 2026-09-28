@@ -709,6 +709,24 @@ path and reruns the audit. Reports without a release-evidence hold may return
 `404` after the 30-day window; copy one to an approved recovery location before
 that window expires when a longer investigation needs it.
 
+### Garage retention holds
+
+`retention-holds.json` is the shared, versioned catalog for explicit holds on
+failure-watch reports, CI attestations, and consumer-drift reports. Its
+structure is defined by [`retention-holds.schema.json`](retention-holds.schema.json).
+Each entry names one exact Garage object URL, gives a non-empty reason, and
+sets `expires_at` to either a UTC timestamp ending in `Z` or `null` for an
+indefinite hold. An entry remains active until its expiration instant. Hold
+URLs must use the configured endpoint and bucket and one of the three exact
+artifact paths above; prefix-wide and wildcard holds are not accepted.
+
+All three cleanup tools load and validate the full catalog before listing
+Garage objects. Missing or malformed hold data stops cleanup. Active explicit
+holds are combined with release-evidence holds before selecting deletion keys.
+After an ambiguous Garage delete, recovery lists the exact prefix again,
+reloads the catalog, and reports only surviving objects that are still old
+enough and unheld; it never replays the original delete request.
+
 ### Release evidence record
 
 Every completed release also gets a credential-free record at

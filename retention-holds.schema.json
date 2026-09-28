@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brand-kit.ardenone.com/schemas/retention-holds-v1.json",
+  "title": "Brand Kit Garage retention holds v1",
+  "description": "Exact Garage object URLs protected from automated cleanup.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "holds"],
+  "properties": {
+    "schema": { "const": "brand-kit-retention-holds/v1" },
+    "holds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/hold" }
+    }
+  },
+  "$defs": {
+    "hold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "reason", "expires_at"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^https://s3\\.ardenone\\.com/needle-ci-artifacts/(failures/brand-kit-ci-failure-watch/v1/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/report\\.json|attestations/brand-kit-ci/v1/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/attestations\\.json|failures/brand-kit-consumer-drift/v1/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/report\\.json)$"
+        },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "expires_at": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

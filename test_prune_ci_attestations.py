@@ -64,6 +64,23 @@ def _clients(opener):
 def test_prune_keeps_release_holds_and_only_deletes_expired_attestations(tmp_path):
     evidence_root = tmp_path / "release-evidence" / "v1"
     _write_evidence(evidence_root)
+    explicit_held_key = f"{PREFIX}manual-hold/attestations.json"
+    holds_path = tmp_path / "retention-holds.json"
+    holds_path.write_text(
+        json.dumps(
+            {
+                "schema": "brand-kit-retention-holds/v1",
+                "holds": [
+                    {
+                        "url": f"{ENDPOINT}/{BUCKET}/{explicit_held_key}",
+                        "reason": "Keep this run available for an investigation",
+                        "expires_at": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     requests = []
     responses = iter(
         [
@@ -74,6 +91,8 @@ def test_prune_keeps_release_holds_and_only_deletes_expired_attestations(tmp_pat
                     f"<Contents><Key>{PREFIX}old-watcher/attestations.json</Key>"
                     "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
                     f"<Contents><Key>{HELD_KEY}</Key>"
+                    "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
+                    f"<Contents><Key>{explicit_held_key}</Key>"
                     "<LastModified>2026-08-27T12:59:59.000Z</LastModified></Contents>"
                     f"<Contents><Key>{PREFIX}new-watcher/attestations.json</Key>"
                     "<LastModified>2026-09-27T12:59:59.000Z</LastModified></Contents>"
@@ -112,6 +131,7 @@ def test_prune_keeps_release_holds_and_only_deletes_expired_attestations(tmp_pat
         prefix=PREFIX,
         retention_days=30,
         now=NOW,
+        retention_holds_path=holds_path,
     )
 
     assert pruned == 1
@@ -126,6 +146,7 @@ def test_prune_keeps_release_holds_and_only_deletes_expired_attestations(tmp_pat
     assert "Credential=publisher/" in requests[1].headers["Authorization"]
     assert f"{PREFIX}old-watcher/attestations.json".encode() in requests[1].data
     assert HELD_KEY.encode() not in requests[1].data
+    assert explicit_held_key.encode() not in requests[1].data
     assert f"{PREFIX}boundary-watcher/attestations.json".encode() not in requests[1].data
     assert b"failures/brand-kit-ci-failure-watch" not in requests[1].data
 
