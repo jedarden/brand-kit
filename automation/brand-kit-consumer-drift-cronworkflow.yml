@@ -27,3 +27,5 @@ spec:
         # consumer-drift.json's minimum propagation age.
         - name: release-tag
           value: ""
+        - name: release-commit
+          value: ""

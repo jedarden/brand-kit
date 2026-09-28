@@ -14,7 +14,7 @@ property name `token`:
 | Environment variable | OpenBao path | Use and minimum scope |
 | --- | --- | --- |
 | `FORGEJO_TOKEN` | `secret/rs-manager/brand-kit/release/forgejo` | The Forgejo API for `jedarden/brand-kit`: read the release/tag record and create or publish that repository's release. No organization, administration, mirror-push, or unrelated-repository permission. |
-| `ARGO_TOKEN` | `secret/rs-manager/brand-kit/release/argo-read` | Read-only `GET` attestation of the named `brand-kit-ci` Workflow run in namespace `argo-workflows`. No workflow submission, mutation, deletion, or access to another namespace. |
+| `ARGO_TOKEN` | `secret/rs-manager/brand-kit/release/argo-read` | Read-only `GET` attestation/reconciliation of named workflows and the template-scoped workflow list in namespace `argo-workflows`. No workflow submission, mutation, deletion, or access to another namespace. |
 | `ARGO_SUBMIT_TOKEN` | `secret/rs-manager/brand-kit/release/argo-submit` | Submit the `brand-kit-consumer-drift` WorkflowTemplate in namespace `argo-workflows`. It is not a substitute for `ARGO_TOKEN` and must not have workflow delete, suspend, or administrative permission. |
 
 These are provisioning paths, not values to copy into this repository. If a
@@ -43,12 +43,12 @@ installs its exit and signal traps to unset all three release-token variables:
 ```bash
 source tools/load_release_tokens.sh
 
-# For tools/release_publish.py, load only these two variables in its shell:
+# For tools/release_publish.py, load these two variables in its shell:
 load_release_token FORGEJO_TOKEN \
   secret/rs-manager/brand-kit/release/forgejo
 load_release_token ARGO_TOKEN \
   secret/rs-manager/brand-kit/release/argo-read
-# In a separate handoff shell, load ARGO_SUBMIT_TOKEN instead of ARGO_TOKEN:
+# The consumer handoff additionally loads the separate submit credential:
 # load_release_token ARGO_SUBMIT_TOKEN \
 #   secret/rs-manager/brand-kit/release/argo-submit
 ```
@@ -59,9 +59,11 @@ Use only the variables required by the command:
   including for `--verify-only`. `ARGO_TOKEN` is sent only as an HTTP Bearer
   header to the read-only Argo endpoint; `FORGEJO_TOKEN` is sent only as the
   Forgejo API authorization header.
-- `tools/consumer_drift_submit.py` requires `FORGEJO_TOKEN` and
-  `ARGO_SUBMIT_TOKEN`. It reads Forgejo before the mirror gate and sends the
-  submit token only as an HTTP Bearer header for the Argo submission.
+- `tools/consumer_drift_submit.py` requires `FORGEJO_TOKEN`, `ARGO_TOKEN`, and
+  `ARGO_SUBMIT_TOKEN`. It reads Forgejo before the mirror gate, uses the
+  read-only `ARGO_TOKEN` to reconcile an existing same-release or same-commit
+  workflow, and sends `ARGO_SUBMIT_TOKEN` only as an HTTP Bearer header for the
+  single Argo submission attempt.
 
 There are deliberately no token CLI options. `FORGEJO_API_TOKEN` and
 `ARGO_API_TOKEN` are not accepted aliases for these release operations, and
@@ -190,8 +192,11 @@ When the owner receives the alert:
   CLI's stderr. Token values are not logged, printed, embedded in URLs, or
   passed through `argv`; diagnostics contain only the service, status, and
   safe failure context.
-- A transient failure is retried with the same release tag and commit after
-  the credential or service is repaired. Never publish from a branch, retag an
+- A transient read failure is retried with the same release tag and commit only
+  after the credential or service is repaired. An Argo submission `POST` is
+  never retried: inspect the deterministic workflow name and the
+  template-scoped list with `ARGO_TOKEN` first, then reuse the accepted run or
+  stop if the outcome remains ambiguous. Never publish from a branch, retag an
   existing release, or mark an unauthorized attempt successful.
 
 The tests in `test_release_publish.py` and `test_consumer_drift_submit.py`

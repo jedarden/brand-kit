@@ -7,6 +7,7 @@ from tools import consumer_drift_submit, release_publish
 
 COMMIT = "a" * 40
 FORGEJO_TOKEN = "forgejo-test-token"
+ARGO_READ_TOKEN = "argo-read-test-token"
 ARGO_SUBMIT_TOKEN = "argo-submit-test-token"
 
 
@@ -35,14 +36,49 @@ def published(**overrides):
     return record
 
 
+def existing_workflow(
+    *,
+    name="brand-kit-consumer-drift-existing",
+    tag="v1.1.0",
+    commit=COMMIT,
+):
+    return {
+        "metadata": {
+            "name": name,
+            "labels": {
+                "workflows.argoproj.io/workflow-template": "brand-kit-consumer-drift",
+                consumer_drift_submit.RELEASE_TAG_LABEL: tag,
+                consumer_drift_submit.RELEASE_COMMIT_LABEL: commit,
+            },
+        },
+        "spec": {
+            "workflowTemplateRef": {"name": "brand-kit-consumer-drift"},
+            "arguments": {
+                "parameters": [
+                    {"name": "release-tag", "value": tag},
+                    {"name": "release-commit", "value": commit},
+                ]
+            },
+        },
+    }
+
+
 def test_workflow_payload_propagates_the_exact_release_tag():
-    payload = consumer_drift_submit.workflow_payload("v1.1.0")
+    payload = consumer_drift_submit.workflow_payload("v1.1.0", COMMIT)
 
     assert payload["workflow"]["spec"]["workflowTemplateRef"] == {
         "name": "brand-kit-consumer-drift"
     }
     assert payload["workflow"]["spec"]["arguments"] == {
-        "parameters": [{"name": "release-tag", "value": "v1.1.0"}]
+        "parameters": [
+            {"name": "release-tag", "value": "v1.1.0"},
+            {"name": "release-commit", "value": COMMIT},
+        ]
+    }
+    assert payload["workflow"]["metadata"]["name"] == consumer_drift_submit.workflow_name(COMMIT)
+    assert payload["workflow"]["metadata"]["labels"] == {
+        consumer_drift_submit.RELEASE_TAG_LABEL: "v1.1.0",
+        consumer_drift_submit.RELEASE_COMMIT_LABEL: COMMIT,
     }
 
 
@@ -57,8 +93,14 @@ def test_submit_waits_for_mirror_before_posting_the_exact_tag(monkeypatch):
         events.append(("mirror", tag, commit))
 
     def request(method, url, payload=None, token=None, **kwargs):
+        if method == "GET" and url.rsplit("/", 1)[-1].startswith(
+            "brand-kit-consumer-drift-"
+        ):
+            raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+        if method == "GET":
+            return {"items": []}
         events.append(("submit", method, url, payload, token, kwargs))
-        return {"metadata": {"name": "brand-kit-consumer-drift-release-abc"}}
+        return {"metadata": {"name": consumer_drift_submit.workflow_name(COMMIT)}}
 
     monkeypatch.setattr(release_publish, "get_release", get_release)
     monkeypatch.setattr(release_publish, "wait_for_mirror", wait_for_mirror)
@@ -67,11 +109,12 @@ def test_submit_waits_for_mirror_before_posting_the_exact_tag(monkeypatch):
         "v1.1.0",
         forgejo_token="forgejo-read-only",
         argo_token="argo-submit",
+        argo_read_token="argo-read",
         argo_api_url="https://argo.example",
         request=request,
     )
 
-    assert result["metadata"]["name"] == "brand-kit-consumer-drift-release-abc"
+    assert result["metadata"]["name"] == consumer_drift_submit.workflow_name(COMMIT)
     assert events[:2] == ["release", ("mirror", "v1.1.0", COMMIT)]
     submit = events[2]
     assert submit[0:3] == (
@@ -85,7 +128,10 @@ def test_submit_waits_for_mirror_before_posting_the_exact_tag(monkeypatch):
         "service": "Argo API",
     }
     assert submit[3]["workflow"]["spec"]["arguments"] == {
-        "parameters": [{"name": "release-tag", "value": "v1.1.0"}]
+        "parameters": [
+            {"name": "release-tag", "value": "v1.1.0"},
+            {"name": "release-commit", "value": COMMIT},
+        ]
     }
 
 
@@ -126,20 +172,29 @@ def test_submit_retries_until_canonical_and_mirror_tags_agree(monkeypatch):
     )
 
     def request(method, url, payload=None, **kwargs):
+        if method == "GET" and url.rsplit("/", 1)[-1].startswith(
+            "brand-kit-consumer-drift-"
+        ):
+            raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+        if method == "GET":
+            return {"items": []}
         events.append(("submit", method, payload))
-        return {"metadata": {"name": "brand-kit-consumer-drift-release-abc"}}
+        return {
+            "metadata": {"name": consumer_drift_submit.workflow_name(COMMIT)},
+        }
 
     result = consumer_drift_submit.submit_consumer_drift(
         "v1.1.0",
         forgejo_token=FORGEJO_TOKEN,
         argo_token=ARGO_SUBMIT_TOKEN,
+        argo_read_token=ARGO_READ_TOKEN,
         timeout=1,
         interval=0,
         sleep=lambda delay: events.append(("sleep", delay)),
         request=request,
     )
 
-    assert result["metadata"]["name"] == "brand-kit-consumer-drift-release-abc"
+    assert result["metadata"]["name"] == consumer_drift_submit.workflow_name(COMMIT)
     assert events[:5] == [
         ("origin", "v1.1.0"),
         ("github", "v1.1.0"),
@@ -148,6 +203,177 @@ def test_submit_retries_until_canonical_and_mirror_tags_agree(monkeypatch):
         ("github", "v1.1.0"),
     ]
     assert events[5][0:2] == ("submit", "POST")
+
+
+def _prepare_submit_gates(monkeypatch):
+    monkeypatch.setattr(
+        release_publish,
+        "get_release",
+        lambda *args, **kwargs: published(),
+    )
+    monkeypatch.setattr(
+        release_publish,
+        "wait_for_mirror",
+        lambda *args, **kwargs: None,
+    )
+
+
+def test_existing_release_run_is_reused_without_a_post(monkeypatch):
+    _prepare_submit_gates(monkeypatch)
+    calls = []
+    accepted = existing_workflow(name="brand-kit-consumer-drift-release-old")
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "GET" and url.rsplit("/", 1)[-1].startswith(
+            "brand-kit-consumer-drift-"
+        ):
+            raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+        if method == "GET":
+            return {"items": [accepted]}
+        pytest.fail("an existing workflow must prevent POST")
+
+    result = consumer_drift_submit.submit_consumer_drift(
+        "v1.1.0",
+        forgejo_token=FORGEJO_TOKEN,
+        argo_token=ARGO_SUBMIT_TOKEN,
+        argo_read_token=ARGO_READ_TOKEN,
+        request=request,
+    )
+
+    assert result == accepted
+    assert [call[0] for call in calls] == ["GET", "GET"]
+    assert all(call[2]["token"] == ARGO_READ_TOKEN for call in calls)
+
+
+def test_completed_daily_fallback_run_is_matched_by_selected_output(monkeypatch):
+    _prepare_submit_gates(monkeypatch)
+    accepted = existing_workflow(name="brand-kit-consumer-drift-cron-123")
+    accepted["metadata"]["labels"].pop(consumer_drift_submit.RELEASE_TAG_LABEL)
+    accepted["metadata"]["labels"].pop(consumer_drift_submit.RELEASE_COMMIT_LABEL)
+    accepted["spec"]["arguments"]["parameters"] = [
+        {"name": "release-tag", "value": ""},
+        {"name": "release-commit", "value": ""},
+    ]
+    accepted["status"] = {
+        "outputs": {
+            "parameters": [
+                {"name": "selected-release-tag", "value": "v1.1.0"},
+                {"name": "selected-release-commit", "value": COMMIT},
+            ]
+        }
+    }
+
+    def request(method, url, **kwargs):
+        if method == "GET" and url.rsplit("/", 1)[-1].startswith(
+            "brand-kit-consumer-drift-"
+        ):
+            raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+        if method == "GET":
+            return {"items": [accepted]}
+        pytest.fail("a completed daily fallback must prevent POST")
+
+    result = consumer_drift_submit.submit_consumer_drift(
+        "v1.1.0",
+        forgejo_token=FORGEJO_TOKEN,
+        argo_token=ARGO_SUBMIT_TOKEN,
+        argo_read_token=ARGO_READ_TOKEN,
+        request=request,
+    )
+
+    assert result == accepted
+
+
+def test_same_commit_reuses_the_deterministic_workflow_name_without_listing(monkeypatch):
+    _prepare_submit_gates(monkeypatch)
+    accepted = existing_workflow(
+        name=consumer_drift_submit.workflow_name(COMMIT),
+    )
+    calls = []
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "GET":
+            return accepted
+        pytest.fail("an existing workflow must prevent POST")
+
+    result = consumer_drift_submit.submit_consumer_drift(
+        "v1.1.0",
+        forgejo_token=FORGEJO_TOKEN,
+        argo_token=ARGO_SUBMIT_TOKEN,
+        argo_read_token=ARGO_READ_TOKEN,
+        request=request,
+    )
+
+    assert result == accepted
+    assert len(calls) == 1
+    assert calls[0][0] == "GET"
+    assert calls[0][2]["token"] == ARGO_READ_TOKEN
+
+
+def test_lost_post_response_is_reconciled_without_a_second_post(monkeypatch):
+    _prepare_submit_gates(monkeypatch)
+    accepted = existing_workflow(name=consumer_drift_submit.workflow_name(COMMIT))
+    calls = []
+    post_count = 0
+
+    def request(method, url, **kwargs):
+        nonlocal post_count
+        calls.append((method, url, kwargs))
+        if method == "GET":
+            if len([call for call in calls if call[0] == "GET"]) == 1:
+                raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+            if url.rsplit("/", 1)[-1].startswith("brand-kit-consumer-drift-"):
+                return accepted
+            return {"items": []}
+        post_count += 1
+        raise release_publish.HttpFailure(502, "response lost", service="Argo API")
+
+    result = consumer_drift_submit.submit_consumer_drift(
+        "v1.1.0",
+        forgejo_token=FORGEJO_TOKEN,
+        argo_token=ARGO_SUBMIT_TOKEN,
+        argo_read_token=ARGO_READ_TOKEN,
+        request=request,
+    )
+
+    assert result == accepted
+    assert post_count == 1
+    assert [call[2]["token"] for call in calls if call[0] == "GET"] == [
+        ARGO_READ_TOKEN,
+        ARGO_READ_TOKEN,
+        ARGO_READ_TOKEN,
+    ]
+    assert calls[-1][0] == "GET"
+
+
+def test_ambiguous_post_without_a_matching_run_stops_without_repeating(monkeypatch):
+    _prepare_submit_gates(monkeypatch)
+    calls = []
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "GET":
+            if url.rsplit("/", 1)[-1].startswith("brand-kit-consumer-drift-"):
+                raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+            return {"items": []}
+        raise release_publish.HttpFailure(503, "ambiguous timeout", service="Argo API")
+
+    with pytest.raises(release_publish.ReleaseError, match="do not retry"):
+        consumer_drift_submit.submit_consumer_drift(
+            "v1.1.0",
+            forgejo_token=FORGEJO_TOKEN,
+            argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
+            request=request,
+        )
+
+    assert sum(call[0] == "POST" for call in calls) == 1
+    assert all(
+        call[2]["token"] == ARGO_READ_TOKEN
+        for call in calls
+        if call[0] == "GET"
+    )
 
 
 @pytest.mark.parametrize(
@@ -182,6 +408,7 @@ def test_failed_or_unverifiable_release_never_submits(
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -206,6 +433,7 @@ def test_forgejo_api_failure_never_checks_tags_or_submits(monkeypatch):
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -235,6 +463,7 @@ def test_canonical_tag_mismatch_never_submits(monkeypatch):
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -265,6 +494,7 @@ def test_mirror_timeout_never_submits(monkeypatch):
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
             timeout=0,
             interval=0,
             request=lambda *args, **kwargs: submits.append(args),
@@ -287,21 +517,25 @@ def test_argo_api_failure_is_reported_after_all_read_only_gates(monkeypatch):
     )
 
     def request(*args, **kwargs):
+        method, url = args[:2]
+        if method == "GET" and url.rsplit("/", 1)[-1].startswith(
+            "brand-kit-consumer-drift-"
+        ):
+            raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+        if method == "GET":
+            return {"items": []}
         submits.append((args, kwargs))
-        raise release_publish.HttpFailure(
-            502,
-            "upstream unavailable",
-            service="Argo API",
-        )
+        raise release_publish.HttpFailure(502, "upstream unavailable", service="Argo API")
 
     with pytest.raises(
         release_publish.ReleaseError,
-        match=r"cannot submit consumer-drift workflow for v1\.1\.0.*HTTP 502",
+        match=r"consumer-drift POST for v1\.1\.0.*HTTP 502",
     ):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
             request=request,
         )
 
@@ -320,12 +554,22 @@ def test_malformed_argo_success_response_fails_closed(monkeypatch):
         lambda *args, **kwargs: None,
     )
 
-    with pytest.raises(release_publish.ReleaseError, match="no workflow name"):
+    def request(method, url, **kwargs):
+        if method == "GET" and url.rsplit("/", 1)[-1].startswith(
+            "brand-kit-consumer-drift-"
+        ):
+            raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+        if method == "GET":
+            return {"items": []}
+        return {"metadata": {}}
+
+    with pytest.raises(release_publish.ReleaseError, match="do not retry"):
         consumer_drift_submit.submit_consumer_drift(
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
-            request=lambda *args, **kwargs: {"metadata": {}},
+            argo_read_token=ARGO_READ_TOKEN,
+            request=request,
         )
 
 
@@ -347,6 +591,7 @@ def test_mirror_failure_never_submits(monkeypatch):
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -378,6 +623,7 @@ def test_remote_identity_failure_never_submits_a_consumer_workflow(monkeypatch):
             "v1.1.0",
             forgejo_token=FORGEJO_TOKEN,
             argo_token=ARGO_SUBMIT_TOKEN,
+            argo_read_token=ARGO_READ_TOKEN,
             request=lambda *args, **kwargs: submits.append(args),
         )
 
@@ -395,6 +641,7 @@ def test_workflow_template_is_release_triggerable_and_cron_is_the_fallback():
     assert "kind: WorkflowTemplate" in template
     assert "name: brand-kit-consumer-drift" in template
     assert 'TAG="{{workflow.parameters.release-tag}}"' in template
+    assert 'EXPECTED_COMMIT="{{workflow.parameters.release-commit}}"' in template
     assert "git ls-remote --exit-code" in template
     assert "sleep 10" in template
     assert 'git -C /release checkout --detach --quiet "$TAG"' in template
@@ -407,6 +654,7 @@ def test_workflow_template_is_release_triggerable_and_cron_is_the_fallback():
     assert "workflowTemplateRef:" in cron
     assert "name: brand-kit-consumer-drift" in cron
     assert 'name: release-tag\n          value: ""' in cron
+    assert 'name: release-commit\n          value: ""' in cron
 
 
 def test_submission_documentation_names_the_release_handoff():
@@ -425,3 +673,5 @@ def test_submission_documentation_names_the_release_handoff():
     assert "Forgejo release" in publication
     assert "published" in publication
     assert "waits for the canonical and read-only mirror tags" in consumer
+    assert "deterministic Argo Workflow name" in consumer
+    assert "one non-retryable `POST`" in consumer

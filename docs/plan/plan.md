@@ -569,12 +569,16 @@ describe behavior that is easy to mistake for optional ceremony.
    `tools/consumer_drift_submit.py` first requires a published Forgejo record
    with a verifiable full target commit, revalidates the canonical Forgejo and
    GitHub remote identities, then requires canonical and read-only mirror
-   `main` refs plus the exact release tags to agree before submitting the exact
-   release tag to the Argo `brand-kit-consumer-drift` WorkflowTemplate. The
-   workflow waits again for mirror visibility before checking out that tag.
-   This duplicate visibility check is intentional: it protects both the
-   submitting operator and the isolated workflow from starting against a
-   missing, stale, or partially propagated mirror.
+   `main` refs plus the exact release tags to agree before reconciling and, when
+   needed, submitting the exact release tag and commit to the Argo
+   `brand-kit-consumer-drift` WorkflowTemplate. The handoff uses a
+   deterministic commit-derived Workflow name, reuses an existing same-release
+   or same-commit run, and performs read-only inspection after any ambiguous
+   POST; it never blindly repeats the POST. The workflow waits again for mirror
+   visibility before checking out that tag. This duplicate visibility check is
+   intentional: it protects both the submitting operator and the isolated
+   workflow from starting against a missing, stale, or partially propagated
+   mirror.
 4. **Consumer drift is read-only and tri-state.**
    `tools/consumer_drift.py` audits the selected release checkout and the
    registered consumer/live assets without applying, committing, or pushing

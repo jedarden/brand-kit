@@ -100,10 +100,10 @@ source artifact for a release-triggered read-only run. Run
 Forgejo release is verified. It refuses failed or unverifiable release records,
 revalidates the Forgejo/GitHub repository identities, waits for the canonical and read-only mirror tags
 to agree with the published commit, requires their `main` refs to agree, and
-submits the exact tag as the `release-tag`
-workflow parameter. A missing, stale, or partially propagated mirror therefore
-cannot receive a consumer handoff. The workflow itself waits again for mirror
-visibility before checking out the tag. The companion
+submits the exact tag as the `release-tag` workflow parameter and the exact
+release commit as its deterministic identity. A missing, stale, or partially
+propagated mirror therefore cannot receive a consumer handoff. The workflow
+itself waits again for mirror visibility before checking out the tag. The companion
 `automation/brand-kit-consumer-drift-cronworkflow.yml` retains the daily
 read-only run as a fallback. It runs at **06:17 UTC** and uses the configured
 **24-hour propagation delay** (`release.minimum_age_hours` in
@@ -386,6 +386,27 @@ submission fails before a workflow name is returned, repair the API or mirror
 condition and submit the same tag again. If a workflow was accepted, use its
 record and inspect that run before submitting another one so a transient client
 timeout does not create duplicate audits.
+
+### Submission reconciliation
+
+The release-triggered and daily fallback paths can select the same release.
+The release handoff uses a deterministic Argo Workflow name derived from the
+full target commit, and carries the release tag and commit as identity labels.
+Before a submission, `ARGO_TOKEN` performs a read-only exact-name lookup and a
+template-scoped list lookup. A matching existing run is reused, including an
+older generated-name fallback run with the same release tag. The workflow
+records the fallback's selected tag and commit as output parameters so a
+completed daily run is matchable even though its CronWorkflow starts with an
+empty tag; no `POST` is sent.
+The list must be complete, and an inspection failure blocks submission.
+
+Argo submission uses `ARGO_SUBMIT_TOKEN` for exactly one non-retryable `POST`.
+If the response is lost or returns a conflict/error, inspect the deterministic
+name and template-scoped list again with `ARGO_TOKEN`. Reuse a found workflow;
+if none is found, stop and investigate the provider state before manually
+running the same command again. A second blind `POST` can create a duplicate
+audit. The submit token is never used for inspection, and the read token is
+never used for the write.
 
 If `--check` or `consumer_drift.py` reports drift after the consumer push, wait
 for the deployment and rerun both read-only checks. Fix the consumer checkout,

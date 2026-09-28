@@ -85,9 +85,10 @@ use the patch rule and this same ordering.
 5. Provision the three release credentials according to
    [`release-token-provisioning.md`](release-token-provisioning.md). The
    publisher requires `FORGEJO_TOKEN` and `ARGO_TOKEN`; the consumer handoff
-   requires `FORGEJO_TOKEN` and `ARGO_SUBMIT_TOKEN`. Load them from OpenBao
-   into the short-lived process environment only. Never put a token in the
-   repository, a workflow parameter, a URL, or a command-line argument.
+   requires `FORGEJO_TOKEN`, `ARGO_TOKEN`, and `ARGO_SUBMIT_TOKEN`. Load them
+   from OpenBao into the short-lived process environment only. Never put a
+   token in the repository, a workflow parameter, a URL, or a command-line
+   argument.
 
 ## Create the exact tag
 
@@ -245,13 +246,37 @@ write to Forgejo.
 After `READY`, submit the release-triggered read-only consumer audit. The
 submitter reads the exact published Forgejo record, revalidates the remote
 identities, requires canonical and GitHub `main` plus tag refs to agree with
-the release commit, and only then passes the exact tag to the Argo
-`WorkflowTemplate`:
+the release commit, reconciles existing Argo runs, and only then passes the
+exact tag and commit to the Argo `WorkflowTemplate`:
 
 ```bash
 .venv/bin/python tools/consumer_drift_submit.py \
   --release-tag "$VERSION"
 ```
+
+The submitter's reconciliation is deliberately a one-way procedure because
+Argo `POST` is non-retryable:
+
+1. With the read-only `ARGO_TOKEN`, fetch the deterministic workflow name for
+   the release commit and list the `brand-kit-consumer-drift` template's runs.
+   Reuse one existing run whose release tag or full commit matches. This covers
+   concurrent release triggers and older generated-name runs from the daily
+   fallback. If the read returns an error, stop before submitting.
+2. If no match exists, send exactly one `POST` with `ARGO_SUBMIT_TOKEN`. The
+   payload uses a deterministic name derived from the full commit and carries
+   both `release-tag` and `release-commit` labels/parameters, so concurrent
+   POSTs converge on one Argo object.
+3. If the POST returns a response, accept it only when the returned name is
+   the deterministic name. If the response is lost, times out, or returns a
+   conflict/error, inspect the deterministic name and template-scoped list
+   again with `ARGO_TOKEN`. Reuse the accepted run if it exists; otherwise
+   stop and investigate. Never issue a second POST merely because the first
+   response was ambiguous.
+
+`ARGO_TOKEN` is used only for these read-only reconciliation requests;
+`ARGO_SUBMIT_TOKEN` is used only for the single submission POST. The daily
+`CronWorkflow` remains a fallback and its existing run should be included in
+the read-only list inspection before an operator retries a release handoff.
 
 The Argo workflow retries release-tag mirror visibility for up to ten minutes
 before its audit starts as an additional isolated propagation guard. A failed,
@@ -264,8 +289,9 @@ The remediation checklist in
 [`docs/notes/post-tag-consumer-update.md`](post-tag-consumer-update.md) starts
 after the release-triggered audit has been submitted. It must retain the exact
 `$VERSION` in its consumer commits and verification records. If the handoff
-fails, repair the release or mirror state and rerun the submitter; do not
-synchronize from `main` or from a lightweight tag.
+fails, repair the release or mirror state and rerun the read-only
+reconciliation for the same tag and commit; do not synchronize from `main` or
+from a lightweight tag.
 The remediation command remains `tools/consumer_sync.py` and is separate from
 the read-only drift submission.
 

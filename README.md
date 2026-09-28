@@ -669,7 +669,11 @@ propagation, and submits that tag to
 the newest stable release at least 24 hours old whose tag is visible on the
 read-only mirror, emits the JSON report, and fails its run on drift. It runs at
 06:17 UTC daily. These workflows are intentionally not
-GitHub Actions workflows and have no consumer-write step. The complete
+GitHub Actions workflows and have no consumer-write step. The submitter
+reconciles existing same-release or same-commit Argo runs with
+the read-only `ARGO_TOKEN`, sends one non-retryable `POST` with
+`ARGO_SUBMIT_TOKEN`, and inspects the deterministic workflow name before any
+manual retry after an ambiguous response. The complete
 remediation checklist — including the manual commit/push in `jedarden.com`, the
 GitHub avatar re-upload (no API for it), release-gate failure behavior, and what
 "in sync" means per asset — is in

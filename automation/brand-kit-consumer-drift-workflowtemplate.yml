@@ -21,6 +21,8 @@ spec:
         value: https://github.com/jedarden/jedarden.com.git
       - name: release-tag
         value: ""
+      - name: release-commit
+        value: ""
   templates:
     - name: audit
       container:
@@ -38,6 +40,8 @@ spec:
                 "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > /tmp/consumer-drift-report.json
             }
             write_fallback_report "workflow did not reach the detector"
+            : > /tmp/consumer-drift-release-tag
+            : > /tmp/consumer-drift-release-commit
             printf '2\n' > /tmp/consumer-drift-exit-code
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
@@ -58,12 +62,14 @@ spec:
             fi
             cd /brand-kit
             TAG="{{workflow.parameters.release-tag}}"
+            EXPECTED_COMMIT="{{workflow.parameters.release-commit}}"
             if [ -z "$TAG" ]; then
               TAG="$(python3 tools/consumer_drift.py \
                 --config consumer-drift.json \
                 --mirror-repository "{{workflow.parameters.brand-kit-repository}}" \
                 --print-release-tag)"
             fi
+            printf '%s\n' "$TAG" > /tmp/consumer-drift-release-tag
 
             # A Forgejo release webhook can arrive before the server-side
             # GitHub tag mirror. Wait for the exact peeled tag before fetching
@@ -82,6 +88,11 @@ spec:
               echo "release tag ${TAG} did not reach the read-only mirror within 10 minutes" >&2
               exit 1
             fi
+            if [ -n "$EXPECTED_COMMIT" ] && [ "$MIRROR_COMMIT" != "$EXPECTED_COMMIT" ]; then
+              echo "release tag ${TAG} reached the read-only mirror at ${MIRROR_COMMIT}, expected ${EXPECTED_COMMIT}" >&2
+              exit 1
+            fi
+            printf '%s\n' "$MIRROR_COMMIT" > /tmp/consumer-drift-release-commit
 
             git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /release
             git -C /release fetch --depth=1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
@@ -119,6 +130,14 @@ spec:
               valueFrom:
                 path: /tmp/consumer-drift-exit-code
                 default: "2"
+            - name: selected-release-tag
+              valueFrom:
+                path: /tmp/consumer-drift-release-tag
+                default: ""
+            - name: selected-release-commit
+              valueFrom:
+                path: /tmp/consumer-drift-release-commit
+                default: ""
           artifacts:
             - name: consumer-drift-report
               path: /tmp/consumer-drift-report.json

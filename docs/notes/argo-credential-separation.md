@@ -11,8 +11,8 @@ is not the credential injected into the scheduled watcher workloads.
 | Failure watcher workload | Secret `brand-kit-workflow-readonly` in `argo-workflows`. The Secret is delivered by ExternalSecret `brand-kit-workflow-readonly` in the same namespace; that ExternalSecret is owned by `declarative-config/k8s/iad-ci/argo-workflows/`. | `brand-kit-ci-failure-watch` | `ARGO_WORKFLOW_TOKEN` from Secret key `token` | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows?labelSelector=...` and the returned workflow's `GET .../workflows/argo-workflows/<name>` evidence links. No `POST`, `PUT`, `PATCH`, or `DELETE`. |
 | Liveness workload | Secret `brand-kit-workflow-readonly` in `argo-workflows`, delivered by the same-named ExternalSecret. | `brand-kit-workflow-liveness` | `ARGO_WORKFLOW_TOKEN` from Secret key `token` | The same Argo API `GET` boundary as the failure watcher; no `POST`, `PUT`, `PATCH`, or `DELETE`. |
 | Consumer audit workload | ExternalSecret `brand-kit-consumer-drift` in `argo-workflows`, targeting Secret `brand-kit-consumer-drift` in `argo-workflows`. Its source is `rs-manager/iad-ci/forgejo/repo-readonly`, property `token`. | `brand-kit-consumer-drift` | `FORGEJO_TOKEN` from Secret key `token` | `GET https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases?limit=1` for release metadata. The audit has no Argo credential and no write-capable Git operation. |
-| Release publisher operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_TOKEN` from OpenBao path `secret/rs-manager/brand-kit/release/argo-read` for the local release process. | Not applicable (local operator process) | `ARGO_TOKEN` | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<brand-kit-ci-run>` for the read-only release attestation. |
-| Consumer submitter operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_SUBMIT_TOKEN` from OpenBao path `secret/rs-manager/brand-kit/release/argo-submit`. | Not applicable (local operator process) | `ARGO_SUBMIT_TOKEN` | `POST https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows` to submit only `brand-kit-consumer-drift`; it must not delete, suspend, update, or administer workflows. |
+| Release publisher operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_TOKEN` from OpenBao path `secret/rs-manager/brand-kit/release/argo-read` for the local release process. | Not applicable (local operator process) | `ARGO_TOKEN` | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<brand-kit-ci-run>` for the read-only release attestation and the consumer submitter's duplicate reconciliation reads. |
+| Consumer submitter operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_TOKEN` and `ARGO_SUBMIT_TOKEN` from their separate OpenBao paths `secret/rs-manager/brand-kit/release/argo-read` and `secret/rs-manager/brand-kit/release/argo-submit`. | Not applicable (local operator process) | `ARGO_TOKEN` for reconciliation reads; `ARGO_SUBMIT_TOKEN` for the one submission POST | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<name>` and the template-scoped list use `ARGO_TOKEN`; the single `POST https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows` uses `ARGO_SUBMIT_TOKEN` to submit only `brand-kit-consumer-drift`. It must not delete, suspend, update, or administer workflows. |
 
 The deployment's `brand-kit-workflow-readonly` ExternalSecret must map its
 `token` property from the dedicated read-only Argo provider credential (the
@@ -37,6 +37,11 @@ reads `brand-kit-release-tokens` only to validate the three operator paths. No
 other workload may mount that Secret. Its Argo submission check uses
 `ARGO_SUBMIT_TOKEN` with `serverDryRun`, so it validates authorization without
 creating a Workflow.
+
+The consumer submitter keeps this boundary during reconciliation: `ARGO_TOKEN`
+may list or fetch an existing consumer-drift Workflow, while
+`ARGO_SUBMIT_TOKEN` may make the one submission `POST`. The submit token is not
+used to inspect duplicate state.
 
 ## Verification contract
 
