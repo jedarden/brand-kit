@@ -20,6 +20,22 @@ Run this procedure for every release selected under ADR-5. Changes to
 changes may stay under `Unreleased`. The command is safe to run again: an
 already-published matching release is verified and left unchanged.
 
+Before preparing a release commit, run the local release preflight against the
+last published tag:
+
+```bash
+python3 tools/check_release_preflight.py --base v1.0.0
+```
+
+The check classifies the complete diff, including every file under `source/`
+and the generated `avatars/`, `banners/`, `favicon/`, and `logo/` inventories
+plus `palette.json` and `platform-assets.json`. A source or derived-asset diff
+must update `VERSION`, add one non-empty dated changelog section matching that
+version, and retain the Forgejo publication workflow. Documentation-only and
+metadata-only diffs pass while their work remains under `Unreleased`. The
+preflight is read-only: it does not contact Forgejo, create a tag, or publish
+a release.
+
 ## Prepare the release version
 
 Before the CI run and before creating the tag, classify the complete diff using
