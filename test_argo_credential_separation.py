@@ -154,7 +154,7 @@ def test_workload_credentials_are_used_only_for_get_requests():
         request=liveness_request,
     )
     assert report["status"] == "stale"
-    assert len(liveness_calls) == 3
+    assert len(liveness_calls) == len(brand_kit_workflow_liveness.TARGETS)
     assert all(call[0] == "GET" for call in liveness_calls)
 
 
