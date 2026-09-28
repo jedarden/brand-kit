@@ -26,6 +26,10 @@ the generated
 [`platform-assets.json`](platform-assets.json) manifest instead of parsing this
 table; it records each platform, role, path, dimensions, source asset, external
 requirement URL, and last-verified date.
+The versioned contract is [`platform-assets.schema.json`](platform-assets.schema.json)
+(schema version `2`); CI validates the manifest against its required fields,
+allowed roles and sources, positive dimensions, safe repository-relative paths,
+HTTPS requirement URLs, real `YYYY-MM-DD` verification dates, and README parity.
 
 | Platform | Profile picture | Banner / cover |
 |---|---|---|
@@ -70,6 +74,14 @@ listed target; `last_verified` is the date that guidance was opened and
 compared with the README table and generated files. A source may describe a
 minimum, a recommendation, or a role-specific surface, so read the linked
 page before treating a dimension as a hard limit.
+
+The manifest is schema version `2`. Each asset requires `platform`, `role`,
+`path`, `dimensions` (`width` and `height`, plus optional unique `sizes` for
+multi-resolution assets), and `source`. Roles are `profile_picture`, `banner`, or `favicon`,
+and sources are `source/logo.svg` or `source/hero.png`. Each requirement record
+requires `platform`, an absolute HTTPS `source_url` without credentials, and a
+real calendar `last_verified` date in `YYYY-MM-DD` form. The CI verifier also
+rejects future verification dates and stale requirement records.
 
 | Platform | Requirement source | Last verified |
 |---|---|---|

@@ -5,8 +5,8 @@ Eleven classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
   2. Platform requirement provenance has one HTTPS source and ISO date per
      README platform.
-  3. The generated platform manifest matches the README table, committed
-     dimensions, and declared source assets.
+  3. The generated platform manifest satisfies the versioned schema and
+     matches the README table, committed dimensions, and declared source assets.
   4. Presence of every repo path README names (plus absence of the file
      it documents as removed).
   5. favicon.ico is multi-resolution 16-256 and every contained frame
@@ -40,7 +40,25 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
+PLATFORM_MANIFEST_SCHEMA_RELPATH = "platform-assets.schema.json"
 PLATFORM_MANIFEST_SCHEMA_VERSION = 2
+PLATFORM_NAMES = frozenset({
+    "X / Twitter",
+    "LinkedIn (personal)",
+    "LinkedIn (company)",
+    "GitHub",
+    "Instagram",
+    "Threads",
+    "Facebook",
+    "YouTube",
+    "TikTok",
+    "Mastodon",
+    "Bluesky",
+    "Discord",
+    "Web / Open Graph",
+})
+PLATFORM_ROLES = frozenset({"profile_picture", "banner", "favicon"})
+PLATFORM_SOURCES = frozenset({"source/logo.svg", "source/hero.png"})
 PALETTE_RELPATH = "palette.json"
 CANONICAL_PALETTE = {
     "Polo Red": "#DC3127",
@@ -157,6 +175,7 @@ EXPECTED_PRESENT = [
     "source/logo.png",
     "source/hero.png",
     "platform-assets.json",
+    PLATFORM_MANIFEST_SCHEMA_RELPATH,
 
     # Transparent variants (README: "Transparent variants")
     "logo/logo-256-transparent.png",
@@ -341,6 +360,9 @@ def _manifest_object(pairs):
 def _manifest_dimensions_are_valid(dimensions):
     if not isinstance(dimensions, dict):
         return False
+    allowed = {"width", "height", "sizes"}
+    if set(dimensions) not in ({"width", "height"}, allowed):
+        return False
     if not all(
         isinstance(dimensions.get(key), int) and not isinstance(dimensions.get(key), bool)
         and dimensions[key] > 0
@@ -350,10 +372,48 @@ def _manifest_dimensions_are_valid(dimensions):
     sizes = dimensions.get("sizes")
     if sizes is None:
         return True
+    if not isinstance(sizes, list) or not sizes:
+        return False
+    normalized = []
+    for size in sizes:
+        if not isinstance(size, dict) or set(size) != {"width", "height"}:
+            return False
+        if not all(
+            isinstance(size.get(key), int)
+            and not isinstance(size.get(key), bool)
+            and size[key] > 0
+            for key in ("width", "height")
+        ):
+            return False
+        normalized.append((size["width"], size["height"]))
+    return len(normalized) == len(set(normalized))
+
+
+def _manifest_path_is_valid(value):
     return (
-        isinstance(sizes, list)
-        and all(_manifest_dimensions_are_valid(size) and set(size) == {"width", "height"}
-                for size in sizes)
+        isinstance(value, str)
+        and bool(value)
+        and re.fullmatch(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^\s]+$", value)
+        is not None
+    )
+
+
+def _manifest_source_url_is_valid(value):
+    """Apply the schema's HTTPS URL rule plus URL-parser validation."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        return False
+    if any(character.isspace() or ord(character) < 32 for character in value):
+        return False
+    try:
+        parsed = urlparse(value)
+        _ = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname is not None
+        and parsed.username is None
+        and parsed.password is None
     )
 
 
@@ -361,6 +421,8 @@ def _platform_requirements_are_valid(requirements, expected_platforms):
     """Validate one provenance record for every documented platform."""
     if not isinstance(requirements, list):
         return False, "platform_requirements is not a list"
+    if not requirements:
+        return False, "platform_requirements must not be empty"
 
     seen = set()
     for index, requirement in enumerate(requirements):
@@ -371,15 +433,16 @@ def _platform_requirements_are_valid(requirements, expected_platforms):
         platform = requirement["platform"]
         source_url = requirement["source_url"]
         last_verified = requirement["last_verified"]
-        if not isinstance(platform, str) or not platform:
+        if (
+            not isinstance(platform, str)
+            or not platform
+            or platform != platform.strip()
+            or platform not in PLATFORM_NAMES
+        ):
             return False, f"platform requirement {index} has an invalid platform"
         if platform in seen:
             return False, f"duplicate platform requirement: {platform}"
-        if (
-            not isinstance(source_url, str)
-            or not source_url.startswith("https://")
-            or not urlparse(source_url).netloc
-        ):
+        if not _manifest_source_url_is_valid(source_url):
             return False, f"platform requirement {platform} has an invalid source_url"
         if not isinstance(last_verified, str):
             return False, f"platform requirement {platform} has an invalid last_verified"
@@ -460,6 +523,13 @@ def verify_platform_manifest():
     actual = manifest.get("assets")
     if not isinstance(actual, list):
         return [(PLATFORM_MANIFEST_RELPATH, claim, type(actual).__name__, "✗ assets is not a list")], False
+    if not actual:
+        return [(
+            PLATFORM_MANIFEST_RELPATH,
+            "at least one schema-valid asset",
+            "0 entries",
+            "✗ assets must not be empty",
+        )], False
 
     rows = []
     all_match = True
@@ -507,10 +577,28 @@ def verify_platform_manifest():
             ))
             all_match = False
             continue
-        if not all(isinstance(asset[field], str) and asset[field] for field in ("platform", "role", "path", "source")):
+        if not all(
+            isinstance(asset[field], str) and asset[field]
+            for field in ("platform", "role", "path", "source")
+        ):
             rows.append((label, "non-empty string fields", repr(asset), "✗ malformed strings"))
             all_match = False
             continue
+        if asset["platform"] != asset["platform"].strip():
+            rows.append((label, "platform has no leading or trailing whitespace", repr(asset["platform"]), "✗ malformed platform"))
+            all_match = False
+        if asset["platform"] not in PLATFORM_NAMES:
+            rows.append((label, "platform is a supported platform name", asset["platform"], "✗ invalid platform"))
+            all_match = False
+        if asset["role"] not in PLATFORM_ROLES:
+            rows.append((label, "role is profile_picture, banner, or favicon", asset["role"], "✗ invalid role"))
+            all_match = False
+        if not _manifest_path_is_valid(asset["path"]):
+            rows.append((label, "repository-relative path without whitespace or parent traversal", asset["path"], "✗ invalid path"))
+            all_match = False
+        if asset["source"] not in PLATFORM_SOURCES:
+            rows.append((label, "source is source/logo.svg or source/hero.png", asset["source"], "✗ invalid source"))
+            all_match = False
         identity = (asset["platform"], asset["role"], asset["path"])
         if identity in seen:
             rows.append((label, "unique platform role/path", repr(identity), "✗ duplicate"))

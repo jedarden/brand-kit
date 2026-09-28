@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://git.ardenone.com/jedarden/brand-kit/platform-assets.schema.json",
   "title": "Brand Kit Platform Assets",
-  "description": "The generated, upload-ready assets indexed by platform role, with external requirement provenance.",
+  "description": "Version 2 of the generated, upload-ready asset index. Every asset has a platform role, repository path, dimensions, and source; every platform has first-party requirement provenance.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -43,16 +43,34 @@
       "properties": {
         "platform": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "enum": [
+            "X / Twitter",
+            "LinkedIn (personal)",
+            "LinkedIn (company)",
+            "GitHub",
+            "Instagram",
+            "Threads",
+            "Facebook",
+            "YouTube",
+            "TikTok",
+            "Mastodon",
+            "Bluesky",
+            "Discord",
+            "Web / Open Graph"
+          ]
         },
         "source_url": {
           "type": "string",
           "format": "uri",
-          "pattern": "^https://[^\\s]+$"
+          "description": "Absolute HTTPS URL without userinfo or whitespace.",
+          "pattern": "^https://[^\\s/@?#]+(?:[/?#][^\\s]*)?$"
         },
         "last_verified": {
           "type": "string",
           "format": "date",
+          "description": "A real calendar date in YYYY-MM-DD form; CI also rejects future dates.",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
         }
       }
@@ -114,7 +132,23 @@
       "properties": {
         "platform": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^\\S(?:.*\\S)?$",
+          "enum": [
+            "X / Twitter",
+            "LinkedIn (personal)",
+            "LinkedIn (company)",
+            "GitHub",
+            "Instagram",
+            "Threads",
+            "Facebook",
+            "YouTube",
+            "TikTok",
+            "Mastodon",
+            "Bluesky",
+            "Discord",
+            "Web / Open Graph"
+          ]
         },
         "role": {
           "type": "string",
@@ -127,6 +161,7 @@
         "path": {
           "type": "string",
           "minLength": 1,
+          "description": "A repository-relative POSIX path with no whitespace, absolute prefix, or parent-directory segment.",
           "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\s]+$"
         },
         "dimensions": {

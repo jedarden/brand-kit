@@ -163,6 +163,24 @@ def test_platform_manifest_schema_declares_strict_asset_shape():
     ]
     assert schema["$defs"]["platform_requirement"]["properties"]["source_url"]["format"] == "uri"
     assert schema["$defs"]["platform_requirement"]["properties"]["last_verified"]["format"] == "date"
+    assert schema["$defs"]["platform_requirement"]["properties"]["source_url"]["pattern"] == (
+        r"^https://[^\s/@?#]+(?:[/?#][^\s]*)?$"
+    )
+    assert schema["$defs"]["platform_requirement"]["properties"]["platform"]["enum"] == [
+        "X / Twitter",
+        "LinkedIn (personal)",
+        "LinkedIn (company)",
+        "GitHub",
+        "Instagram",
+        "Threads",
+        "Facebook",
+        "YouTube",
+        "TikTok",
+        "Mastodon",
+        "Bluesky",
+        "Discord",
+        "Web / Open Graph",
+    ]
     assert schema["properties"]["assets"]["minItems"] == 1
     assert schema["properties"]["assets"]["uniqueItems"] is True
     assert schema["properties"]["assets"]["items"] == {"$ref": "#/$defs/asset"}
@@ -179,7 +197,13 @@ def test_platform_manifest_schema_declares_strict_asset_shape():
         "banner",
         "favicon",
     ]
+    assert schema["$defs"]["asset"]["properties"]["source"]["enum"] == [
+        "source/logo.svg",
+        "source/hero.png",
+    ]
     assert schema["$defs"]["dimensions"]["additionalProperties"] is False
+    assert schema["$defs"]["dimensions"]["properties"]["sizes"]["minItems"] == 1
+    assert schema["$defs"]["dimensions"]["properties"]["sizes"]["uniqueItems"] is True
 
 
 def test_readme_documents_requirement_provenance_and_review_check():
@@ -187,6 +211,11 @@ def test_readme_documents_requirement_provenance_and_review_check():
 
     assert "### Platform requirement provenance" in readme
     assert "### Reviewing changed upload requirements" in readme
+    assert "platform-assets.schema.json" in readme
+    assert "schema version `2`" in readme
+    assert "absolute HTTPS `source_url` without credentials" in readme
+    assert "real calendar `last_verified` date in `YYYY-MM-DD` form" in readme
+    assert "tools/verify_assets.py" in readme
     assert "python3 tools/check_platform_requirements.py" in readme
     assert "--check-reachability" in readme
     assert "HTTP 2xx/3xx" in readme
@@ -249,3 +278,81 @@ def test_platform_manifest_rejects_unexpected_top_level_field(tmp_path, monkeypa
             "✗ invalid top-level fields",
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("change", "status"),
+    (
+        (lambda asset: asset.pop("dimensions"), "✗ invalid fields"),
+        (lambda asset: asset.update({"role": "thumbnail"}), "✗ invalid role"),
+        (lambda asset: asset.update({"path": "../outside.png"}), "✗ invalid path"),
+        (lambda asset: asset.update({"source": "source/unknown.png"}), "✗ invalid source"),
+        (
+            lambda asset: asset.update({"dimensions": {"width": 0, "height": 400}}),
+            "✗ malformed dimensions",
+        ),
+        (
+            lambda asset: asset.update({"dimensions": {"width": 400, "height": 400, "extra": 1}}),
+            "✗ malformed dimensions",
+        ),
+        (
+            lambda asset: asset.update({"dimensions": {"width": 256, "height": 256, "sizes": []}}),
+            "✗ malformed dimensions",
+        ),
+    ),
+)
+def test_platform_manifest_rejects_schema_invalid_asset_records(
+    tmp_path, monkeypatch, change, status
+):
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    shutil.copy(ROOT / "README.md", root / "README.md")
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    change(manifest["assets"][0])
+    (root / "platform-assets.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+
+    rows, ok = verify_assets.verify_platform_manifest()
+
+    assert not ok
+    assert any(row[3] == status for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    (
+        (
+            lambda requirement: requirement.update({"source_url": "https://user:pass@example.test"}),
+            "✗ invalid requirement provenance",
+        ),
+        (
+            lambda requirement: requirement.update({"last_verified": "2026-02-30"}),
+            "✗ invalid requirement provenance",
+        ),
+        (
+            lambda requirement: requirement.update({"platform": " X / Twitter"}),
+            "✗ invalid requirement provenance",
+        ),
+    ),
+)
+def test_platform_manifest_rejects_schema_invalid_requirement_records(
+    tmp_path, monkeypatch, change, expected
+):
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    shutil.copy(ROOT / "README.md", root / "README.md")
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    change(manifest["platform_requirements"][0])
+    (root / "platform-assets.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+
+    rows, ok = verify_assets.verify_platform_manifest()
+
+    assert not ok
+    assert any(row[3] == expected for row in rows)
