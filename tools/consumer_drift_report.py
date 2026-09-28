@@ -170,6 +170,23 @@ def _coverage(value: Any) -> None:
         _string(entry.get("reason"), f"coverage.out_of_scope[{index}].reason")
 
 
+def _validate_status_semantics(root: dict[str, Any]) -> None:
+    """Keep the report-level result aligned with the check-level evidence."""
+
+    check_statuses = {check["status"] for check in root["checks"]}
+    if "stale" in check_statuses:
+        expected = "stale"
+    elif root["errors"] or check_statuses & {"unavailable", "skipped"}:
+        expected = "indeterminate"
+    else:
+        expected = "current"
+    if root["status"] != expected:
+        raise ReportError(
+            f"report.status {root['status']!r} does not match check evidence; "
+            f"expected {expected!r}"
+        )
+
+
 def validate_report(report: Any) -> dict[str, Any]:
     """Validate one report and return it unchanged.
 
@@ -237,4 +254,5 @@ def validate_report(report: Any) -> dict[str, Any]:
         raise ReportError("errors must be an array")
     for index, error in enumerate(errors):
         _string(error, f"errors[{index}]")
+    _validate_status_semantics(root)
     return root

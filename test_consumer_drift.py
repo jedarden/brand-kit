@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator, FormatChecker
 from PIL import Image
 
 from tools import consumer_drift, consumer_sync
@@ -925,7 +926,6 @@ def test_report_schema_file_matches_the_runtime_contract():
 def test_detector_report_is_accepted_by_the_checked_in_json_schema(
     tmp_path, monkeypatch, capsys
 ):
-    jsonschema = pytest.importorskip("jsonschema")
     root = make_root(tmp_path)
     site = make_site(root, tmp_path)
     exit_code, report = invoke_main(
@@ -936,7 +936,7 @@ def test_detector_report_is_accepted_by_the_checked_in_json_schema(
     schema = json.loads(
         Path("consumer-drift-report.schema.json").read_text(encoding="utf-8")
     )
-    jsonschema.Draft202012Validator(schema).validate(report)
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(report)
 
 
 def test_saved_report_cli_validates_the_same_artifact_contract(tmp_path):

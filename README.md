@@ -321,7 +321,9 @@ pinned toolchain and runs this acceptance sequence in order:
    bytes fail the workflow.
 4. Run the full default suite with `.venv/bin/python -m pytest -q`. Any test failure
    exits non-zero and fails the workflow, including the contract tests in
-   `test_check_asset_toolchain.py`.
+   `test_check_asset_toolchain.py`. This includes
+   `test_consumer_drift_report.py`, which validates every direct detector outcome
+   and scheduled fallback artifact against `consumer-drift-report.schema.json`.
 5. Run `python3 tools/check_reproducibility.py`. It creates two independent
    clean Cargo/Python environments, exercises the vtracer trace and the full
    resvg/Pillow build, compares every generated file with the committed tree,
