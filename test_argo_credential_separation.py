@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
+import pytest
 import yaml
 
 from tools import (
@@ -133,6 +135,60 @@ def _argo_workflow_list_url(workflow_template):
     )
 
 
+def _assert_failure_watcher_argo_request(method, url, kwargs, *, api_url, token):
+    """Enforce the documented, read-only Argo API boundary for the watcher."""
+    assert method == "GET"
+
+    expected_origin = urlsplit(api_url)
+    parsed = urlsplit(url)
+    assert (parsed.scheme, parsed.netloc) == (
+        expected_origin.scheme,
+        expected_origin.netloc,
+    )
+    assert parsed.username is None
+    assert parsed.password is None
+    assert not parsed.fragment
+
+    list_path = "/api/v1/workflows/argo-workflows"
+    if parsed.path == list_path:
+        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+        assert set(query) in ({"labelSelector", "limit"}, {"labelSelector", "limit", "continue"})
+        assert query["labelSelector"] == [
+            "workflows.argoproj.io/workflow-template=brand-kit-ci"
+        ]
+        assert query["limit"] == ["100"]
+        if "continue" in query:
+            assert len(query["continue"]) == 1
+            assert query["continue"][0]
+    else:
+        detail_prefix = f"{list_path}/"
+        detail_name = parsed.path.removeprefix(detail_prefix)
+        assert parsed.path.startswith(detail_prefix)
+        assert detail_name
+        assert "/" not in detail_name
+        assert detail_name[0].islower() or detail_name[0].isdigit()
+        assert all(char.islower() or char.isdigit() or char == "-" for char in detail_name)
+        assert not parsed.query
+
+    assert kwargs == {
+        "token": token,
+        "authorization_scheme": "Bearer",
+        "service": "Argo API",
+    }
+
+
+def _assert_failure_watcher_argo_contract(calls, *, api_url, token):
+    assert calls, "the failure watcher should query Argo"
+    for method, url, kwargs in calls:
+        _assert_failure_watcher_argo_request(
+            method,
+            url,
+            kwargs,
+            api_url=api_url,
+            token=token,
+        )
+
+
 def test_failure_watcher_uses_only_its_documented_argo_get_endpoint():
     calls = []
     responses = iter(
@@ -144,6 +200,13 @@ def test_failure_watcher_uses_only_its_documented_argo_get_endpoint():
 
     def request(method, url, **kwargs):
         calls.append((method, url, kwargs))
+        _assert_failure_watcher_argo_request(
+            method,
+            url,
+            kwargs,
+            api_url="https://argo.example",
+            token="workload-readonly",
+        )
         return next(responses)
 
     report = brand_kit_ci_failure_watch.run_watch(
@@ -153,26 +216,40 @@ def test_failure_watcher_uses_only_its_documented_argo_get_endpoint():
     )
 
     assert report["status"] == "pass"
-    assert calls == [
-        (
-            "GET",
-            _argo_workflow_list_url("brand-kit-ci"),
-            {
-                "token": "workload-readonly",
-                "authorization_scheme": "Bearer",
-                "service": "Argo API",
-            },
-        ),
-        (
-            "GET",
-            _argo_workflow_list_url("brand-kit-ci") + "&continue=next-page",
-            {
-                "token": "workload-readonly",
-                "authorization_scheme": "Bearer",
-                "service": "Argo API",
-            },
-        ),
+    _assert_failure_watcher_argo_contract(
+        calls,
+        api_url="https://argo.example",
+        token="workload-readonly",
+    )
+    assert [url for _, url, _ in calls] == [
+        _argo_workflow_list_url("brand-kit-ci"),
+        _argo_workflow_list_url("brand-kit-ci") + "&continue=next-page",
     ]
+
+
+@pytest.mark.parametrize(
+    ("method", "url"),
+    [
+        ("POST", _argo_workflow_list_url("brand-kit-ci")),
+        ("PATCH", _argo_workflow_list_url("brand-kit-ci")),
+        ("PUT", _argo_workflow_list_url("brand-kit-ci")),
+        ("DELETE", _argo_workflow_list_url("brand-kit-ci")),
+        ("GET", "https://argo.example/api/v1/workflows/other-namespace"),
+    ],
+)
+def test_failure_watcher_argo_contract_rejects_unexpected_method_or_endpoint(method, url):
+    with pytest.raises(AssertionError):
+        _assert_failure_watcher_argo_request(
+            method,
+            url,
+            {
+                "token": "workload-readonly",
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+            },
+            api_url="https://argo.example",
+            token="workload-readonly",
+        )
 
 
 def test_liveness_uses_only_documented_argo_get_endpoints():
