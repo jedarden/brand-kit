@@ -581,7 +581,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = release_publish.parse_environment_args(build_parser(), argv)
     try:
         # Reconciliation and submission use separate credentials. Never
         # silently reuse the read-only token for a write operation.

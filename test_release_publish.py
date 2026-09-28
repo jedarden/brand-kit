@@ -557,17 +557,89 @@ def test_required_tokens_reject_missing_or_blank_values(token):
 def test_publisher_requires_canonical_environment_tokens_before_running_gates(
     monkeypatch, capsys
 ):
+    legacy_forgejo_token = "legacy-forgejo-token-value"
+    legacy_argo_token = "legacy-argo-token-value"
     monkeypatch.delenv("FORGEJO_TOKEN", raising=False)
     monkeypatch.delenv("ARGO_TOKEN", raising=False)
-    monkeypatch.setenv("FORGEJO_API_TOKEN", "legacy-forgejo-token")
-    monkeypatch.setenv("ARGO_API_TOKEN", "legacy-argo-token")
+    monkeypatch.setenv("FORGEJO_API_TOKEN", legacy_forgejo_token)
+    monkeypatch.setenv("ARGO_API_TOKEN", legacy_argo_token)
 
     result = release_publish.main(
         ["--tag", "v1.1.0", "--ci-run", "brand-kit-ci-abc123"]
     )
 
     assert result == 1
-    assert "FORGEJO_TOKEN" in capsys.readouterr().err
+    diagnostic = capsys.readouterr().err
+    assert "FORGEJO_TOKEN" in diagnostic
+    assert legacy_forgejo_token not in diagnostic
+    assert legacy_argo_token not in diagnostic
+
+
+@pytest.mark.parametrize(
+    "token_option",
+    (
+        "--token",
+        "--forgejo-token",
+        "--forgejo-api-token",
+        "--argo-token",
+        "--argo-api-token",
+        "--argo-submit-token",
+        "--github-token",
+        "--gh-token",
+        "--token=cli-token-value",
+    ),
+)
+def test_publisher_rejects_cli_token_options_without_echoing_values(
+    token_option, capsys
+):
+    token = "publisher-cli-secret-value"
+    option = token_option.replace("cli-token-value", token)
+    arguments = ["--tag", "v1.1.0", "--ci-run", "brand-kit-ci-abc123"]
+    if "=" in option:
+        arguments.append(option)
+    else:
+        arguments.extend((option, token))
+
+    with pytest.raises(SystemExit) as error:
+        release_publish.main(arguments)
+
+    diagnostic = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "token options are not supported" in diagnostic
+    assert token not in diagnostic
+
+
+def test_publisher_does_not_log_environment_credentials_on_success(monkeypatch, capsys):
+    forgejo_token = "publisher-forgejo-secret-value"
+    argo_token = "publisher-argo-secret-value"
+    observed = {}
+    monkeypatch.setenv("FORGEJO_TOKEN", forgejo_token)
+    monkeypatch.setenv("ARGO_TOKEN", argo_token)
+    monkeypatch.setattr(release_publish, "release_notes_from_changelog", lambda *a: "release notes")
+    monkeypatch.setattr(release_publish, "verify_ready", lambda *a, **k: COMMIT)
+
+    def attest(*args, **kwargs):
+        observed["argo_token"] = kwargs["token"]
+
+    def publish(*args, **kwargs):
+        observed["forgejo_token"] = kwargs["token"]
+        return published()
+
+    monkeypatch.setattr(release_publish, "attest_argo_ci_run", attest)
+    monkeypatch.setattr(release_publish, "publish_release", publish)
+    monkeypatch.setattr(release_publish, "wait_for_mirror", lambda *a, **k: None)
+
+    result = release_publish.main(
+        ["--tag", "v1.1.0", "--ci-run", "brand-kit-ci-abc123"]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert observed == {"argo_token": argo_token, "forgejo_token": forgejo_token}
+    assert forgejo_token not in captured.out + captured.err
+    assert argo_token not in captured.out + captured.err
+    assert forgejo_token not in " ".join(sys.argv)
+    assert argo_token not in " ".join(sys.argv)
 
 
 def test_request_places_token_in_header_not_url_or_argv(monkeypatch):

@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -206,6 +207,95 @@ def test_submit_requires_dedicated_argo_submit_credential(monkeypatch):
     result = consumer_drift_submit.main(["--release-tag", "v1.1.0"])
 
     assert result == 1
+
+
+def test_submit_requires_canonical_environment_tokens_not_legacy_aliases(
+    monkeypatch, capsys
+):
+    legacy_forgejo_token = "legacy-forgejo-submit-value"
+    legacy_argo_token = "legacy-argo-submit-value"
+    for name in ("FORGEJO_TOKEN", "ARGO_TOKEN", "ARGO_SUBMIT_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("FORGEJO_API_TOKEN", legacy_forgejo_token)
+    monkeypatch.setenv("ARGO_API_TOKEN", legacy_argo_token)
+    monkeypatch.setattr(
+        consumer_drift_submit,
+        "submit_consumer_drift",
+        lambda *args, **kwargs: pytest.fail("submission must reject legacy aliases"),
+    )
+
+    result = consumer_drift_submit.main(["--release-tag", "v1.1.0"])
+
+    diagnostic = capsys.readouterr().err
+    assert result == 1
+    assert "FORGEJO_TOKEN" in diagnostic
+    assert legacy_forgejo_token not in diagnostic
+    assert legacy_argo_token not in diagnostic
+
+
+@pytest.mark.parametrize(
+    "token_option",
+    (
+        "--token",
+        "--forgejo-token",
+        "--forgejo-api-token",
+        "--argo-token",
+        "--argo-api-token",
+        "--argo-submit-token",
+        "--github-token",
+        "--gh-token",
+        "--token=cli-token-value",
+    ),
+)
+def test_submit_rejects_cli_token_options_without_echoing_values(token_option, capsys):
+    token = "consumer-submit-cli-secret-value"
+    option = token_option.replace("cli-token-value", token)
+    arguments = ["--release-tag", "v1.1.0"]
+    if "=" in option:
+        arguments.append(option)
+    else:
+        arguments.extend((option, token))
+
+    with pytest.raises(SystemExit) as error:
+        consumer_drift_submit.main(arguments)
+
+    diagnostic = capsys.readouterr().err
+    assert error.value.code == 2
+    assert "token options are not supported" in diagnostic
+    assert token not in diagnostic
+
+
+def test_submit_does_not_log_environment_credentials_on_success(monkeypatch, capsys):
+    forgejo_token = "consumer-submit-forgejo-secret-value"
+    argo_read_token = "consumer-submit-argo-read-secret-value"
+    argo_submit_token = "consumer-submit-argo-write-secret-value"
+    observed = {}
+    monkeypatch.setenv("FORGEJO_TOKEN", forgejo_token)
+    monkeypatch.setenv("ARGO_TOKEN", argo_read_token)
+    monkeypatch.setenv("ARGO_SUBMIT_TOKEN", argo_submit_token)
+
+    def submit(*args, **kwargs):
+        observed.update(
+            forgejo_token=kwargs["forgejo_token"],
+            argo_read_token=kwargs["argo_read_token"],
+            argo_submit_token=kwargs["argo_token"],
+        )
+        return {"metadata": {"name": "brand-kit-consumer-drift-test"}}
+
+    monkeypatch.setattr(consumer_drift_submit, "submit_consumer_drift", submit)
+
+    result = consumer_drift_submit.main(["--release-tag", "v1.1.0"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert observed == {
+        "forgejo_token": forgejo_token,
+        "argo_read_token": argo_read_token,
+        "argo_submit_token": argo_submit_token,
+    }
+    for token in (forgejo_token, argo_read_token, argo_submit_token):
+        assert token not in captured.out + captured.err
+        assert token not in " ".join(sys.argv)
 
 
 def test_submit_retries_until_canonical_and_mirror_tags_agree(monkeypatch):

@@ -60,6 +60,18 @@ CHANGELOG_HEADING_TAG_PREFIX = re.compile(
 WORKFLOW_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
 WORKFLOW_UID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 WORKFLOW_RUN_PREFIX = f"{DEFAULT_ARGO_WORKFLOW_TEMPLATE}/"
+CLI_TOKEN_OPTIONS = frozenset(
+    {
+        "--token",
+        "--forgejo-token",
+        "--forgejo-api-token",
+        "--argo-token",
+        "--argo-api-token",
+        "--argo-submit-token",
+        "--github-token",
+        "--gh-token",
+    }
+)
 COMMIT_PARAMETER_NAMES = {
     "commit",
     "revision",
@@ -121,6 +133,19 @@ def require_token(token: str | None, variable: str) -> str:
 def environment_token(variable: str) -> str:
     """Read one canonical release credential from the process environment."""
     return require_token(os.environ.get(variable), variable)
+
+
+def parse_environment_args(
+    parser: argparse.ArgumentParser,
+    argv: list[str] | None,
+) -> argparse.Namespace:
+    """Reject credential options without echoing their potentially secret values."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if any(argument.partition("=")[0] in CLI_TOKEN_OPTIONS for argument in arguments):
+        parser.error(
+            "token options are not supported; provide credentials through the environment"
+        )
+    return parser.parse_args(arguments)
 
 
 def _redact(value: Any, *secrets: str | None) -> str:
@@ -1751,7 +1776,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parse_environment_args(parser, argv)
     try:
         # Credentials are intentionally environment-only.  In particular, do
         # not accept a token option or fall back to a token with another scope.
