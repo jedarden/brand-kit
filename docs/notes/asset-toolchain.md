@@ -72,6 +72,15 @@ failure-watch copy in `declarative-config` to edit. The `brand-kit-ci`
 regression gate remains the separate template owned directly by
 `declarative-config`.
 
+Because GitHub is a read-only mirror rather than the authority, the directory
+also contains `brand-kit-forgejo-github-parity-workflow.yml`. ArgoCD runs this
+Argo `Workflow` as a `PreSync` hook at sync wave `-1`. It reads the exact
+`refs/heads/main` object ID from both Forgejo and GitHub and exits non-zero on
+missing, malformed, or unequal values, so no normal automation resource is
+applied while the mirror is stale or only partially propagated. A failed hook
+is kept for diagnosis; retrying after propagation uses
+`BeforeHookCreation` to replace it, and successful hook workflows are deleted.
+
 After the child Application reconciles, compare the repository copies with the
 applied objects using the read-only parity check:
 
@@ -118,8 +127,9 @@ python3 tools/check_automation_manifests.py
 It recursively checks every YAML manifest against
 `automation/manifest.schema.json`, including the Argo kind/API version,
 namespace and name, template references, parameter declarations, schedules,
-image pins, and the rule that only WorkflowTemplate/CronWorkflow resources
-may target `argo-workflows`. With a declarative-config checkout, pass the
+image pins, and the rule that only the repository's short-lived
+WorkflowTemplate, CronWorkflow, and parity Workflow resources may target
+`argo-workflows`. With a declarative-config checkout, pass the
 application manifest too to verify its recursive YAML inclusion and namespace
 boundary:
 

@@ -28,7 +28,32 @@ def _write(path: Path, document) -> None:
 
 def test_all_automation_manifests_pass_schema_and_contract_checks():
     assert check_automation_manifests.check_manifests(AUTOMATION) == []
-    assert len(check_automation_manifests.discover_manifest_paths(AUTOMATION)) == 12
+    assert len(check_automation_manifests.discover_manifest_paths(AUTOMATION)) == 13
+
+
+def test_pre_sync_workflow_gates_deployment_on_exact_main_parity():
+    path = AUTOMATION / "brand-kit-forgejo-github-parity-workflow.yml"
+    document = _load(path)
+    metadata = document["metadata"]
+    container = document["spec"]["templates"][0]["container"]
+    script = container["args"][0]
+
+    assert document["kind"] == "Workflow"
+    assert metadata["annotations"] == {
+        "argocd.argoproj.io/hook": "PreSync",
+        "argocd.argoproj.io/hook-delete-policy": "BeforeHookCreation,HookSucceeded",
+        "argocd.argoproj.io/sync-wave": "-1",
+    }
+    assert container["command"] == ["sh", "-ec"]
+    assert document["spec"]["automountServiceAccountToken"] is False
+    environment = {item["name"]: item["value"] for item in container["env"]}
+    assert environment == {
+        "FORGEJO_REPOSITORY": "https://git.ardenone.com/jedarden/brand-kit.git",
+        "GITHUB_REPOSITORY": "https://github.com/jedarden/brand-kit.git",
+    }
+    assert "git ls-remote --exit-code --refs --quiet" in script
+    assert "refs/heads/main" in script
+    assert "exit 1" in script
 
 
 def test_schema_declares_only_ephemeral_argo_workflow_resources():
@@ -39,6 +64,7 @@ def test_schema_declares_only_ephemeral_argo_workflow_resources():
     assert schema["oneOf"] == [
         {"$ref": "#/$defs/workflowTemplate"},
         {"$ref": "#/$defs/cronWorkflow"},
+        {"$ref": "#/$defs/parityWorkflow"},
     ]
     assert schema["$defs"]["metadata"]["properties"]["namespace"] == {
         "const": "argo-workflows"

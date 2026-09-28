@@ -436,6 +436,18 @@ That application check requires the recursive `automation` source, both YAML
 include patterns, and an `argo-workflows` destination, preserving the boundary
 between this repository's ephemeral Argo automation and serving workloads.
 
+The Application intentionally reads the GitHub `main` mirror because that is
+the currently supported ArgoCD source. The first resource in that directory,
+`brand-kit-forgejo-github-parity` (`automation/brand-kit-forgejo-github-parity-workflow.yml`),
+is an ArgoCD `PreSync` hook. Before any WorkflowTemplate or CronWorkflow is
+applied, the hook reads `refs/heads/main` from Forgejo and GitHub with
+`git ls-remote` and fails the sync unless the two object IDs are identical.
+This keeps a stale or partially propagated mirror from becoming a deployment
+source. A failed hook is retained for diagnosis; once the mirror catches up,
+retry the same sync and `BeforeHookCreation` replaces the failed hook. The
+hook has no cluster write credentials and its successful Workflow is deleted
+by the hook policy.
+
 For a failed gate, inspect the report and the referenced workflow, identify the
 exact commit and failed stage, correct the pin/install contract, test/assets,
 unexpected generated file, or regeneration drift, and push a new commit.
@@ -467,8 +479,8 @@ retains its JSON report at
 `BrandKitMirrorHealth` exit-handler alert routes to the `jedarden` owner
 channel. A healthy report requires exact parity for all branches and tags;
 an unavailable remote or inconclusive ancestry comparison is indeterminate and
-also fails closed. This is monitoring and alerting; it is not the release
-authorization boundary.
+also fails closed. This remains monitoring and alerting; the ArgoCD PreSync
+parity Workflow is the deployment authorization boundary.
 
 The release gate in `tools/release_publish.py` independently validates that
 `origin` is the expected Forgejo repository and `github` is the expected

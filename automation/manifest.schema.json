@@ -8,6 +8,9 @@
     },
     {
       "$ref": "#/$defs/cronWorkflow"
+    },
+    {
+      "$ref": "#/$defs/parityWorkflow"
     }
   ],
   "$defs": {
@@ -202,6 +205,66 @@
                     }
                   },
                   "additionalProperties": true
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "parityWorkflow": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/resource"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "Workflow"
+            },
+            "spec": {
+              "type": "object",
+              "required": [
+                "entrypoint",
+                "serviceAccountName",
+                "automountServiceAccountToken",
+                "activeDeadlineSeconds",
+                "templates"
+              ],
+              "properties": {
+                "entrypoint": {
+                  "type": "string"
+                },
+                "serviceAccountName": {
+                  "const": "argo-workflow"
+                },
+                "automountServiceAccountToken": {
+                  "const": false
+                },
+                "activeDeadlineSeconds": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "templates": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]*$"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
                 }
               },
               "additionalProperties": true

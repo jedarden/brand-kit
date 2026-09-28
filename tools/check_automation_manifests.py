@@ -35,6 +35,7 @@ ALLOWED_SUFFIXES = {".yml", ".yaml"}
 ARGO_API_VERSION = "argoproj.io/v1alpha1"
 WORKFLOW_NAMESPACE = "argo-workflows"
 WORKFLOW_SERVICE_ACCOUNT = "argo-workflow"
+PARITY_WORKFLOW_NAME = "brand-kit-forgejo-github-parity"
 APPLICATION_NAME = "brand-kit-automation-iad-ci"
 APPLICATION_NAMESPACE = "argocd"
 APPLICATION_REPOSITORY = "https://github.com/jedarden/brand-kit.git"
@@ -291,7 +292,11 @@ def _template_names(spec: Mapping[str, Any], path: Path) -> tuple[set[str], list
 
 
 def _check_template_body(
-    manifest: Manifest, spec: Mapping[str, Any], names: set[str]
+    manifest: Manifest,
+    spec: Mapping[str, Any],
+    names: set[str],
+    *,
+    require_on_exit: bool = True,
 ) -> list[str]:
     path = manifest.path
     errors: list[str] = []
@@ -299,7 +304,7 @@ def _check_template_body(
     if not isinstance(entrypoint, str) or entrypoint not in names:
         errors.append(_path_error(path, "spec.entrypoint must name a template"))
     on_exit = spec.get("onExit")
-    if not isinstance(on_exit, str) or on_exit not in names:
+    if require_on_exit and (not isinstance(on_exit, str) or on_exit not in names):
         errors.append(_path_error(path, "spec.onExit must name a template"))
 
     templates = spec.get("templates")
@@ -386,9 +391,9 @@ def _check_manifest_shape(manifest: Manifest) -> list[str]:
     if api_version != ARGO_API_VERSION:
         errors.append(_path_error(path, f"apiVersion must be {ARGO_API_VERSION!r}"))
     kind = document.get("kind")
-    if kind not in {"WorkflowTemplate", "CronWorkflow"}:
+    if kind not in {"WorkflowTemplate", "CronWorkflow", "Workflow"}:
         errors.append(
-            _path_error(path, "kind must be WorkflowTemplate or CronWorkflow")
+            _path_error(path, "kind must be WorkflowTemplate or CronWorkflow or Workflow")
         )
     metadata = document.get("metadata")
     if not isinstance(metadata, Mapping):
@@ -430,6 +435,64 @@ def _check_manifest_shape(manifest: Manifest) -> list[str]:
                             f"references undeclared workflow parameter {parameter!r}",
                         )
                     )
+    elif kind == "Workflow":
+        annotations = metadata.get("annotations")
+        if not isinstance(annotations, Mapping):
+            errors.append(_path_error(path, "Workflow metadata.annotations must be an object"))
+        else:
+            expected_annotations = {
+                "argocd.argoproj.io/hook": "PreSync",
+                "argocd.argoproj.io/hook-delete-policy": "BeforeHookCreation,HookSucceeded",
+                "argocd.argoproj.io/sync-wave": "-1",
+            }
+            for key, expected in expected_annotations.items():
+                if annotations.get(key) != expected:
+                    errors.append(
+                        _path_error(path, f"metadata.annotations.{key} must be {expected!r}")
+                    )
+        if name != PARITY_WORKFLOW_NAME:
+            errors.append(
+                _path_error(path, f"Workflow metadata.name must be {PARITY_WORKFLOW_NAME!r}")
+            )
+        if spec.get("serviceAccountName") != WORKFLOW_SERVICE_ACCOUNT:
+            errors.append(
+                _path_error(
+                    path,
+                    f"spec.serviceAccountName must be {WORKFLOW_SERVICE_ACCOUNT!r}",
+                )
+            )
+        if spec.get("automountServiceAccountToken") is not False:
+            errors.append(_path_error(path, "spec.automountServiceAccountToken must be false"))
+        deadline = spec.get("activeDeadlineSeconds")
+        if not isinstance(deadline, int) or isinstance(deadline, bool) or deadline < 1:
+            errors.append(_path_error(path, "spec.activeDeadlineSeconds must be positive"))
+        names, template_errors = _template_names(spec, path)
+        errors.extend(template_errors)
+        errors.extend(_check_template_body(manifest, spec, names, require_on_exit=False))
+        templates = spec.get("templates")
+        if isinstance(templates, list) and len(templates) == 1:
+            container = templates[0].get("container") if isinstance(templates[0], Mapping) else None
+            script = container.get("args", [None])[0] if isinstance(container, Mapping) and isinstance(container.get("args"), list) else None
+            if not isinstance(container, Mapping) or not _image_is_pinned(container.get("image")):
+                errors.append(_path_error(path, "parity Workflow container.image must be version-pinned"))
+            if not isinstance(container, Mapping) or container.get("name") != "parity":
+                errors.append(_path_error(path, "parity Workflow container.name must be 'parity'"))
+            if not isinstance(container, Mapping) or container.get("command") != ["sh", "-ec"]:
+                errors.append(_path_error(path, "parity Workflow container.command must run sh -ec"))
+            if not isinstance(script, str):
+                errors.append(_path_error(path, "parity Workflow container.args must contain a shell script"))
+            else:
+                container_text = "\n".join(_string_values(container))
+                for required in (
+                    "git ls-remote --exit-code --refs --quiet",
+                    "refs/heads/main",
+                    "https://git.ardenone.com/jedarden/brand-kit.git",
+                    "https://github.com/jedarden/brand-kit.git",
+                ):
+                    if required not in (script if required.startswith("git ") or required.startswith("refs/") else container_text):
+                        errors.append(_path_error(path, f"parity Workflow contract must contain {required!r}"))
+                if "exit 1" not in script:
+                    errors.append(_path_error(path, "parity Workflow script must fail on disagreement"))
     elif kind == "CronWorkflow":
         schedules = spec.get("schedules")
         if not isinstance(schedules, list) or not schedules:
@@ -490,6 +553,9 @@ def _check_filename_contract(manifest: Manifest) -> list[str]:
     elif stem.endswith("-cronworkflow"):
         expected_kind = "CronWorkflow"
         expected_name = stem[: -len("-cronworkflow")]
+    elif stem.endswith("-workflow"):
+        expected_kind = "Workflow"
+        expected_name = stem[: -len("-workflow")]
     else:
         return [_path_error(path, "filename must end in -workflowtemplate or -cronworkflow")]
 
@@ -512,13 +578,22 @@ def _check_cross_manifest_contract(manifests: list[Manifest]) -> list[str]:
     errors: list[str] = []
     templates: dict[str, Manifest] = {}
     crons: dict[str, Manifest] = {}
+    hooks: dict[str, Manifest] = {}
     for manifest in manifests:
         document = manifest.document
         name = document.get("metadata", {}).get("name") if isinstance(document.get("metadata"), Mapping) else None
         kind = document.get("kind")
         if not isinstance(name, str):
             continue
-        target = templates if kind == "WorkflowTemplate" else crons if kind == "CronWorkflow" else None
+        target = (
+            templates
+            if kind == "WorkflowTemplate"
+            else crons
+            if kind == "CronWorkflow"
+            else hooks
+            if kind == "Workflow"
+            else None
+        )
         if target is None:
             continue
         if name in target:
@@ -540,6 +615,12 @@ def _check_cross_manifest_contract(manifests: list[Manifest]) -> list[str]:
             "automation must contain exactly one CronWorkflow for each scheduled "
             f"workflow: missing={sorted(expected_names - set(crons))}, "
             f"unexpected={sorted(set(crons) - expected_names)}"
+        )
+    if set(hooks) != {PARITY_WORKFLOW_NAME}:
+        errors.append(
+            "automation must contain exactly one Forgejo/GitHub parity PreSync Workflow: "
+            f"missing={sorted({PARITY_WORKFLOW_NAME} - set(hooks))}, "
+            f"unexpected={sorted(set(hooks) - {PARITY_WORKFLOW_NAME})}"
         )
 
     for name, cron in crons.items():

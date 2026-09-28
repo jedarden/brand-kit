@@ -60,6 +60,43 @@ def test_matching_branches_and_tags_are_healthy():
     assert [check["status"] for check in report] == ["match", "match"]
 
 
+def test_main_parity_gate_fails_for_a_stale_mirror_and_recovers():
+    repositories = {
+        "https://forgejo.example/brand-kit.git": CANONICAL_MAIN,
+        "https://github.example/brand-kit.git": MIRROR_MAIN,
+    }
+
+    def execute(arguments, cwd, check):
+        assert arguments[:3] == ["ls-remote", "--exit-code", "--heads"]
+        repository = arguments[3]
+        return subprocess.CompletedProcess(
+            arguments,
+            0,
+            f"{repositories[repository]}\trefs/heads/main\n",
+            "",
+        )
+
+    stale = check_mirror_health.check_main_parity(
+        "https://forgejo.example/brand-kit.git",
+        "https://github.example/brand-kit.git",
+        now=NOW,
+        execute=execute,
+    )
+    assert stale["status"] == "unhealthy"
+    assert stale["canonical"] == CANONICAL_MAIN
+    assert stale["mirror"] == MIRROR_MAIN
+
+    repositories["https://github.example/brand-kit.git"] = CANONICAL_MAIN
+    recovered = check_mirror_health.check_main_parity(
+        "https://forgejo.example/brand-kit.git",
+        "https://github.example/brand-kit.git",
+        now=NOW,
+        execute=execute,
+    )
+    assert recovered["status"] == "healthy"
+    assert recovered["canonical"] == recovered["mirror"] == CANONICAL_MAIN
+
+
 @pytest.mark.parametrize(
     ("kind", "ref", "object_id"),
     (
@@ -205,6 +242,44 @@ def test_run_check_uses_remote_ancestry_to_find_stale_and_extra_refs(tmp_path):
         "missing": 0,
         "stale": 1,
         "divergent": 1,
+        "indeterminate": 0,
+    }
+
+
+def test_run_check_recovers_when_the_stale_mirror_catches_up(tmp_path):
+    canonical = tmp_path / "canonical.git"
+    mirror = tmp_path / "mirror.git"
+    work = tmp_path / "work"
+    git(tmp_path, "init", "--bare", "-q", str(canonical))
+    git(tmp_path, "init", "--bare", "-q", str(mirror))
+    git(tmp_path, "init", "-q", str(work))
+    git(work, "config", "user.name", "mirror-health-recovery-test")
+    git(work, "config", "user.email", "mirror-health-recovery@example.test")
+    (work / "state.txt").write_text("initial\n", encoding="utf-8")
+    git(work, "add", "state.txt")
+    git(work, "commit", "-q", "-m", "initial")
+    git(work, "remote", "add", "canonical", str(canonical))
+    git(work, "remote", "add", "mirror", str(mirror))
+    git(work, "push", "-q", "canonical", "HEAD:refs/heads/main")
+    git(work, "push", "-q", "mirror", "HEAD:refs/heads/main")
+
+    (work / "state.txt").write_text("canonical update\n", encoding="utf-8")
+    git(work, "add", "state.txt")
+    git(work, "commit", "-q", "-m", "canonical update")
+    git(work, "push", "-q", "canonical", "HEAD:refs/heads/main")
+
+    stale = check_mirror_health.run_check(str(canonical), str(mirror), now=NOW)
+    assert stale["status"] == "unhealthy"
+    assert stale["summary"]["stale"] == 1
+
+    git(work, "push", "-q", "mirror", "HEAD:refs/heads/main")
+    recovered = check_mirror_health.run_check(str(canonical), str(mirror), now=NOW)
+    assert recovered["status"] == "healthy"
+    assert recovered["summary"] == {
+        "match": 1,
+        "missing": 0,
+        "stale": 0,
+        "divergent": 0,
         "indeterminate": 0,
     }
 

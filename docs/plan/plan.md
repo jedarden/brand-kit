@@ -634,3 +634,53 @@ describe behavior that is easy to mistake for optional ceremony.
 - The implementation and operator procedures are maintained together in
   [`release-publication.md`](../notes/release-publication.md) and
   [`post-tag-consumer-update.md`](../notes/post-tag-consumer-update.md).
+
+## ADR-7: 2026-09-27 — ArgoCD deployment requires Forgejo/GitHub main parity
+
+### Context
+
+The `brand-kit-automation-iad-ci` ArgoCD child Application reads
+`https://github.com/jedarden/brand-kit.git` at `main`, while Forgejo remains the
+source of truth and GitHub is only its server-side push mirror. Scheduled
+mirror-health reporting and release publication checks protect later stages,
+but neither one prevents an ArgoCD sync from applying a revision that GitHub
+has not yet received. A mirror can therefore be stale or partially propagated
+at the exact deployment boundary.
+
+### Decision
+
+Keep the existing GitHub source for ArgoCD compatibility, but add
+`automation/brand-kit-forgejo-github-parity-workflow.yml` as an ArgoCD
+`PreSync` hook. The one-shot Argo Workflow reads `refs/heads/main` from both
+remotes with `git ls-remote --exit-code --refs --quiet`; it fails closed when a
+remote is unavailable, malformed, or advertises a different object ID. ArgoCD
+does not proceed to the normal WorkflowTemplate/CronWorkflow resources until
+the hook succeeds. `BeforeHookCreation,HookSucceeded` retains a failed hook
+for diagnosis and removes successful hook runs, so recovery is a normal retry
+after Forgejo-to-GitHub propagation.
+
+The repository manifest validator treats the hook as a first-class, pinned,
+short-lived deployment resource. `tools/check_mirror_health.py` also exposes
+the same exact-main comparison as a deterministic report for tests and local
+diagnosis. The existing six-hour all-ref mirror-health CronWorkflow remains
+monitoring; it is not the deployment authorization mechanism.
+
+### Alternatives considered
+
+- **Switch the Application directly to Forgejo.** Not selected for this change:
+  the current cluster repository and credential setup already use the GitHub
+  mirror, and changing that Application is owned by `declarative-config`.
+- **Use the scheduled mirror-health CronWorkflow as the gate.** Rejected — a
+  periodic report cannot block a sync that happens between runs.
+- **Continue syncing GitHub without a precondition.** Rejected — a stale
+  mirror would remain an unproven deployment source.
+
+### Consequences
+
+- A stale or unavailable mirror blocks ArgoCD automation deployment with a
+  visible failed hook and no partial resource application.
+- A recovered mirror requires only a retry; no tag retargeting, force-push, or
+  direct cluster mutation is needed.
+- Each sync performs two public read-only Git queries and adds a short-lived
+  Workflow start, so mirror or network outages intentionally surface as sync
+  failures until repaired.

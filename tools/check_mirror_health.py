@@ -25,8 +25,10 @@ from typing import Any, Callable
 DEFAULT_CANONICAL_REPOSITORY = "https://git.ardenone.com/jedarden/brand-kit.git"
 DEFAULT_MIRROR_REPOSITORY = "https://github.com/jedarden/brand-kit.git"
 REPORT_SCHEMA = "brand-kit-mirror-health/v1"
+MAIN_PARITY_SCHEMA = "brand-kit-main-parity/v1"
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REF_PREFIXES = {"branch": "refs/heads/", "tag": "refs/tags/"}
+MAIN_REF = "refs/heads/main"
 
 
 class MirrorHealthError(RuntimeError):
@@ -135,6 +137,58 @@ def fetch_remote_refs(
         "tag",
     )
     return {"branch": branches, "tag": tags}
+
+
+def fetch_main_commit(
+    repository: str,
+    *,
+    execute: GitExecutor = execute_git,
+) -> str:
+    """Read the exact commit advertised for a remote's ``main`` branch."""
+    repository = _validate_repository(repository)
+    result = execute(
+        ["ls-remote", "--exit-code", "--heads", repository, MAIN_REF],
+        None,
+        True,
+    )
+    refs = _parse_remote_refs(result.stdout, "branch")
+    commit = refs.get(MAIN_REF)
+    if commit is None:
+        raise MirrorHealthError(f"remote does not advertise {MAIN_REF}")
+    return commit
+
+
+def check_main_parity(
+    canonical_repository: str = DEFAULT_CANONICAL_REPOSITORY,
+    mirror_repository: str = DEFAULT_MIRROR_REPOSITORY,
+    *,
+    now: datetime | None = None,
+    execute: GitExecutor = execute_git,
+) -> dict[str, Any]:
+    """Return the fail-closed parity result used by the ArgoCD pre-sync gate."""
+    canonical_repository = _validate_repository(canonical_repository)
+    mirror_repository = _validate_repository(mirror_repository)
+    if canonical_repository == mirror_repository:
+        raise MirrorHealthError("canonical and mirror repositories must be different")
+
+    canonical_commit = fetch_main_commit(canonical_repository, execute=execute)
+    mirror_commit = fetch_main_commit(mirror_repository, execute=execute)
+    matches = canonical_commit == mirror_commit
+    return {
+        "schema": MAIN_PARITY_SCHEMA,
+        "status": "healthy" if matches else "unhealthy",
+        "observed_at": _timestamp(now),
+        "canonical_repository": canonical_repository,
+        "mirror_repository": mirror_repository,
+        "ref": MAIN_REF,
+        "canonical": canonical_commit,
+        "mirror": mirror_commit,
+        "reason": (
+            "canonical and mirror main object ids agree"
+            if matches
+            else "canonical Forgejo main and read-only GitHub main object ids differ"
+        ),
+    }
 
 
 def _check(

@@ -1,0 +1,63 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: brand-kit-forgejo-github-parity
+  namespace: argo-workflows
+  annotations:
+    # ArgoCD must prove that the read-only mirror has caught up before it
+    # applies any WorkflowTemplates or CronWorkflows in this directory.
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  entrypoint: parity
+  serviceAccountName: argo-workflow
+  automountServiceAccountToken: false
+  activeDeadlineSeconds: 120
+  templates:
+    - name: parity
+      container:
+        name: parity
+        image: alpine/git:v2.54.0
+        command: [sh, -ec]
+        args:
+          - |
+            remote_main_commit() {
+              repository="$1"
+              output="$(git ls-remote --exit-code --refs --quiet "$repository" refs/heads/main)" || {
+                echo "parity gate blocked: unable to read refs/heads/main" >&2
+                return 1
+              }
+              set -- $output
+              if [ "$#" -ne 2 ] || [ "$2" != "refs/heads/main" ]; then
+                echo "parity gate blocked: remote returned malformed main ref" >&2
+                return 1
+              fi
+              case "$1" in
+                ''|*[!0-9a-fA-F]*)
+                  echo "parity gate blocked: remote returned malformed main object id" >&2
+                  return 1
+                  ;;
+              esac
+              printf '%s\n' "$1"
+            }
+
+            FORGEJO_MAIN="$(remote_main_commit "$FORGEJO_REPOSITORY")"
+            GITHUB_MAIN="$(remote_main_commit "$GITHUB_REPOSITORY")"
+            if [ "$FORGEJO_MAIN" != "$GITHUB_MAIN" ]; then
+              echo "parity gate blocked: GitHub main does not match Forgejo main" >&2
+              exit 1
+            fi
+            echo "parity gate passed: Forgejo and GitHub main object ids agree"
+        env:
+          - name: FORGEJO_REPOSITORY
+            value: https://git.ardenone.com/jedarden/brand-kit.git
+          - name: GITHUB_REPOSITORY
+            value: https://github.com/jedarden/brand-kit.git
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
