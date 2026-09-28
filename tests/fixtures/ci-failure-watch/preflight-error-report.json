@@ -1,0 +1,14 @@
+{
+  "schema": "brand-kit-ci-failure-watch/v1",
+  "status": "error",
+  "complete": false,
+  "observed_at": "2026-09-27T13:00:00Z",
+  "cutoff": null,
+  "workflow_template": "brand-kit-ci",
+  "watcher_workflow_uid": "watcher-uid-20260927",
+  "attestations_url": "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/watcher-uid-20260927/attestations.json",
+  "pagination": { "status": "not_started", "pages_read": 0, "error": null },
+  "error": "watcher did not reach the Argo API",
+  "failures": [],
+  "attestations": []
+}

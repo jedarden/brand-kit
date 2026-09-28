@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brand-kit.ardenone.com/schemas/ci-failure-watch-report-v1.json",
+  "title": "Brand Kit CI failure-watch report v1",
+  "description": "A complete owner-facing snapshot or an explicitly incomplete/error result from the scheduled Argo watcher.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "complete",
+    "observed_at",
+    "cutoff",
+    "workflow_template",
+    "watcher_workflow_uid",
+    "attestations_url",
+    "pagination",
+    "error",
+    "failures",
+    "attestations"
+  ],
+  "properties": {
+    "schema": { "const": "brand-kit-ci-failure-watch/v1" },
+    "status": { "enum": ["pass", "fail", "error", "incomplete"] },
+    "complete": { "type": "boolean" },
+    "observed_at": { "$ref": "#/$defs/utcTimestamp" },
+    "cutoff": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/cutoff" }
+      ]
+    },
+    "workflow_template": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$"
+    },
+    "watcher_workflow_uid": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+      ]
+    },
+    "attestations_url": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^https://s3\\.ardenone\\.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/attestations\\.json$"
+        }
+      ]
+    },
+    "pagination": { "$ref": "#/$defs/pagination" },
+    "error": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1 }
+      ]
+    },
+    "failures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/failure" }
+    },
+    "attestations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/attestation" }
+    }
+  },
+  "$defs": {
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+    },
+    "cutoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "lookback_minutes", "argo_failure_retention_seconds"],
+      "properties": {
+        "at": { "$ref": "#/$defs/utcTimestamp" },
+        "lookback_minutes": { "type": "integer", "minimum": 120, "maximum": 1440 },
+        "argo_failure_retention_seconds": { "const": 7200 }
+      }
+    },
+    "pagination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "pages_read", "error"],
+      "properties": {
+        "status": { "enum": ["complete", "incomplete", "not_started"] },
+        "pages_read": { "type": "integer", "minimum": 0 },
+        "error": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/paginationError" }
+          ]
+        }
+      }
+    },
+    "paginationError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "page"],
+      "properties": {
+        "code": {
+          "enum": [
+            "page_request_failed",
+            "missing_items",
+            "invalid_item",
+            "incomplete_workflow",
+            "missing_metadata",
+            "invalid_metadata",
+            "invalid_continue",
+            "repeated_continue",
+            "page_limit_exceeded"
+          ]
+        },
+        "page": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "uid",
+        "phase",
+        "message",
+        "creation_timestamp",
+        "started_at",
+        "finished_at",
+        "commit",
+        "api_url"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "uid": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+          ]
+        },
+        "phase": { "enum": ["Failed", "Error"] },
+        "message": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string" }
+          ]
+        },
+        "creation_timestamp": { "$ref": "#/$defs/nullableUtcTimestamp" },
+        "started_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+        "finished_at": { "$ref": "#/$defs/nullableUtcTimestamp" },
+        "commit": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[0-9a-f]{40,64}$" }
+          ]
+        },
+        "api_url": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://[^/?#]+(?:/[^?#]*)?/api/v1/workflows/[^?#]+$"
+            }
+          ]
+        }
+      }
+    },
+    "nullableUtcTimestamp": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/utcTimestamp" }
+      ]
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "workflow_name", "workflow_uid", "phase", "finished_at"],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+        "workflow_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$"
+        },
+        "workflow_uid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "phase": { "const": "Succeeded" },
+        "finished_at": { "$ref": "#/$defs/utcTimestamp" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "pass" } } },
+      "then": {
+        "properties": {
+          "complete": { "const": true },
+          "cutoff": { "$ref": "#/$defs/cutoff" },
+          "pagination": {
+            "properties": {
+              "status": { "const": "complete" },
+              "error": { "type": "null" }
+            }
+          },
+          "error": { "type": "null" },
+          "failures": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "fail" } } },
+      "then": {
+        "properties": {
+          "complete": { "const": true },
+          "cutoff": { "$ref": "#/$defs/cutoff" },
+          "pagination": {
+            "properties": {
+              "status": { "const": "complete" },
+              "error": { "type": "null" }
+            }
+          },
+          "error": { "type": "null" },
+          "failures": { "minItems": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "incomplete" } } },
+      "then": {
+        "properties": {
+          "complete": { "const": false },
+          "cutoff": { "$ref": "#/$defs/cutoff" },
+          "pagination": {
+            "properties": {
+              "status": { "const": "incomplete" },
+              "error": { "$ref": "#/$defs/paginationError" }
+            }
+          },
+          "error": { "type": "string", "minLength": 1 },
+          "failures": { "maxItems": 0 },
+          "attestations": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "error" } } },
+      "then": {
+        "properties": {
+          "complete": { "const": false },
+          "pagination": {
+            "properties": {
+              "status": { "const": "not_started" },
+              "pages_read": { "const": 0 },
+              "error": { "type": "null" }
+            }
+          },
+          "error": { "type": "string", "minLength": 1 },
+          "failures": { "maxItems": 0 },
+          "attestations": { "maxItems": 0 }
+        }
+      }
+    }
+  ]
+}

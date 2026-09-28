@@ -401,6 +401,15 @@ alert to the iad-ci Alertmanager. Alertmanager's configured ntfy receiver
 delivers that alert to the `jedarden` owner channel. A watcher run is
 non-success when it finds a failed gate or cannot inspect Argo; both cases
 require follow-up, and the durable report is the first place to look.
+The report contract is published in
+[`ci-failure-watch-report.schema.json`](ci-failure-watch-report.schema.json).
+It records UTC `observed_at` and inclusive `cutoff` metadata, pagination
+completeness, per-run Argo evidence links, and the UID-scoped attestation URL.
+`pass` and `fail` mean the complete paginated snapshot was inspected;
+`incomplete` means pagination stopped early and partial failures and
+attestations were discarded; `error` means inspection did not start. Both
+artifact files are validated before Argo uploads them. The attestation envelope
+contract is published in [`ci-attestations.schema.json`](ci-attestations.schema.json).
 The deployment path, live-object inspection commands, and read-only parity
 check for these two manifests are documented in
 [`docs/notes/asset-toolchain.md`](docs/notes/asset-toolchain.md#deployment-path-and-live-parity)

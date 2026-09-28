@@ -257,9 +257,18 @@ def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch):
         lambda *args, **kwargs: {
             "schema": brand_kit_ci_failure_watch.REPORT_SCHEMA,
             "status": "pass",
+            "complete": True,
             "observed_at": "2026-09-27T13:00:00Z",
-            "lookback_minutes": 120,
+            "cutoff": {
+                "at": "2026-09-27T11:00:00Z",
+                "lookback_minutes": 120,
+                "argo_failure_retention_seconds": 7200,
+            },
             "workflow_template": "brand-kit-ci",
+            "watcher_workflow_uid": None,
+            "attestations_url": None,
+            "pagination": {"status": "complete", "pages_read": 1, "error": None},
+            "error": None,
             "failures": [],
             "attestations": [
                 {
@@ -359,7 +368,8 @@ def test_main_writes_a_sanitized_durable_failure_report(tmp_path, monkeypatch, c
         }
 
     def run_watch(token_arg, **kwargs):
-        return real_run_watch(token_arg, now=NOW, request=request, **kwargs)
+        kwargs["now"] = NOW
+        return real_run_watch(token_arg, request=request, **kwargs)
 
     monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", token)
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
@@ -416,7 +426,8 @@ def test_main_persists_an_argo_api_error_without_exposing_the_token(
 
     durable_report = json.loads(report_path.read_text(encoding="utf-8"))
     output = capsys.readouterr()
-    assert durable_report["status"] == "error"
+    assert durable_report["status"] == "incomplete"
+    assert durable_report["pagination"]["error"]["code"] == "page_request_failed"
     assert durable_report["failures"] == []
     assert "Argo API" in durable_report["error"]
     assert "[REDACTED]" in durable_report["error"]
@@ -503,8 +514,10 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json" in workflow
     assert "attestations/brand-kit-ci/v1/{{workflow.uid}}/attestations.json" in workflow
     assert "brand-kit-ci-attestation/v1" in workflow
-    assert '"watcher_workflow_uid":"{{workflow.uid}}"' in workflow
+    assert '"watcher_workflow_uid": watcher_uid' in workflow
     assert "--watcher-workflow-uid \"{{workflow.uid}}\"" in workflow
+    assert "tools/validate_ci_failure_watch_artifacts.py" in workflow
+    assert "trap validate_watch_artifacts_on_exit EXIT" in workflow
     assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow
     assert '"alertname": "BrandKitCIRegressionGate"' in workflow
     assert '"owner": "jedarden"' in workflow

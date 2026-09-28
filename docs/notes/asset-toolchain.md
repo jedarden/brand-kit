@@ -58,6 +58,27 @@ page, malformed workflow objects or continuation metadata, a repeated token, a
 failed page request, or any other incomplete page fails the watcher closed with
 an error report and no partial result.
 
+The failure-watch report contract is
+[`ci-failure-watch-report.schema.json`](../../ci-failure-watch-report.schema.json);
+the separate durable envelope is defined by
+[`ci-attestations.schema.json`](../../ci-attestations.schema.json). Both are
+strict v1 JSON contracts with no unknown fields. Reports always identify the
+schema and watcher Workflow UID, use UTC `Z` timestamps, record `observed_at`
+and an inclusive cutoff with the configured lookback and Argo retention, and
+include the report's attestation-object URL. A failure row carries its Argo
+Workflow URL when the name is valid. `pass` and `fail` are complete snapshots;
+`error` means inspection did not start; `incomplete` records a stable
+pagination error code and page number. `pages_read` counts pages whose
+`items` and workflow entries were structurally valid; the error's `page` names
+the response or request that prevented a complete snapshot. Incomplete reports
+contain no partial failures or attestations. The attestation envelope binds its list to the
+watcher UID in the immutable Garage object path, and each success row contains
+the full commit, workflow identity, `Succeeded` phase, and UTC completion
+time. The watcher validates both JSON artifacts before writing them, and the
+Workflow validates them again on exit immediately before Argo uploads them.
+Representative pass, fail, pagination-incomplete, preflight-error, and
+attestation fixtures live under `tests/fixtures/ci-failure-watch/`.
+
 ### Deployment path and live parity
 
 These two manifests are not copied into `declarative-config`. The

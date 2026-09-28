@@ -1,0 +1,13 @@
+{
+  "schema": "brand-kit-ci-attestation/v1",
+  "watcher_workflow_uid": "watcher-uid-20260927",
+  "attestations": [
+    {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "workflow_name": "brand-kit-ci-success",
+      "workflow_uid": "uid-brand-kit-ci-success",
+      "phase": "Succeeded",
+      "finished_at": "2026-09-27T12:45:00Z"
+    }
+  ]
+}

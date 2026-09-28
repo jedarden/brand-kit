@@ -27,22 +27,72 @@ spec:
             set -euo pipefail
             # Keep evidence even when installation, cloning, or the API call
             # fails before the watcher can create its normal report.
-            printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"watcher did not reach the Argo API","failures":[]}' \
-              > /tmp/brand-kit-ci-failure-report.json
-            printf '%s\n' '{"schema":"brand-kit-ci-attestation/v1","watcher_workflow_uid":"{{workflow.uid}}","attestations":[]}' \
-              > /tmp/brand-kit-ci-attestations.json
+            write_fallback_evidence() {
+              python3 - "$1" "$2" "{{workflow.uid}}" "$3" <<'PY'
+            import json
+            import re
+            import sys
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            report_path, attestations_path, watcher_uid, message = sys.argv[1:]
+            observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", watcher_uid):
+                raise SystemExit("watcher workflow UID is malformed")
+            report = {
+                "schema": "brand-kit-ci-failure-watch/v1",
+                "status": "error",
+                "complete": False,
+                "observed_at": observed_at,
+                "cutoff": None,
+                "workflow_template": "brand-kit-ci",
+                "watcher_workflow_uid": watcher_uid,
+                "attestations_url": (
+                    "https://s3.ardenone.com/needle-ci-artifacts/attestations/"
+                    f"brand-kit-ci/v1/{watcher_uid}/attestations.json"
+                ),
+                "pagination": {"status": "not_started", "pages_read": 0, "error": None},
+                "error": message,
+                "failures": [],
+                "attestations": [],
+            }
+            attestations = {
+                "schema": "brand-kit-ci-attestation/v1",
+                "watcher_workflow_uid": watcher_uid,
+                "attestations": [],
+            }
+            Path(report_path).write_text(json.dumps(report) + "\n", encoding="utf-8")
+            Path(attestations_path).write_text(json.dumps(attestations) + "\n", encoding="utf-8")
+            PY
+            }
+            write_fallback_evidence \
+              /tmp/brand-kit-ci-failure-report.json \
+              /tmp/brand-kit-ci-attestations.json \
+              "watcher did not reach the Argo API"
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
             git clone --filter=blob:none --no-tags --depth=1 --branch main \
               https://github.com/jedarden/brand-kit.git /brand-kit
+            validate_watch_artifacts_on_exit() {
+              failure_watch_status=$?
+              if ! python3 /brand-kit/tools/validate_ci_failure_watch_artifacts.py \
+                --report /tmp/brand-kit-ci-failure-report.json \
+                --attestations /tmp/brand-kit-ci-attestations.json; then
+                exit 2
+              fi
+              exit "$failure_watch_status"
+            }
+            trap validate_watch_artifacts_on_exit EXIT
             set +e
             python3 /brand-kit/tools/prune_ci_failure_watch_reports.py \
               --retention-days 30
             PRUNE_EXIT=$?
             set -e
             if [ "$PRUNE_EXIT" -ne 0 ]; then
-              printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"failure-watch report retention cleanup did not complete","failures":[]}' \
-                > /tmp/brand-kit-ci-failure-report.json
+              write_fallback_evidence \
+                /tmp/brand-kit-ci-failure-report.json \
+                /tmp/brand-kit-ci-attestations.json \
+                "failure-watch report retention cleanup did not complete"
               printf '%s\n' '2' > /tmp/brand-kit-ci-failure-watch-exit-code
               exit 2
             fi
@@ -53,8 +103,10 @@ spec:
             ATTESTATION_PRUNE_EXIT=$?
             set -e
             if [ "$ATTESTATION_PRUNE_EXIT" -ne 0 ]; then
-              printf '%s\n' '{"schema":"brand-kit-ci-failure-watch/v1","status":"error","error":"CI attestation retention cleanup did not complete","failures":[]}' \
-                > /tmp/brand-kit-ci-failure-report.json
+              write_fallback_evidence \
+                /tmp/brand-kit-ci-failure-report.json \
+                /tmp/brand-kit-ci-attestations.json \
+                "CI attestation retention cleanup did not complete"
               printf '%s\n' '2' > /tmp/brand-kit-ci-failure-watch-exit-code
               exit 2
             fi

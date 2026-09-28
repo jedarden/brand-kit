@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
+from tools import ci_failure_watch_report
 from tools import release_publish
 
 DEFAULT_ARGO_API_URL = release_publish.DEFAULT_ARGO_API_URL
@@ -34,16 +35,26 @@ DEFAULT_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
 # in declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml.
 # Keep the watcher at least this wide: a shorter window can silently miss a
 # failed brand-kit-ci Workflow after Argo has reaped it.
-ARGO_FAILURE_RETENTION_SECONDS = 2 * 60 * 60
+ARGO_FAILURE_RETENTION_SECONDS = ci_failure_watch_report.ARGO_FAILURE_RETENTION_SECONDS
 DEFAULT_LOOKBACK_MINUTES = math.ceil(ARGO_FAILURE_RETENTION_SECONDS / 60)
 DEFAULT_LIST_LIMIT = 100
 MAX_LIST_PAGES = 10_000
-REPORT_SCHEMA = "brand-kit-ci-failure-watch/v1"
-ATTESTATION_SCHEMA = release_publish.CI_ATTESTATION_SCHEMA
+REPORT_SCHEMA = ci_failure_watch_report.REPORT_SCHEMA
+ATTESTATION_SCHEMA = ci_failure_watch_report.ATTESTATION_SCHEMA
 FAILURE_PHASES = frozenset({"Failed", "Error"})
 COMMIT_PARAMETER_NAMES = frozenset(
     {"commit", "revision", "sha", "gitcommit", "gitsha", "headcommit", "headsha"}
 )
+
+
+class WatchPaginationError(release_publish.ReleaseError):
+    """An Argo list snapshot could not be completed safely."""
+
+    def __init__(self, code: str, page: int, pages_read: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.page = page
+        self.pages_read = pages_read
 
 
 def _redact_text(value: Any, *secrets: str) -> Any:
@@ -58,6 +69,24 @@ def _redact_text(value: Any, *secrets: str) -> Any:
 
 
 def argo_api_path(api_url: str, path: str) -> str:
+    if not isinstance(api_url, str) or not api_url.strip():
+        raise release_publish.ReleaseError("Argo API URL must be an absolute HTTPS URL")
+    parsed = urllib.parse.urlsplit(api_url)
+    try:
+        parsed.port
+    except ValueError as error:
+        raise release_publish.ReleaseError("Argo API URL has an invalid port") from error
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise release_publish.ReleaseError(
+            "Argo API URL must be HTTPS without credentials, query, or fragment"
+        )
     base = api_url.rstrip("/")
     if not base.endswith("/api/v1"):
         base = f"{base}/api/v1"
@@ -112,7 +141,7 @@ def _workflow_list_items(
     namespace: str,
     workflow_template: str,
     request: Callable[..., Any],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
     """Read one complete, consistently paginated Workflow list snapshot.
 
     Argo exposes Kubernetes list pagination in ``metadata.continue``. A
@@ -128,49 +157,78 @@ def _workflow_list_items(
     while True:
         page_number += 1
         if page_number > MAX_LIST_PAGES:
-            raise release_publish.ReleaseError(
-                "Argo workflow-list pagination exceeded the maximum page count"
+            raise WatchPaginationError(
+                "page_limit_exceeded",
+                page_number,
+                page_number - 1,
+                "Argo workflow-list pagination exceeded the maximum page count",
             )
-        response = request(
-            "GET",
-            workflow_list_url(
-                api_url,
-                namespace,
-                workflow_template,
-                continue_token=continuation,
-            ),
-            token=token,
-            authorization_scheme="Bearer",
-            service="Argo API",
+        page_url = workflow_list_url(
+            api_url,
+            namespace,
+            workflow_template,
+            continue_token=continuation,
         )
+        try:
+            response = request(
+                "GET",
+                page_url,
+                token=token,
+                authorization_scheme="Bearer",
+                service="Argo API",
+            )
+        except release_publish.ReleaseError as error:
+            detail = _redact_text(str(error), token)
+            raise WatchPaginationError(
+                "page_request_failed",
+                page_number,
+                page_number - 1,
+                f"Argo API workflow-list page {page_number} request failed: {detail}",
+            ) from error
         if not isinstance(response, dict) or not isinstance(response.get("items"), list):
-            raise release_publish.ReleaseError(
-                f"Argo workflow-list page {page_number} has no items list"
+            raise WatchPaginationError(
+                "missing_items",
+                page_number,
+                page_number - 1,
+                f"Argo workflow-list page {page_number} has no items list",
             )
 
         page_items = response["items"]
         for item in page_items:
             if not isinstance(item, dict):
-                raise release_publish.ReleaseError(
-                    f"Argo workflow-list page {page_number} contains a non-object item"
+                raise WatchPaginationError(
+                    "invalid_item",
+                    page_number,
+                    page_number - 1,
+                    f"Argo workflow-list page {page_number} contains a non-object item",
                 )
             if not isinstance(item.get("metadata"), dict) or not isinstance(
                 item.get("status"), dict
             ):
-                raise release_publish.ReleaseError(
-                    f"Argo workflow-list page {page_number} contains an incomplete workflow"
+                raise WatchPaginationError(
+                    "incomplete_workflow",
+                    page_number,
+                    page_number - 1,
+                    f"Argo workflow-list page {page_number} contains an incomplete workflow",
                 )
         items.extend(page_items)
+        pages_read = page_number
 
         if "metadata" not in response:
             if continuation is not None:
-                raise release_publish.ReleaseError(
-                    f"Argo workflow-list page {page_number} has no pagination metadata"
+                raise WatchPaginationError(
+                    "missing_metadata",
+                    page_number,
+                    pages_read,
+                    f"Argo workflow-list page {page_number} has no pagination metadata",
                 )
             next_continuation = None
         elif not isinstance(response["metadata"], dict):
-            raise release_publish.ReleaseError(
-                f"Argo workflow-list page {page_number} has invalid metadata"
+            raise WatchPaginationError(
+                "invalid_metadata",
+                page_number,
+                pages_read,
+                f"Argo workflow-list page {page_number} has invalid metadata",
             )
         else:
             metadata = response["metadata"]
@@ -178,15 +236,21 @@ def _workflow_list_items(
             if next_continuation in (None, ""):
                 next_continuation = None
             elif not isinstance(next_continuation, str) or not next_continuation.strip():
-                raise release_publish.ReleaseError(
-                    f"Argo workflow-list page {page_number} has an invalid continuation token"
+                raise WatchPaginationError(
+                    "invalid_continue",
+                    page_number,
+                    pages_read,
+                    f"Argo workflow-list page {page_number} has an invalid continuation token",
                 )
 
         if next_continuation is None:
-            return items
+            return items, pages_read
         if next_continuation in seen_tokens:
-            raise release_publish.ReleaseError(
-                "Argo workflow-list pagination repeated a continuation token"
+            raise WatchPaginationError(
+                "repeated_continue",
+                page_number,
+                pages_read,
+                "Argo workflow-list pagination repeated a continuation token",
             )
         seen_tokens.add(next_continuation)
         continuation = next_continuation
@@ -205,6 +269,11 @@ def _parse_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_text(value: Any) -> str | None:
+    parsed = _parse_timestamp(value)
+    return parsed.isoformat().replace("+00:00", "Z") if parsed is not None else None
 
 
 def _utc_now(value: datetime | None) -> datetime:
@@ -274,19 +343,26 @@ def _failure_summary(
         return None
 
     name = metadata.get("name")
-    if not isinstance(name, str) or not name:
+    if not isinstance(name, str) or not name.strip():
         name = "<unnamed>"
+    uid = metadata.get("uid")
+    if not isinstance(uid, str) or not release_publish.WORKFLOW_UID_PATTERN.fullmatch(uid):
+        uid = None
+    message = status.get("message")
+    if not isinstance(message, str) or not message:
+        message = None
     summary: dict[str, Any] = {
         "name": name,
-        "uid": metadata.get("uid"),
+        "uid": uid,
         "phase": phase,
-        "message": _redact_text(status.get("message"), *redact_secrets),
-        "creation_timestamp": created_at,
-        "started_at": started_at,
-        "finished_at": finished_at,
+        "message": _redact_text(message, *redact_secrets),
+        "creation_timestamp": _timestamp_text(created_at),
+        "started_at": _timestamp_text(started_at),
+        "finished_at": _timestamp_text(finished_at),
         "commit": _commit_from_workflow(workflow),
+        "api_url": None,
     }
-    if name != "<unnamed>":
+    if name != "<unnamed>" and release_publish.WORKFLOW_NAME_PATTERN.fullmatch(name):
         summary["api_url"] = release_publish.argo_workflow_url(
             api_url,
             namespace,
@@ -364,7 +440,7 @@ def run_watch(
 
     current = _utc_now(now)
     cutoff = current - timedelta(minutes=lookback_minutes)
-    workflows = _workflow_list_items(
+    workflows, pages_read = _workflow_list_items(
         token,
         api_url=api_url,
         namespace=namespace,
@@ -405,16 +481,25 @@ def run_watch(
     return {
         "schema": REPORT_SCHEMA,
         "status": "fail" if failures else "pass",
+        "complete": True,
         "observed_at": current.isoformat().replace("+00:00", "Z"),
-        "lookback_minutes": lookback_minutes,
-        "argo_failure_retention_seconds": ARGO_FAILURE_RETENTION_SECONDS,
+        "cutoff": {
+            "at": cutoff.isoformat().replace("+00:00", "Z"),
+            "lookback_minutes": lookback_minutes,
+            "argo_failure_retention_seconds": ARGO_FAILURE_RETENTION_SECONDS,
+        },
         "workflow_template": workflow_template,
+        "watcher_workflow_uid": None,
+        "attestations_url": None,
+        "pagination": {"status": "complete", "pages_read": pages_read, "error": None},
+        "error": None,
         "failures": failures,
         "attestations": attestations,
     }
 
 
 def write_report(report: dict[str, Any], path: Path) -> None:
+    ci_failure_watch_report.validate_report(report)
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -424,22 +509,15 @@ def write_attestations(
     *,
     watcher_workflow_uid: str | None = None,
 ) -> None:
-    if watcher_workflow_uid is not None and not release_publish.WORKFLOW_UID_PATTERN.fullmatch(
-        watcher_workflow_uid
-    ):
-        raise release_publish.ReleaseError("watcher workflow UID is malformed")
+    ci_failure_watch_report.validate_report(report)
+    if watcher_workflow_uid is None:
+        raise release_publish.ReleaseError("durable attestation output requires the watcher workflow UID")
     document: dict[str, Any] = {
         "schema": ATTESTATION_SCHEMA,
         "attestations": report.get("attestations", []),
+        "watcher_workflow_uid": watcher_workflow_uid,
     }
-    if watcher_workflow_uid is not None:
-        # The UID is part of the object envelope so a copied or replaced
-        # object cannot be accepted under another watcher's immutable URL.
-        document["watcher_workflow_uid"] = watcher_workflow_uid
-    elif "attestations" in report:
-        raise release_publish.ReleaseError(
-            "durable attestation output requires the watcher workflow UID"
-        )
+    ci_failure_watch_report.validate_attestations(document)
     path.write_text(
         json.dumps(document, indent=2, sort_keys=True)
         + "\n",
@@ -469,6 +547,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    current = _utc_now(None)
+    requested_uid = args.watcher_workflow_uid
+    if not isinstance(requested_uid, str) or not release_publish.WORKFLOW_UID_PATTERN.fullmatch(
+        requested_uid
+    ):
+        requested_uid = None
+    workflow_template = args.workflow_template
+    if not release_publish.WORKFLOW_NAME_PATTERN.fullmatch(workflow_template):
+        workflow_template = DEFAULT_WORKFLOW_TEMPLATE
     try:
         report = run_watch(
             os.environ.get("ARGO_WORKFLOW_TOKEN"),
@@ -476,19 +563,60 @@ def main(argv: list[str] | None = None) -> int:
             namespace=args.argo_namespace,
             workflow_template=args.workflow_template,
             lookback_minutes=args.lookback_minutes,
+            now=current,
         )
+    except WatchPaginationError as error:
+        cutoff = _cutoff_metadata(current, args.lookback_minutes)
+        report = {
+            "schema": REPORT_SCHEMA,
+            "status": "incomplete",
+            "complete": False,
+            "observed_at": current.isoformat().replace("+00:00", "Z"),
+            "cutoff": cutoff,
+            "workflow_template": workflow_template,
+            "watcher_workflow_uid": requested_uid,
+            "attestations_url": (
+                ci_failure_watch_report.attestation_url(requested_uid)
+                if requested_uid is not None
+                else None
+            ),
+            "pagination": {
+                "status": "incomplete",
+                "pages_read": error.pages_read,
+                "error": {"code": error.code, "page": error.page},
+            },
+            "error": str(error),
+            "failures": [],
+            "attestations": [],
+        }
+        exit_code = 2
     except release_publish.ReleaseError as error:
         report = {
             "schema": REPORT_SCHEMA,
             "status": "error",
-            "observed_at": _utc_now(None).isoformat().replace("+00:00", "Z"),
-            "workflow_template": args.workflow_template,
+            "complete": False,
+            "observed_at": current.isoformat().replace("+00:00", "Z"),
+            "cutoff": _cutoff_metadata(current, args.lookback_minutes),
+            "workflow_template": workflow_template,
+            "watcher_workflow_uid": requested_uid,
+            "attestations_url": (
+                ci_failure_watch_report.attestation_url(requested_uid)
+                if requested_uid is not None
+                else None
+            ),
+            "pagination": {"status": "not_started", "pages_read": 0, "error": None},
             "error": str(error),
             "failures": [],
             "attestations": [],
         }
         exit_code = 2
     else:
+        report["watcher_workflow_uid"] = requested_uid
+        report["attestations_url"] = (
+            ci_failure_watch_report.attestation_url(requested_uid)
+            if requested_uid is not None
+            else None
+        )
         exit_code = 1 if report["failures"] else 0
 
     try:
@@ -518,6 +646,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"ERROR  {report['error']}", file=sys.stderr)
     return exit_code
+
+
+def _cutoff_metadata(current: datetime, lookback_minutes: Any) -> dict[str, Any] | None:
+    if (
+        isinstance(lookback_minutes, bool)
+        or not isinstance(lookback_minutes, int)
+        or lookback_minutes * 60 < ARGO_FAILURE_RETENTION_SECONDS
+        or lookback_minutes > 24 * 60
+    ):
+        return None
+    cutoff = current - timedelta(minutes=lookback_minutes)
+    return {
+        "at": cutoff.isoformat().replace("+00:00", "Z"),
+        "lookback_minutes": lookback_minutes,
+        "argo_failure_retention_seconds": ARGO_FAILURE_RETENTION_SECONDS,
+    }
 
 
 if __name__ == "__main__":

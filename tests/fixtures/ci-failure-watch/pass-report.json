@@ -1,0 +1,26 @@
+{
+  "schema": "brand-kit-ci-failure-watch/v1",
+  "status": "pass",
+  "complete": true,
+  "observed_at": "2026-09-27T13:00:00Z",
+  "cutoff": {
+    "at": "2026-09-27T11:00:00Z",
+    "lookback_minutes": 120,
+    "argo_failure_retention_seconds": 7200
+  },
+  "workflow_template": "brand-kit-ci",
+  "watcher_workflow_uid": "watcher-uid-20260927",
+  "attestations_url": "https://s3.ardenone.com/needle-ci-artifacts/attestations/brand-kit-ci/v1/watcher-uid-20260927/attestations.json",
+  "pagination": { "status": "complete", "pages_read": 3, "error": null },
+  "error": null,
+  "failures": [],
+  "attestations": [
+    {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "workflow_name": "brand-kit-ci-success",
+      "workflow_uid": "uid-brand-kit-ci-success",
+      "phase": "Succeeded",
+      "finished_at": "2026-09-27T12:45:00Z"
+    }
+  ]
+}
