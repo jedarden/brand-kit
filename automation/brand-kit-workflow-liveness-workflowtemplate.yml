@@ -5,6 +5,8 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: "Independent heartbeat check for scheduled brand-kit workflows"
+    brand-kit.ardenone.com/active-deadline-seconds: "600"
+    brand-kit.ardenone.com/minimum-deadline-budget-seconds: "70"
 spec:
   entrypoint: check
   onExit: route-liveness

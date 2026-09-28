@@ -5,6 +5,8 @@ metadata:
   namespace: argo-workflows
   annotations:
     workflows.argoproj.io/description: "Read-only consumer drift audit for a published Forgejo release"
+    brand-kit.ardenone.com/active-deadline-seconds: "1800"
+    brand-kit.ardenone.com/minimum-deadline-budget-seconds: "670"
 spec:
   entrypoint: audit
   # A failed audit is an owner-facing event, not merely an Argo UI status.

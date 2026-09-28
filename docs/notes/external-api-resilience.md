@@ -47,8 +47,24 @@ Garage deletion must be inspected before an operator repeats it.
   live-fetch failure; only an explicit `--offline` request skips live checks.
 
 The Argo WorkflowTemplates retain an outer active deadline (600 seconds for
-the watcher and liveness watchdog, 1,800 seconds for consumer drift). That is
-the workflow ceiling, not a reason to omit the per-request timeout above.
+the failure watcher and liveness watchdog, 1,800 seconds for consumer drift).
+Each template carries matching deadline annotations so Argo inspection shows
+the same contract as this note. These annotations and the active deadline must
+leave room for the bounded request and retry work:
+
+| WorkflowTemplate | Active deadline | Minimum request and retry budget |
+| --- | ---: | ---: |
+| `brand-kit-ci-failure-watch` | 600 seconds | 100 seconds |
+| `brand-kit-workflow-liveness` | 600 seconds | 70 seconds |
+| `brand-kit-consumer-drift` | 1,800 seconds | 670 seconds |
+
+The budget is the longest applicable read budget (`per-attempt timeout × 3`
+plus two retry delays capped at five seconds), together with consumer drift's
+600-second mirror-polling allowance. This makes the workflow ceiling an outer
+limit for the request and retry budget, not a reason to omit per-request
+timeouts. `test_argo_workflow_deadlines.py` checks the manifest values, both
+annotations, this table, and the computed budget against the executable retry
+policy and consumer-drift polling loop.
 
 The executable policy is shared by `tools/release_publish.py`,
 `tools/consumer_drift.py`, `tools/consumer_sync.py`, and
