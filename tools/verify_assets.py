@@ -5,8 +5,9 @@ Eleven classes of README-vs-repo drift are checked:
   1. Shipped PNG dimensions vs the README per-platform table.
   2. Platform requirement provenance has one HTTPS source and ISO date per
      README platform.
-  3. The generated platform manifest satisfies the versioned schema and
-     matches the README table, committed dimensions, and declared source assets.
+  3. The generated platform manifest satisfies the versioned schema,
+     upload-compatibility contract, and matches the README table, committed
+     dimensions, and declared source assets.
   4. Presence of every repo path README names (plus absence of the file
      it documents as removed).
   5. favicon.ico is multi-resolution 16-256 and every contained frame
@@ -41,7 +42,13 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
 PLATFORM_MANIFEST_SCHEMA_RELPATH = "platform-assets.schema.json"
-PLATFORM_MANIFEST_SCHEMA_VERSION = 2
+PLATFORM_MANIFEST_SCHEMA_VERSION = 3
+PLATFORM_UPLOAD_CONSTRAINTS = {
+    "formats": ["PNG", "ICO"],
+    "color_mode": "RGB",
+    "alpha": "forbidden",
+    "max_file_size_bytes": 5 * 1024 * 1024,
+}
 PLATFORM_NAMES = frozenset({
     "X / Twitter",
     "LinkedIn (personal)",
@@ -389,6 +396,86 @@ def _manifest_dimensions_are_valid(dimensions):
     return len(normalized) == len(set(normalized))
 
 
+def _manifest_upload_constraints_are_valid(constraints):
+    if not isinstance(constraints, dict):
+        return False
+    if set(constraints) != {
+        "formats",
+        "color_mode",
+        "alpha",
+        "max_file_size_bytes",
+    }:
+        return False
+    formats = constraints["formats"]
+    if (
+        not isinstance(formats, list)
+        or not formats
+        or not all(
+            isinstance(value, str) and value in {"PNG", "ICO"}
+            for value in formats
+        )
+        or len(formats) != len(set(formats))
+    ):
+        return False
+    return (
+        constraints["color_mode"] == "RGB"
+        and constraints["alpha"] == "forbidden"
+        and type(constraints["max_file_size_bytes"]) is int
+        and constraints["max_file_size_bytes"] > 0
+    )
+
+
+def _upload_compatibility_rows(path, constraints):
+    """Return rows for the file-level upload contract in the manifest."""
+    rows = []
+    allowed_formats = " or ".join(constraints["formats"])
+    try:
+        with Image.open(path) as image:
+            image_format = image.format
+            color_mode = image.mode
+            has_alpha = "A" in image.getbands() or "transparency" in image.info
+    except Exception as error:
+        return [(
+            str(path.relative_to(ROOT)),
+            "PNG or ICO file with RGB color mode and no alpha",
+            "ERROR",
+            f"✗ upload metadata unreadable: {error}",
+        )]
+
+    relpath = str(path.relative_to(ROOT))
+    if image_format not in constraints["formats"]:
+        rows.append((
+            relpath,
+            f"file format is {allowed_formats}",
+            image_format or "unknown",
+            "✗ incompatible format",
+        ))
+    if color_mode != constraints["color_mode"]:
+        rows.append((
+            relpath,
+            f"color mode is {constraints['color_mode']}",
+            color_mode,
+            "✗ incompatible color mode",
+        ))
+    if constraints["alpha"] == "forbidden" and has_alpha:
+        rows.append((
+            relpath,
+            "alpha channel is absent",
+            f"mode {color_mode}",
+            "✗ alpha channel present",
+        ))
+
+    file_size = path.stat().st_size
+    if file_size > constraints["max_file_size_bytes"]:
+        rows.append((
+            relpath,
+            f"file size <= {constraints['max_file_size_bytes']} bytes",
+            f"{file_size} bytes",
+            "✗ file too large",
+        ))
+    return rows
+
+
 def _manifest_path_is_valid(value):
     return (
         isinstance(value, str)
@@ -503,10 +590,15 @@ def verify_platform_manifest():
 
     if not isinstance(manifest, dict):
         return [(PLATFORM_MANIFEST_RELPATH, claim, type(manifest).__name__, "✗ not an object")], False
-    if set(manifest) != {"schema_version", "platform_requirements", "assets"}:
+    if set(manifest) != {
+        "schema_version",
+        "upload_constraints",
+        "platform_requirements",
+        "assets",
+    }:
         return [(
             PLATFORM_MANIFEST_RELPATH,
-            "schema_version, platform_requirements, and assets only",
+            "schema_version, upload_constraints, platform_requirements, and assets only",
             ", ".join(sorted(manifest)),
             "✗ invalid top-level fields",
         )], False
@@ -533,6 +625,23 @@ def verify_platform_manifest():
 
     rows = []
     all_match = True
+    upload_constraints = manifest.get("upload_constraints")
+    if not _manifest_upload_constraints_are_valid(upload_constraints):
+        rows.append((
+            PLATFORM_MANIFEST_RELPATH,
+            "valid upload_constraints object",
+            repr(upload_constraints),
+            "✗ invalid upload constraints",
+        ))
+        all_match = False
+    elif upload_constraints != PLATFORM_UPLOAD_CONSTRAINTS:
+        rows.append((
+            PLATFORM_MANIFEST_RELPATH,
+            repr(PLATFORM_UPLOAD_CONSTRAINTS),
+            repr(upload_constraints),
+            "✗ upload constraints mismatch",
+        ))
+        all_match = False
     try:
         expected = read_readme_platform_assets()
     except (OSError, UnicodeError, ValueError) as error:
@@ -642,6 +751,11 @@ def verify_platform_manifest():
                 "✗ committed dimensions mismatch",
             ))
             all_match = False
+        if _manifest_upload_constraints_are_valid(upload_constraints):
+            compatibility_rows = _upload_compatibility_rows(asset_path, upload_constraints)
+            if compatibility_rows:
+                rows.extend(compatibility_rows)
+                all_match = False
 
     if all_match:
         rows.append((

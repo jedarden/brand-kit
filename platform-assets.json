@@ -1,5 +1,14 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
+  "upload_constraints": {
+    "formats": [
+      "PNG",
+      "ICO"
+    ],
+    "color_mode": "RGB",
+    "alpha": "forbidden",
+    "max_file_size_bytes": 5242880
+  },
   "platform_requirements": [
     {
       "platform": "X / Twitter",

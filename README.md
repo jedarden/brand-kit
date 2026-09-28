@@ -21,13 +21,18 @@ platform. The logo is SVG-first: `source/logo.svg` is authoritative, while
 Drop these straight into each platform's upload dialog — they're already at the
 documented target pixel dimensions recorded in the requirement provenance below.
 Those targets are platform-specific recommendations or upload minima, not a
-promise that a platform will never crop or resize an upload. Consumers can use
+promise that a platform will never crop or resize an upload. For the assets in
+the manifest, “ready to upload” also means they pass this repository's stable
+preflight contract: PNG or ICO format, RGB color mode, no alpha channel, and a
+maximum file size of 5 MiB (5,242,880 bytes). This is a repository-level
+compatibility floor, not a promise that a provider has no stricter or
+role-specific rule. Consumers can use
 the generated
 [`platform-assets.json`](platform-assets.json) manifest instead of parsing this
-table; it records each platform, role, path, dimensions, source asset, external
-requirement URL, and last-verified date.
+table; it records each platform, role, path, dimensions, source asset, upload
+constraints, external requirement URL, and last-verified date.
 The versioned contract is [`platform-assets.schema.json`](platform-assets.schema.json)
-(schema version `2`); CI validates the manifest against its required fields,
+(schema version `3`); CI validates the manifest against its required fields,
 allowed roles and sources, positive dimensions, safe repository-relative paths,
 HTTPS requirement URLs, real `YYYY-MM-DD` verification dates, and README parity.
 
@@ -75,7 +80,10 @@ compared with the README table and generated files. A source may describe a
 minimum, a recommendation, or a role-specific surface, so read the linked
 page before treating a dimension as a hard limit.
 
-The manifest is schema version `2`. Each asset requires `platform`, `role`,
+The manifest is schema version `3`. Its `upload_constraints` object requires
+PNG or ICO formats, RGB color mode, no alpha channel, and a positive maximum
+file size in bytes; the verifier checks those properties on every committed
+asset. Each asset requires `platform`, `role`,
 `path`, `dimensions` (`width` and `height`, plus optional unique `sizes` for
 multi-resolution assets), and `source`. Roles are `profile_picture`, `banner`, or `favicon`,
 and sources are `source/logo.svg` or `source/hero.png`. Each requirement record

@@ -237,6 +237,68 @@ def test_platform_manifest_reports_committed_dimension_drift(monkeypatch, tmp_pa
     )
 
 
+@pytest.fixture
+def platform_manifest_fixture(tmp_path, monkeypatch):
+    source_root = verify_assets.ROOT
+    root = tmp_path / "brand-kit"
+    root.mkdir()
+    shutil.copy(source_root / "README.md", root / "README.md")
+    shutil.copy(
+        source_root / verify_assets.PLATFORM_MANIFEST_RELPATH,
+        root / verify_assets.PLATFORM_MANIFEST_RELPATH,
+    )
+    for directory in ("avatars", "banners", "favicon"):
+        shutil.copytree(source_root / directory, root / directory)
+    for relpath in ("source/logo.svg", "source/hero.png"):
+        destination = root / relpath
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source_root / relpath, destination)
+    monkeypatch.setattr(verify_assets, "ROOT", root)
+    manifest = json.loads(
+        (root / verify_assets.PLATFORM_MANIFEST_RELPATH).read_text(encoding="utf-8")
+    )
+    return root, manifest
+
+
+@pytest.mark.parametrize(
+    ("compatibility_issue", "expected_status"),
+    [
+        ("format", "✗ incompatible format"),
+        ("color_mode", "✗ incompatible color mode"),
+        ("alpha", "✗ alpha channel present"),
+        ("file_size", "✗ file too large"),
+    ],
+)
+def test_platform_manifest_rejects_upload_compatibility_drift(
+    platform_manifest_fixture,
+    monkeypatch,
+    compatibility_issue,
+    expected_status,
+):
+    root, manifest = platform_manifest_fixture
+    path = root / "avatars/x-400.png"
+    if compatibility_issue == "format":
+        Image.new("RGB", (400, 400), "#DC3127").save(path, format="JPEG")
+    elif compatibility_issue == "color_mode":
+        Image.new("L", (400, 400), 127).save(path, format="PNG")
+    elif compatibility_issue == "alpha":
+        Image.new("RGBA", (400, 400), (220, 49, 39, 0)).save(path, format="PNG")
+    else:
+        constraints = dict(verify_assets.PLATFORM_UPLOAD_CONSTRAINTS)
+        constraints["max_file_size_bytes"] = 1
+        manifest["upload_constraints"] = constraints
+        monkeypatch.setattr(verify_assets, "PLATFORM_UPLOAD_CONSTRAINTS", constraints)
+
+    (root / verify_assets.PLATFORM_MANIFEST_RELPATH).write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+
+    rows, ok = verify_assets.verify_platform_manifest()
+
+    assert not ok
+    assert any(row[0] == "avatars/x-400.png" and row[3] == expected_status for row in rows)
+
+
 def test_presence_accepts_valid_fixture(presence_fixture):
     rows, ok = verify_assets.verify_presence()
 

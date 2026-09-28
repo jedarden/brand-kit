@@ -99,7 +99,8 @@ def test_platform_manifest_is_exact_readme_contract():
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     assert manifest == {
-        "schema_version": 2,
+        "schema_version": 3,
+        "upload_constraints": build_assets.PLATFORM_UPLOAD_CONSTRAINTS,
         "platform_requirements": EXPECTED_PLATFORM_REQUIREMENTS,
         "assets": EXPECTED_PLATFORM_ASSETS,
     }
@@ -149,7 +150,34 @@ def test_platform_manifest_schema_declares_strict_asset_shape():
 
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["schema_version"] == {"const": 2}
+    assert schema["properties"]["schema_version"] == {"const": 3}
+    assert schema["required"] == [
+        "schema_version",
+        "upload_constraints",
+        "platform_requirements",
+        "assets",
+    ]
+    assert schema["properties"]["upload_constraints"] == {
+        "$ref": "#/$defs/upload_constraints"
+    }
+    assert schema["$defs"]["upload_constraints"] == {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "formats",
+            "color_mode",
+            "alpha",
+            "max_file_size_bytes",
+        ],
+        "properties": {
+            "formats": {
+                "const": ["PNG", "ICO"],
+            },
+            "color_mode": {"const": "RGB"},
+            "alpha": {"const": "forbidden"},
+            "max_file_size_bytes": {"const": 5242880},
+        },
+    }
     assert schema["properties"]["platform_requirements"]["minItems"] == 1
     assert schema["properties"]["platform_requirements"]["uniqueItems"] is True
     assert schema["properties"]["platform_requirements"]["items"] == {
@@ -212,7 +240,11 @@ def test_readme_documents_requirement_provenance_and_review_check():
     assert "### Platform requirement provenance" in readme
     assert "### Reviewing changed upload requirements" in readme
     assert "platform-assets.schema.json" in readme
-    assert "schema version `2`" in readme
+    assert "schema version `3`" in readme
+    assert "PNG or ICO formats" in readme
+    assert "RGB color mode" in readme
+    assert "no alpha channel" in readme
+    assert "5 MiB (5,242,880 bytes)" in readme
     assert "absolute HTTPS `source_url` without credentials" in readme
     assert "real calendar `last_verified` date in `YYYY-MM-DD` form" in readme
     assert "tools/verify_assets.py" in readme
@@ -273,8 +305,8 @@ def test_platform_manifest_rejects_unexpected_top_level_field(tmp_path, monkeypa
     assert rows == [
         (
             "platform-assets.json",
-            "schema_version, platform_requirements, and assets only",
-            "assets, platform_requirements, schema_version, unexpected",
+            "schema_version, upload_constraints, platform_requirements, and assets only",
+            "assets, platform_requirements, schema_version, unexpected, upload_constraints",
             "✗ invalid top-level fields",
         )
     ]

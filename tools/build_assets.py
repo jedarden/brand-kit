@@ -33,7 +33,13 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
-PLATFORM_MANIFEST_SCHEMA_VERSION = 2
+PLATFORM_MANIFEST_SCHEMA_VERSION = 3
+PLATFORM_UPLOAD_CONSTRAINTS = {
+    "formats": ["PNG", "ICO"],
+    "color_mode": "RGB",
+    "alpha": "forbidden",
+    "max_file_size_bytes": 5 * 1024 * 1024,
+}
 PALETTE = {
     "Polo Red": "#DC3127",
     "Ink": "#0A0A08",
@@ -316,6 +322,7 @@ def save_platform_manifest():
         json.dumps(
             {
                 "schema_version": PLATFORM_MANIFEST_SCHEMA_VERSION,
+                "upload_constraints": PLATFORM_UPLOAD_CONSTRAINTS,
                 "platform_requirements": PLATFORM_REQUIREMENTS,
                 "assets": PLATFORM_ASSETS,
             },
