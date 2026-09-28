@@ -45,6 +45,16 @@ TARGETS = (
         "workflow_template": "brand-kit-mirror-health",
         "max_age_minutes": 12 * 60,
     },
+    {
+        "name": "brand-kit-platform-requirements",
+        "workflow_template": "brand-kit-platform-requirements",
+        "max_age_minutes": 48 * 60,
+    },
+    {
+        "name": "brand-kit-release-token-probe",
+        "workflow_template": "brand-kit-release-token-probe",
+        "max_age_minutes": 48 * 60,
+    },
 )
 
 
@@ -185,7 +195,7 @@ def run_liveness(
     now: datetime | None = None,
     request: Callable[..., Any] = release_publish.request_json,
 ) -> dict[str, Any]:
-    """Return a tri-state report for both scheduled target workflows."""
+    """Return a tri-state report for every monitored scheduled workflow."""
     token = release_publish.require_token(token, "ARGO_WORKFLOW_TOKEN")
     current = _utc_now(now)
     checks = []

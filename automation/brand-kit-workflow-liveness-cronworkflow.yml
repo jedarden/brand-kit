@@ -4,7 +4,7 @@ metadata:
   name: brand-kit-workflow-liveness
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/description: "Every-15-minute independent heartbeat check for the failure-watch and consumer-drift schedules"
+    workflows.argoproj.io/description: "Every-15-minute independent heartbeat check for all scheduled brand-kit workflows"
 spec:
   schedules:
     - "*/15 * * * *"

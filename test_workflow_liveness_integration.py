@@ -200,6 +200,30 @@ def test_missed_scheduled_workflows_are_detected_on_the_next_liveness_tick(
                 "2026-09-29T06:17:00Z",
             ),
         },
+        {
+            "template": "brand-kit-mirror-health",
+            "last_success": datetime(2026, 9, 27, 0, 17, tzinfo=timezone.utc),
+            "missed_scheduled_runs": (
+                "2026-09-27T06:17:00Z",
+                "2026-09-27T12:17:00Z",
+            ),
+        },
+        {
+            "template": "brand-kit-platform-requirements",
+            "last_success": datetime(2026, 9, 27, 6, 27, tzinfo=timezone.utc),
+            "missed_scheduled_runs": (
+                "2026-09-28T06:27:00Z",
+                "2026-09-29T06:27:00Z",
+            ),
+        },
+        {
+            "template": "brand-kit-release-token-probe",
+            "last_success": datetime(2026, 9, 27, 6, 7, tzinfo=timezone.utc),
+            "missed_scheduled_runs": (
+                "2026-09-28T06:07:00Z",
+                "2026-09-29T06:07:00Z",
+            ),
+        },
     )
 
     for index, scenario in enumerate(scenarios):

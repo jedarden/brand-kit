@@ -485,10 +485,11 @@ missing report as a passing gate.
 
 The separate `brand-kit-workflow-liveness` watchdog closes the gap where a
 scheduled detector never starts and therefore cannot run its own exit handler.
-Its CronWorkflow runs every 15 minutes and checks the latest successful
-`brand-kit-ci-failure-watch` run (fresh within 60 minutes) and
-`brand-kit-consumer-drift` run (fresh within 48 hours), plus the scheduled
-`brand-kit-mirror-health` run (fresh within 12 hours). A stale or indeterminate
+Its CronWorkflow runs every 15 minutes and checks the latest successful runs
+for `brand-kit-ci-failure-watch` (fresh within 60 minutes),
+`brand-kit-consumer-drift` and `brand-kit-platform-requirements` (fresh within
+48 hours), `brand-kit-mirror-health` (fresh within 12 hours), and
+`brand-kit-release-token-probe` (fresh within 48 hours). A stale or indeterminate
 check posts a `BrandKitWorkflowLiveness` Alertmanager notification and retains
 the tri-state report at
 `failures/brand-kit-workflow-liveness/v1/<workflow-uid>/report.json`. The

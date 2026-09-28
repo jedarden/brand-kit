@@ -25,9 +25,10 @@ into downstream repos, and (2) Argo automation that validates and observes
 the package. The `brand-kit-ci` WorkflowTemplate is maintained in
 `declarative-config`; this repository owns the reusable
 `automation/` WorkflowTemplates and CronWorkflows for CI failure-watch,
-consumer-drift, Forgejo-to-GitHub mirror health, release-token probing, and
-scheduled-workflow liveness. These definitions create short-lived Argo
-workflow pods, but they do not serve the assets. There is no serving API,
+consumer-drift, Forgejo-to-GitHub mirror health, platform-requirement source
+health, release-token probing, and scheduled-workflow liveness. These
+definitions create short-lived Argo workflow pods, but they do not serve the
+assets. There is no serving API,
 Deployment, Service, or Ingress in this repository.
 
 ### Ownership and deployment boundary

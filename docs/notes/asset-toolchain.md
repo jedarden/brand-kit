@@ -257,13 +257,22 @@ the asset commit passed, so repair the read path and rerun the check first.
 
 ### Scheduled workflow liveness
 
-The failure watcher, consumer-drift fallback, and mirror-health check cannot
-report that they are missing: their Alertmanager handlers run only after a
-target Workflow starts. The independent `brand-kit-workflow-liveness`
-CronWorkflow therefore runs every 15 minutes and lists successful runs for all
-three target WorkflowTemplates. It reports `fresh` when the latest success is
-no more than 60 minutes old for `brand-kit-ci-failure-watch`, 48 hours old for
-`brand-kit-consumer-drift`, or 12 hours old for `brand-kit-mirror-health`.
+Scheduled workflows cannot report that they are missing: their Alertmanager
+handlers run only after a target Workflow starts. The independent
+`brand-kit-workflow-liveness` CronWorkflow therefore runs every 15 minutes and
+lists successful runs for every scheduled brand-kit WorkflowTemplate except
+itself. This monitored-schedule list is an enforced contract: the tests require
+every CronWorkflow (apart from the watchdog itself) to appear in the liveness
+targets below and in this documentation.
+
+| WorkflowTemplate | CronWorkflow expression (UTC) | Maximum success age |
+| --- | --- | --- |
+| `brand-kit-ci-failure-watch` | `*/15 * * * *` | 60 minutes |
+| `brand-kit-consumer-drift` | `17 6 * * *` | 48 hours |
+| `brand-kit-mirror-health` | `17 */6 * * *` | 12 hours |
+| `brand-kit-platform-requirements` | `27 6 * * *` | 48 hours |
+| `brand-kit-release-token-probe` | `7 6 * * *` | 48 hours |
+
 Missing/old successes are `stale`; an unavailable or malformed Argo response is
 `indeterminate`. Both non-fresh states fail the watchdog and invoke its
 `BrandKitWorkflowLiveness` owner alert. Its report is retained at

@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tools import brand_kit_workflow_liveness
+
 
 AUTOMATION = Path(__file__).resolve().parent / "automation"
 CRONWORKFLOW_CONTRACTS = (
@@ -73,10 +75,58 @@ def test_scheduled_cronworkflow_contract(
 def test_contract_table_covers_every_scheduled_automation_manifest():
     actual_names = {
         path.name.removesuffix("-cronworkflow.yml")
-        for path in AUTOMATION.glob("*-cronworkflow.yml")
+        for path in AUTOMATION.rglob("*-cronworkflow.yml")
     }
 
     assert actual_names == {name for name, _, _ in CRONWORKFLOW_CONTRACTS}
+
+
+def test_every_scheduled_cronworkflow_is_in_the_liveness_targets():
+    scheduled_names = {
+        path.name.removesuffix("-cronworkflow.yml")
+        for path in AUTOMATION.rglob("*-cronworkflow.yml")
+    }
+    watchdog_name = "brand-kit-workflow-liveness"
+    monitored_names = {target["name"] for target in brand_kit_workflow_liveness.TARGETS}
+
+    assert watchdog_name in scheduled_names
+    assert scheduled_names - {watchdog_name} == monitored_names
+    assert all(
+        target["workflow_template"] == target["name"]
+        and target["max_age_minutes"] > 0
+        for target in brand_kit_workflow_liveness.TARGETS
+    )
+
+
+def test_liveness_documentation_lists_every_enforced_target():
+    documentation = (
+        AUTOMATION.parent / "docs/notes/asset-toolchain.md"
+    ).read_text(encoding="utf-8")
+    liveness_section = documentation.split("### Scheduled workflow liveness\n", 1)[1]
+    liveness_section = liveness_section.split("\n### ", 1)[0]
+    documented_targets = {}
+    for line in liveness_section.splitlines():
+        if not line.startswith("| `brand-kit-"):
+            continue
+        name, schedule, max_age = (
+            cell.strip() for cell in line.strip("|").split("|")
+        )
+        documented_targets[name.strip("`")] = (
+            schedule.strip("`").strip(),
+            max_age,
+        )
+
+    for target in brand_kit_workflow_liveness.TARGETS:
+        cron = _load_manifest(
+            AUTOMATION / f"{target['name']}-cronworkflow.yml"
+        )
+        schedules = ", ".join(cron["spec"]["schedules"])
+        minutes = target["max_age_minutes"]
+        if minutes % 60 == 0 and minutes > 60:
+            max_age = f"{minutes // 60} hours"
+        else:
+            max_age = f"{minutes} minutes"
+        assert documented_targets[target["name"]] == (schedules, max_age)
 
 
 def test_failure_watch_runs_every_15_minutes_as_documented():

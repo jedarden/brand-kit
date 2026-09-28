@@ -4,7 +4,7 @@ metadata:
   name: brand-kit-workflow-liveness
   namespace: argo-workflows
   annotations:
-    workflows.argoproj.io/description: "Independent heartbeat check for scheduled brand-kit workflows"
+    workflows.argoproj.io/description: "Independent heartbeat check for every scheduled brand-kit workflow except this watchdog"
     brand-kit.ardenone.com/active-deadline-seconds: "600"
     brand-kit.ardenone.com/minimum-deadline-budget-seconds: "70"
 spec:
@@ -103,7 +103,7 @@ spec:
               },
               "annotations": {
                 "summary": "brand-kit scheduled workflow liveness needs follow-up",
-                "description": "The independent watchdog found a stale or indeterminate scheduled brand-kit workflow. Inspect the durable report and restore the target CronWorkflow or WorkflowTemplate before relying on CI-gate or consumer-drift coverage.",
+                "description": "The independent watchdog found a stale or indeterminate scheduled brand-kit workflow. Inspect the durable report and restore the target CronWorkflow or WorkflowTemplate before relying on its scheduled coverage.",
                 "report_url": "${REPORT_URL}"
               }
             }]
