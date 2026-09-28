@@ -67,6 +67,8 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageStat
 
+from tools import release_publish
+
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_RELPATH = "consumer_registry.json"
 REGISTRY_SCHEMA_VERSION = 1
@@ -495,11 +497,12 @@ def check_hero_derivatives(site, apply, derivatives=None, config=None):
 
 
 def fetch(url, headers=None):
-    request_headers = {"User-Agent": "brand-kit-consumer-sync"}
-    request_headers.update(headers or {})
-    req = urllib.request.Request(url, headers=request_headers)
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return r.read()
+    return release_publish.request_bytes(
+        url,
+        {"User-Agent": "brand-kit-consumer-sync", **(headers or {})},
+        timeout=release_publish.DEFAULT_PUBLIC_TIMEOUT_SECONDS,
+        service="consumer sync endpoint",
+    )
 
 
 def release_tag(explicit=None):
@@ -590,9 +593,9 @@ def check_live_avatar(
     try:
         live = Image.open(io.BytesIO(fetch(url))).convert("RGB")
     except Exception as e:
-        print(f"SKIP  github avatar: could not fetch {url} ({e}) — "
-              "the re-verify did NOT happen; re-run when online")
-        return True
+        print(f"FAIL  github avatar: could not fetch {url} ({e}) — "
+              "the re-verify did NOT happen; refusing to pass")
+        return False
     if live.size != ref.size:
         ref = ref.resize(live.size, Image.LANCZOS)
     diff = mean_luma_diff(live, ref)
@@ -622,9 +625,9 @@ def check_live_og(
     try:
         live = Image.open(io.BytesIO(fetch(url))).convert("RGB")
     except Exception as e:
-        print(f"SKIP  live {label}: could not fetch {url} ({e}) — "
-              "deploy status unverified; re-run when online")
-        return True
+        print(f"FAIL  live {label}: could not fetch {url} ({e}) — "
+              "deploy status unverified; refusing to pass")
+        return False
     if not local.exists():
         print(f"FAIL  live og.jpg: local {local} missing to compare against")
         return False
@@ -762,7 +765,7 @@ def main():
               f"--consumer {shlex.quote(args.consumer)} --check --site \"$SITE\"")
         print(f"  {python} {ROOT / 'tools/consumer_drift.py'} --release-tag {quoted_tag} "
               "--site \"$SITE\"   # both must be all-CURRENT after deploy")
-        return 0 if local_ok else 1
+        return 0 if local_ok and live_ok else 1
     ok = local_ok and live_ok
     print("All consumer copies and provenance in sync." if ok else
           "Consumer drift found — see the STALE/FAIL lines above, or the checklist in "

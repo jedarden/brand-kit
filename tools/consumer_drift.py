@@ -26,6 +26,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
 from tools.consumer_drift_report import REPORT_SCHEMA, validate_report
+from tools import release_publish
 
 
 DEFAULT_CONFIG = ROOT / "consumer-drift.json"
@@ -34,6 +35,7 @@ DEFAULT_API_URL = "https://git.ardenone.com/api/v1"
 DEFAULT_REPOSITORY = "jedarden/brand-kit"
 DEFAULT_TAG_PATTERN = r"^v\d+\.\d+\.\d+$"
 USER_AGENT = "brand-kit-consumer-drift/1"
+PUBLIC_PROFILE_TIMEOUT_SECONDS = release_publish.DEFAULT_PUBLIC_TIMEOUT_SECONDS
 
 
 class AuditError(RuntimeError):
@@ -122,16 +124,24 @@ def release_url(tag: str, config: dict[str, Any]) -> str:
     return f"{_api_base(config)}/repos/{_repository(config)}/releases/tags/{encoded}"
 
 
-def fetch_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
-    request_headers = {
-        "User-Agent": USER_AGENT,
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    }
-    request_headers.update(headers or {})
-    request = urllib.request.Request(url, headers=request_headers)
-    with urllib.request.urlopen(request, timeout=15) as response:
-        return response.read()
+def fetch_bytes(
+    url: str,
+    headers: dict[str, str] | None = None,
+    *,
+    sleep: Callable[[float], None] | None = None,
+) -> bytes:
+    return release_publish.request_bytes(
+        url,
+        {
+            "User-Agent": USER_AGENT,
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            **(headers or {}),
+        },
+        timeout=PUBLIC_PROFILE_TIMEOUT_SECONDS,
+        service="consumer audit endpoint",
+        sleep=sleep,
+    )
 
 
 def _call_fetcher(

@@ -18,15 +18,19 @@ import hashlib
 import hmac
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from xml.etree import ElementTree
 
+from tools import http_policy
+
 DEFAULT_ENDPOINT = "https://s3.ardenone.com"
 DEFAULT_BUCKET = "needle-ci-artifacts"
 DEFAULT_PREFIX = "failures/brand-kit-ci-failure-watch/v1/"
 DEFAULT_RETENTION_DAYS = 30
+DEFAULT_TIMEOUT_SECONDS = http_policy.GARAGE_TIMEOUT_SECONDS
 AWS_SERVICE = "s3"
 AWS_TERMINATOR = "aws4_request"
 S3_XML_NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/"
@@ -120,6 +124,8 @@ class S3Client:
         region: str = "garage",
         opener=urllib.request.urlopen,
         now: datetime | None = None,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        sleep=None,
     ) -> None:
         parsed = urllib.parse.urlsplit(endpoint.rstrip("/"))
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -130,12 +136,18 @@ class S3Client:
             raise RetentionError("S3 bucket name is malformed")
         if not region:
             raise RetentionError("S3 region is required")
+        try:
+            timeout = http_policy.validate_timeout(timeout)
+        except ValueError as error:
+            raise RetentionError(str(error)) from error
         self._endpoint = parsed
         self._bucket = bucket
         self._credentials = credentials
         self._region = region
         self._opener = opener
         self._now = now
+        self._timeout = timeout
+        self._sleep = sleep or time.sleep
 
     def _request(
         self,
@@ -219,16 +231,27 @@ class S3Client:
             )
         )
         request = urllib.request.Request(url, data=body or None, headers=headers, method=method)
-        try:
-            with self._opener(request, timeout=30) as response:
-                return response.read()
-        except urllib.error.HTTPError as error:
-            error.close()
-            raise RetentionError(
-                f"Garage {method} request failed with HTTP {error.code}"
-            ) from error
-        except urllib.error.URLError as error:
-            raise RetentionError("cannot reach Garage during report pruning") from error
+        method = method.upper()
+        max_attempts = http_policy.max_attempts(method)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                with self._opener(request, timeout=self._timeout) as response:
+                    return response.read()
+            except urllib.error.HTTPError as error:
+                if attempt < max_attempts and http_policy.retryable_error(method, error):
+                    http_policy.sleep_before_retry(error, attempt, self._sleep)
+                    error.close()
+                    continue
+                error.close()
+                raise RetentionError(
+                    f"Garage {method} request failed with HTTP {error.code}"
+                ) from error
+            except (urllib.error.URLError, TimeoutError, OSError) as error:
+                if attempt < max_attempts and http_policy.retryable_error(method, error):
+                    http_policy.sleep_before_retry(error, attempt, self._sleep)
+                    continue
+                raise RetentionError("cannot reach Garage during report pruning") from error
+        raise AssertionError("Garage request loop exhausted without a response")
 
     def list_objects(self, prefix: str) -> list[S3Object]:
         objects: list[S3Object] = []

@@ -16,6 +16,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from tools import http_policy
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_API_URL = "https://git.ardenone.com/api/v1"
 DEFAULT_REPOSITORY = "jedarden/brand-kit"
@@ -29,6 +31,9 @@ DEFAULT_ARGO_NAMESPACE = "argo-workflows"
 DEFAULT_ARGO_WORKFLOW_TEMPLATE = "brand-kit-ci"
 DEFAULT_CI_ARTIFACT_HOST = "s3.ardenone.com"
 DEFAULT_CI_ARTIFACT_BUCKET = "needle-ci-artifacts"
+DEFAULT_REQUEST_TIMEOUT_SECONDS = http_policy.API_TIMEOUT_SECONDS
+DEFAULT_PUBLIC_TIMEOUT_SECONDS = http_policy.PUBLIC_TIMEOUT_SECONDS
+DEFAULT_GARAGE_TIMEOUT_SECONDS = http_policy.GARAGE_TIMEOUT_SECONDS
 CI_ATTESTATION_SCHEMA = "brand-kit-ci-attestation/v1"
 CI_ATTESTATION_PREFIX = "attestations/brand-kit-ci/v1/"
 CI_ATTESTATION_OBJECT_PATTERN = re.compile(
@@ -363,10 +368,15 @@ def request_json(
     url: str,
     payload: dict[str, Any] | None = None,
     token: str | None = None,
-    timeout: float = 20.0,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     authorization_scheme: str = "token",
     service: str = "Forgejo API",
+    sleep: Callable[[float], None] | None = None,
 ) -> Any:
+    try:
+        timeout = http_policy.validate_timeout(timeout)
+    except ValueError as error:
+        raise ReleaseError(str(error)) from error
     headers = {"Accept": "application/json", "User-Agent": "brand-kit-release-publisher"}
     if token:
         headers["Authorization"] = f"{authorization_scheme} {token}"
@@ -374,28 +384,87 @@ def request_json(
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
+    method = method.upper()
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read()
-    except urllib.error.HTTPError as error:
-        detail = _redact(
-            error.read().decode("utf-8", errors="replace"),
-            token,
-        )[:300]
-        raise HttpFailure(
-            error.code,
-            detail or _redact(error.reason, token) or f"{service} request failed",
-            service=service,
-        ) from error
-    except urllib.error.URLError as error:
-        raise ReleaseError(
-            f"cannot reach {service}: {_redact(error.reason, token)}"
-        ) from error
+    max_attempts = http_policy.max_attempts(method)
+    sleeper = sleep or time.sleep
+    body: bytes | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read()
+            break
+        except urllib.error.HTTPError as error:
+            if attempt < max_attempts and http_policy.retryable_error(method, error):
+                http_policy.sleep_before_retry(error, attempt, sleeper)
+                error.close()
+                continue
+            detail = _redact(
+                error.read().decode("utf-8", errors="replace"),
+                token,
+            )[:300]
+            raise HttpFailure(
+                error.code,
+                detail or _redact(error.reason, token) or f"{service} request failed",
+                service=service,
+            ) from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            if attempt < max_attempts and http_policy.retryable_error(method, error):
+                http_policy.sleep_before_retry(error, attempt, sleeper)
+                continue
+            reason = getattr(error, "reason", error)
+            raise ReleaseError(
+                f"cannot reach {service}: {_redact(reason, token)}"
+            ) from error
+    assert body is not None
     try:
         return json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ReleaseError(f"{service} returned invalid JSON: {error}") from error
+
+
+def request_bytes(
+    url: str,
+    headers: dict[str, str] | None = None,
+    *,
+    timeout: float = DEFAULT_PUBLIC_TIMEOUT_SECONDS,
+    service: str = "public profile",
+    sleep: Callable[[float], None] | None = None,
+) -> bytes:
+    """Fetch bytes with the bounded read-only retry policy.
+
+    urllib exceptions are preserved so callers can classify an unavailable
+    endpoint without turning it into a passing audit result.
+    """
+    try:
+        timeout = http_policy.validate_timeout(timeout)
+    except ValueError as error:
+        raise ValueError(f"{service} timeout: {error}") from error
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "brand-kit-external-reader", **(headers or {})},
+    )
+    sleeper = sleep or time.sleep
+    for attempt in range(1, http_policy.max_attempts("GET") + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if attempt < http_policy.max_attempts("GET") and http_policy.retryable_error(
+                "GET", error
+            ):
+                http_policy.sleep_before_retry(error, attempt, sleeper)
+                error.close()
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            if attempt < http_policy.max_attempts("GET") and http_policy.retryable_error(
+                "GET", error
+            ):
+                http_policy.sleep_before_retry(error, attempt, sleeper)
+                continue
+            raise
+    raise AssertionError(f"{service} request loop exhausted without a response")
 
 
 def validate_release_record(
@@ -661,6 +730,7 @@ def get_ci_attestation(
         record = request_json(
             "GET",
             url,
+            timeout=DEFAULT_GARAGE_TIMEOUT_SECONDS,
             service="CI attestation artifact",
         )
     except HttpFailure as error:

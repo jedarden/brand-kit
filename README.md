@@ -581,6 +581,26 @@ every upload in the per-platform table was checked: the machine-readable
 `consumer-drift.json` `out_of_scope` list is part of the audit contract and is
 also included in JSON reports.
 
+### External API timeout and retry contract
+
+All external reads use bounded timeouts and at most two retries. The release
+publisher's Argo/Forgejo JSON requests allow 20 seconds per attempt; the
+consumer audit/sync readers, including their Forgejo release lookup and public
+profile/media requests, allow 15 seconds; and Garage S3 listing or artifact
+reads allow 30 seconds. Transport errors, HTTP `429`, and `5xx` responses use
+one-second then two-second backoff; `Retry-After` is honored only up to five
+seconds. Other HTTP failures are terminal. A read that still fails is reported
+as `indeterminate`/unavailable and cannot become a passing audit.
+
+There is no automatic retry for a `POST`, `PATCH`, or S3 multi-delete because
+the first attempt may have committed a mutation before its response was lost.
+The Forgejo publisher reconciles an ambiguous release through its read-before-
+create and `409` lookup contract; inspect an ambiguous Argo submission or
+Garage deletion before repeating it. The complete contract and the executable
+tests are in
+[`docs/notes/external-api-resilience.md`](docs/notes/external-api-resilience.md)
+and `test_external_api_resilience.py`.
+
 ### Platform coverage boundary
 
 The detector checks only surfaces that expose a stable public profile page and

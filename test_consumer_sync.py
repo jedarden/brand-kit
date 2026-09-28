@@ -271,8 +271,8 @@ def test_apply_handoff_uses_site_favicon_command_and_detector(
         path.write_bytes(content)
     monkeypatch.setattr(consumer_sync, "check_forgejo_release", lambda tag: True)
     monkeypatch.setattr(consumer_sync, "brand_kit_reference", lambda repository: REFERENCE)
-    monkeypatch.setattr(consumer_sync, "check_live_avatar", lambda offline: False)
-    monkeypatch.setattr(consumer_sync, "check_live_og", lambda site, offline: False)
+    monkeypatch.setattr(consumer_sync, "check_live_avatar", lambda offline: True)
+    monkeypatch.setattr(consumer_sync, "check_live_og", lambda site, offline: True)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -517,7 +517,7 @@ def test_live_checks_report_pass_only_after_successful_fetch(tmp_path, monkeypat
     assert "PASS  live og.jpg" in output
 
 
-def test_check_skips_live_resources_on_fetch_failure(tmp_path, monkeypatch, capsys):
+def test_check_fails_closed_when_live_resources_cannot_be_fetched(tmp_path, monkeypatch, capsys):
     site = make_site(tmp_path)
     for repo_rel, site_rel, _ in consumer_sync.COPIES:
         (site / site_rel).write_bytes((consumer_sync.ROOT / repo_rel).read_bytes())
@@ -543,9 +543,9 @@ def test_check_skips_live_resources_on_fetch_failure(tmp_path, monkeypatch, caps
         ],
     )
 
-    assert consumer_sync.main() == 0
+    assert consumer_sync.main() == 1
     output = capsys.readouterr().out
-    assert "SKIP  github avatar" in output
-    assert "SKIP  live og.jpg" in output
+    assert "FAIL  github avatar" in output
+    assert "FAIL  live og.jpg" in output
     assert "PASS  github avatar" not in output
     assert "PASS  live og.jpg" not in output
