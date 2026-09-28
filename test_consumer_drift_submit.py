@@ -135,6 +135,64 @@ def test_submit_waits_for_mirror_before_posting_the_exact_tag(monkeypatch):
     }
 
 
+def test_submitter_allowlists_one_workflowtemplate_post_and_read_reconciliation(
+    monkeypatch,
+):
+    _prepare_submit_gates(monkeypatch)
+    calls = []
+    workflow_name = consumer_drift_submit.workflow_name(COMMIT)
+    exact_url = (
+        "https://argo.example/api/v1/workflows/argo-workflows/"
+        f"{workflow_name}"
+    )
+    list_url = (
+        "https://argo.example/api/v1/workflows/argo-workflows?"
+        "labelSelector=workflows.argoproj.io%2Fworkflow-template%3D"
+        "brand-kit-consumer-drift&limit=1000"
+    )
+    submit_url = "https://argo.example/api/v1/workflows/argo-workflows"
+
+    def request(method, url, payload=None, token=None, **kwargs):
+        calls.append((method, url, payload, token, kwargs))
+        if method == "GET" and url == exact_url:
+            raise release_publish.HttpFailure(404, "workflow not found", service="Argo API")
+        if method == "GET" and url == list_url:
+            return {"items": []}
+        if method == "POST" and url == submit_url:
+            return {"metadata": {"name": workflow_name}}
+        pytest.fail(f"unexpected consumer submitter request: {method} {url}")
+
+    result = consumer_drift_submit.submit_consumer_drift(
+        "v1.1.0",
+        forgejo_token=FORGEJO_TOKEN,
+        argo_token=ARGO_SUBMIT_TOKEN,
+        argo_read_token=ARGO_READ_TOKEN,
+        argo_api_url="https://argo.example",
+        request=request,
+    )
+
+    assert result["metadata"]["name"] == workflow_name
+    assert [(method, url) for method, url, *_ in calls] == [
+        ("GET", exact_url),
+        ("GET", list_url),
+        ("POST", submit_url),
+    ]
+    assert [token for _, _, _, token, _ in calls[:2]] == [
+        ARGO_READ_TOKEN,
+        ARGO_READ_TOKEN,
+    ]
+    assert calls[2][3] == ARGO_SUBMIT_TOKEN
+    assert all(
+        call[4] == {"authorization_scheme": "Bearer", "service": "Argo API"}
+        for call in calls
+    )
+    assert calls[0][2] is None
+    assert calls[1][2] is None
+    assert calls[2][2]["workflow"]["spec"]["workflowTemplateRef"] == {
+        "name": "brand-kit-consumer-drift"
+    }
+
+
 def test_submit_requires_dedicated_argo_submit_credential(monkeypatch):
     monkeypatch.setenv("FORGEJO_TOKEN", FORGEJO_TOKEN)
     monkeypatch.setenv("ARGO_TOKEN", "read-only-token-must-not-be-reused")

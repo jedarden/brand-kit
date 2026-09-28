@@ -1,8 +1,14 @@
+import json
 from pathlib import Path
 
 import yaml
 
-from tools import brand_kit_ci_failure_watch, brand_kit_workflow_liveness, consumer_drift_submit
+from tools import (
+    brand_kit_ci_failure_watch,
+    brand_kit_workflow_liveness,
+    consumer_drift,
+    consumer_drift_submit,
+)
 
 
 ROOT = Path(__file__).parent
@@ -119,33 +125,61 @@ def test_consumer_audit_uses_its_external_secret_and_no_operator_argo_token():
     assert "https://git.ardenone.com" not in serialized
 
 
-def test_workload_credentials_are_used_only_for_get_requests():
-    watcher_calls = []
+def _argo_workflow_list_url(workflow_template):
+    return (
+        "https://argo.example/api/v1/workflows/argo-workflows?"
+        "labelSelector=workflows.argoproj.io%2Fworkflow-template%3D"
+        f"{workflow_template}&limit=100"
+    )
 
-    def watcher_request(method, url, **kwargs):
-        watcher_calls.append((method, url, kwargs))
-        assert method == "GET"
-        assert kwargs["token"] == "workload-readonly"
-        assert kwargs["authorization_scheme"] == "Bearer"
-        return {"items": []}
+
+def test_failure_watcher_uses_only_its_documented_argo_get_endpoint():
+    calls = []
+    responses = iter(
+        [
+            {"items": [], "metadata": {"continue": "next-page"}},
+            {"items": [], "metadata": {}},
+        ]
+    )
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return next(responses)
 
     report = brand_kit_ci_failure_watch.run_watch(
         "workload-readonly",
         api_url="https://argo.example",
-        request=watcher_request,
-    )
-    assert report["status"] == "pass"
-    assert watcher_calls[0][1].startswith(
-        "https://argo.example/api/v1/workflows/argo-workflows?"
+        request=request,
     )
 
-    liveness_calls = []
+    assert report["status"] == "pass"
+    assert calls == [
+        (
+            "GET",
+            _argo_workflow_list_url("brand-kit-ci"),
+            {
+                "token": "workload-readonly",
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+            },
+        ),
+        (
+            "GET",
+            _argo_workflow_list_url("brand-kit-ci") + "&continue=next-page",
+            {
+                "token": "workload-readonly",
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+            },
+        ),
+    ]
+
+
+def test_liveness_uses_only_documented_argo_get_endpoints():
+    calls = []
 
     def liveness_request(method, url, **kwargs):
-        liveness_calls.append((method, url, kwargs))
-        assert method == "GET"
-        assert kwargs["token"] == "workload-readonly"
-        assert kwargs["authorization_scheme"] == "Bearer"
+        calls.append((method, url, kwargs))
         return {"items": []}
 
     report = brand_kit_workflow_liveness.run_liveness(
@@ -153,9 +187,67 @@ def test_workload_credentials_are_used_only_for_get_requests():
         api_url="https://argo.example",
         request=liveness_request,
     )
+
     assert report["status"] == "stale"
-    assert len(liveness_calls) == len(brand_kit_workflow_liveness.TARGETS)
-    assert all(call[0] == "GET" for call in liveness_calls)
+    assert calls == [
+        (
+            "GET",
+            _argo_workflow_list_url(target["workflow_template"]),
+            {
+                "token": "workload-readonly",
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+            },
+        )
+        for target in brand_kit_workflow_liveness.TARGETS
+    ]
+
+
+def test_consumer_audit_uses_only_the_documented_forgejo_release_get(monkeypatch):
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "tag_name": "v1.1.0",
+                    "draft": False,
+                    "prerelease": False,
+                    "published_at": "2026-09-27T00:00:00Z",
+                }
+            ).encode()
+
+    def urlopen(request, timeout):
+        requests.append((request.get_method(), request.full_url, request, timeout))
+        return Response()
+
+    monkeypatch.setattr(consumer_drift.release_publish.urllib.request, "urlopen", urlopen)
+    config = {
+        "release": {
+            "api_url": "https://git.ardenone.com/api/v1",
+            "repository": "jedarden/brand-kit",
+        }
+    }
+
+    assert consumer_drift.fetch_release(
+        "v1.1.0",
+        config,
+        token="forgejo-readonly",
+    )["tag_name"] == "v1.1.0"
+    assert len(requests) == 1
+    method, url, request, _ = requests[0]
+    assert method == "GET"
+    assert url == (
+        "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/"
+        "releases/tags/v1.1.0"
+    )
+    assert ("Authorization", "token forgejo-readonly") in request.header_items()
 
 
 def test_workload_token_cannot_be_promoted_to_a_submit_credential(monkeypatch):
