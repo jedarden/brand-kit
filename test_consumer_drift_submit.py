@@ -10,6 +10,19 @@ FORGEJO_TOKEN = "forgejo-test-token"
 ARGO_SUBMIT_TOKEN = "argo-submit-test-token"
 
 
+@pytest.fixture(autouse=True)
+def configured_remote_roles(monkeypatch):
+    """Keep submitter tests independent of Git metadata in archive extracts."""
+    monkeypatch.setattr(
+        release_publish,
+        "validate_remote_roles",
+        lambda *args, **kwargs: (
+            release_publish.DEFAULT_CANONICAL_REPOSITORY,
+            release_publish.DEFAULT_MIRROR_REPOSITORY,
+        ),
+    )
+
+
 def published(**overrides):
     record = {
         "tag_name": "v1.1.0",
