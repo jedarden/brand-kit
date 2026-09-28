@@ -257,6 +257,13 @@ def test_liveness_uses_only_documented_argo_get_endpoints():
 
     def liveness_request(method, url, **kwargs):
         calls.append((method, url, kwargs))
+        _assert_liveness_argo_request(
+            method,
+            url,
+            kwargs,
+            api_url="https://argo.example",
+            token="workload-readonly",
+        )
         return {"items": []}
 
     report = brand_kit_workflow_liveness.run_liveness(
@@ -266,6 +273,11 @@ def test_liveness_uses_only_documented_argo_get_endpoints():
     )
 
     assert report["status"] == "stale"
+    _assert_liveness_argo_contract(
+        calls,
+        api_url="https://argo.example",
+        token="workload-readonly",
+    )
     assert calls == [
         (
             "GET",
@@ -278,6 +290,111 @@ def test_liveness_uses_only_documented_argo_get_endpoints():
         )
         for target in brand_kit_workflow_liveness.TARGETS
     ]
+
+
+def _assert_liveness_argo_request(method, url, kwargs, *, api_url, token):
+    """Enforce the documented, read-only Argo API boundary for liveness."""
+    assert method == "GET"
+
+    expected_origin = urlsplit(api_url)
+    parsed = urlsplit(url)
+    assert (parsed.scheme, parsed.netloc) == (
+        expected_origin.scheme,
+        expected_origin.netloc,
+    )
+    assert parsed.username is None
+    assert parsed.password is None
+    assert not parsed.fragment
+    assert parsed.path == "/api/v1/workflows/argo-workflows"
+
+    query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    assert set(query) == {"labelSelector", "limit"}
+    assert len(query["labelSelector"]) == 1
+    template = query["labelSelector"][0].removeprefix(
+        "workflows.argoproj.io/workflow-template="
+    )
+    assert template in {
+        target["workflow_template"] for target in brand_kit_workflow_liveness.TARGETS
+    }
+    assert query["labelSelector"] == [
+        f"workflows.argoproj.io/workflow-template={template}"
+    ]
+    assert query["limit"] == ["100"]
+    assert kwargs == {
+        "token": token,
+        "authorization_scheme": "Bearer",
+        "service": "Argo API",
+    }
+
+
+def _assert_liveness_argo_contract(calls, *, api_url, token):
+    assert calls, "the liveness workload should query Argo"
+    assert len(calls) == len(brand_kit_workflow_liveness.TARGETS)
+    for method, url, kwargs in calls:
+        _assert_liveness_argo_request(
+            method,
+            url,
+            kwargs,
+            api_url=api_url,
+            token=token,
+        )
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "token"),
+    [
+        (
+            "POST",
+            _argo_workflow_list_url("brand-kit-workflow-liveness"),
+            "workload-readonly",
+        ),
+        (
+            "PATCH",
+            _argo_workflow_list_url("brand-kit-workflow-liveness"),
+            "workload-readonly",
+        ),
+        (
+            "PUT",
+            _argo_workflow_list_url("brand-kit-workflow-liveness"),
+            "workload-readonly",
+        ),
+        (
+            "DELETE",
+            _argo_workflow_list_url("brand-kit-workflow-liveness"),
+            "workload-readonly",
+        ),
+        (
+            "GET",
+            "https://argo.example/api/v1/workflows/other-namespace?labelSelector=x&limit=100",
+            "workload-readonly",
+        ),
+        (
+            "GET",
+            _argo_workflow_list_url("brand-kit-workflow-liveness") + "&unexpected=true",
+            "workload-readonly",
+        ),
+        (
+            "GET",
+            _argo_workflow_list_url("brand-kit-workflow-liveness"),
+            "wrong-credential",
+        ),
+    ],
+)
+def test_liveness_argo_contract_rejects_unexpected_method_endpoint_or_credential(
+    method, url, token
+):
+    with pytest.raises(AssertionError):
+        _assert_liveness_argo_request(
+            method,
+            url,
+            {
+                "token": token,
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+            },
+            api_url="https://argo.example",
+            token="workload-readonly",
+        )
 
 
 def test_consumer_audit_uses_only_the_documented_forgejo_release_get(monkeypatch):
