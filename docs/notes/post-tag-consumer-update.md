@@ -356,7 +356,103 @@ GitHub Release object; Forgejo is the sole release record.
    `STALE`, upload `avatars/github-460.png` by hand at *Settings → Public
    profile → Edit avatar*, then re-run both commands.
 
-6. **Record the verification** in this repo's `CHANGELOG.md` under the release,
+6. **Reconcile X and LinkedIn profile media (owner upload only).** The detector
+   is deliberately read-only: it discovers the current public CDN URL and
+   compares the bytes served there, but it never receives or uses X/LinkedIn
+   cookies, passwords, API tokens, or browser sessions. Use the exact source
+   path named by the stale check; do not upload a copy from a consumer
+   checkout, and do not switch to `main` while repairing a fixed release tag.
+
+   The monitored profile surfaces and their owner controls are:
+
+   | Profile | Surface | Upload this release asset | Public page checked |
+   |---|---|---|---|
+   | X `@jedardencodes` | X profile avatar (profile photo) | `avatars/x-400.png` | `https://x.com/jedardencodes` |
+   | X `@jedardencodes` | X profile header (banner) | `banners/x-header-1500x500.png` | `https://x.com/jedardencodes` |
+   | LinkedIn personal `jed-arden` | LinkedIn personal profile picture | `avatars/linkedin-400.png` | `https://www.linkedin.com/in/jed-arden/` |
+   | LinkedIn personal `jed-arden` | LinkedIn personal banner (background) | `banners/linkedin-personal-1584x396.png` | `https://www.linkedin.com/in/jed-arden/` |
+   | LinkedIn Page `runsybil` | LinkedIn company profile picture (logo) | `avatars/linkedin-400.png` | `https://www.linkedin.com/company/runsybil/` |
+   | LinkedIn Page `runsybil` | LinkedIn company banner (background) | `banners/linkedin-company-1128x191.png` | `https://www.linkedin.com/company/runsybil/` |
+
+   Upload one profile at a time in an owner-controlled browser. The provider's
+   labels can move, so use the current official help flow if a label differs:
+   [X profile customization](https://help.x.com/articles/166743), [X upload
+   troubleshooting](https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo),
+   [LinkedIn personal photo](https://www.linkedin.com/help/linkedin/answer/a541850),
+   [LinkedIn personal cover](https://www.linkedin.com/help/linkedin/answer/a568217),
+   [LinkedIn Page logo](https://www.linkedin.com/help/linkedin/answer/a1399545/change-the-logo-image-for-your-linkedin-page-or-showcase-page?lang=en),
+   and [LinkedIn Page cover](https://www.linkedin.com/help/linkedin/answer/a7433061).
+
+   - **X:** Sign in at `x.com`, open the `@jedardencodes` profile, choose
+     *Edit profile*, and use the camera controls for the profile photo and
+     header. Select the two files from the table, apply the crop only as
+     needed, and click *Save*. X's documented recommendations are 400×400 for
+     the profile photo, 1500×500 for the header, and 2 MiB maximum for a
+     profile photo; this repository's files are already preflighted, so do not
+     re-export them during remediation.
+   - **LinkedIn personal:** Sign in to the personal account, choose *Me → View
+     profile*, then edit the profile photo from the introduction section and
+     the background photo from the camera/edit control at the top-right of the
+     introduction section. Upload the two personal files from the table and
+     save each change. Do not accidentally edit the Page or change the photo's
+     visibility while repairing media drift.
+   - **LinkedIn Page:** Switch to the `runsybil` Page's super-admin view, not
+     the personal profile. Use *Edit Page → Page info* to replace the logo,
+     then use the Page cover/background edit control to replace the banner.
+     The Page account must have the required admin role; if the control is not
+     available, stop and hand off to a Page super admin rather than sharing a
+     credential or trying an API token.
+
+   **Credential boundary:** only the owner performs these browser uploads with
+   the provider's normal sign-in, password manager, and MFA. The scheduled
+   detector has no X or LinkedIn secret and must remain public-GET-only. The
+   `FORGEJO_TOKEN` used by the release audit is read-only release-record access;
+   it cannot upload profile media and must never be copied into a browser,
+   shell command, report, screenshot, or handoff. Never put a provider cookie,
+   password, recovery code, or API token in this repository or an Argo Secret.
+
+   **Post-upload CDN verification:** keep the tag and the source file fixed,
+   wait at least five minutes, then rerun the detector with a new report path:
+
+   ```bash
+   AFTER="/tmp/brand-kit-consumer-drift-${VERSION}-after-profile-upload.json"
+   .venv/bin/python tools/consumer_drift.py \
+     --release-tag "$VERSION" --site "$SITE" --json --report "$AFTER"
+   ```
+
+   Exit `0` is the required completion signal. For every repaired profile
+   check, the JSON must be `status: "current"`; the detector has fetched the
+   public profile page, discovered the new rotating `media_url` on the
+   provider CDN (`pbs.twimg.com` for X or `media.licdn.com` for LinkedIn),
+   fetched that URL with no-cache headers, and compared the served image to the
+   release source. The human output also prints an
+   `ACTION` line with the source, profile, and observed CDN URL when a stale
+   media check remains. Save the before/after report paths in the handoff, but
+   do not attach credentials or private screenshots.
+
+   **Failure handling and stale-media handoff:** an upload rejection is a
+   provider-side failure, not permission to edit the brand asset. Confirm the
+   file path, dimensions, supported format, and provider size limit; retry the
+   same upload once from the official web/app flow. If the save succeeds but
+   the public page still exposes the old CDN URL, wait and rerun the same
+   command up to three times at 5, 15, and 30 minutes; the detector's
+   no-cache request is the verification authority. If the page exposes no CDN
+   URL, the fetch is unavailable, the account is wrong, or the admin control is
+   missing, stop: that is `indeterminate`, not current, and requires the owner
+   or Page super admin to resolve access/provider availability. Do not perform
+   blind repeated uploads, change the release tag, or treat a logged-in view as
+   proof of public CDN freshness.
+
+   For an unresolved `stale` or `indeterminate` result, hand off this exact
+   information to the owner: release tag; profile URL; stale surface and
+   release source path; report path; exit code; `media_url` (if present);
+   `observed_sha256`, `observed_size`, `mean_luma`, and the detector `reason`.
+   The report is actionable without secrets: it identifies the upload target,
+   the source file, and the public CDN object that still needs verification.
+   Resume only after the owner resolves the provider/access issue, then rerun
+   the same fixed-tag audit and require all configured checks to be PASS.
+
+7. **Record the verification** in this repo's `CHANGELOG.md` under the release,
    date and result, mirroring v1.0.0's "Verified" section. The last-verified
    date for the avatar is otherwise folklore (its previous entry was
    2026-07-20 in plan.md, with nothing since).

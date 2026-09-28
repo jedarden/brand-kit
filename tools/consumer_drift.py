@@ -796,6 +796,13 @@ def _render_human(report: dict[str, Any]) -> None:
         detail = check.get("reason", "")
         suffix = f" — {detail}" if detail else ""
         print(f"{status:11} {label} @ {location}{suffix}")
+        if status == "STALE" and check.get("media_url"):
+            print(
+                "ACTION      upload "
+                f"{check.get('source', '<release asset>')} to {check.get('consumer', '<profile>')} "
+                "with the owner runbook, then rerun this audit; "
+                f"observed CDN URL: {check['media_url']}"
+            )
     for error in report.get("errors", []):
         print(f"ERROR       {error}")
     out_of_scope = report.get("coverage", {}).get("out_of_scope", [])

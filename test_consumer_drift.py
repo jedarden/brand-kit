@@ -94,6 +94,69 @@ def test_live_asset_page_without_media_is_indeterminate(tmp_path):
     assert "did not expose media" in checks[0]["reason"]
 
 
+def test_stale_profile_media_report_contains_a_cdn_handoff(tmp_path):
+    config = consumer_drift.load_config()
+    profile_rules = [
+        rule
+        for rule in config["live_assets"]
+        if str(rule["consumer"]).startswith(("x.com/", "linkedin.com/"))
+    ]
+    responses = {}
+    stale_media = {}
+    page_markup = {}
+    media_urls = {
+        "X profile avatar": "https://pbs.twimg.com/profile_images/stale_400x400.jpg",
+        "X profile header": "https://pbs.twimg.com/profile_banners/stale/1500x500",
+        "LinkedIn personal profile picture": (
+            "https://media.licdn.com/dms/image/stale/"
+            "profile-displayphoto-scale_200_200/stale"
+        ),
+        "LinkedIn personal banner": (
+            "https://media.licdn.com/dms/image/stale/"
+            "profile-displaybackgroundimage-stale"
+        ),
+        "LinkedIn company profile picture": (
+            "https://media.licdn.com/dms/image/stale/company-logo_200_stale"
+        ),
+        "LinkedIn company banner": (
+            "https://media.licdn.com/dms/image/stale/"
+            "image-scale_191_1128/stale"
+        ),
+    }
+    for rule in profile_rules:
+        page_url = rule["url"]
+        media_url = media_urls[rule["name"]]
+        expected = consumer_drift._expected_image(consumer_drift.ROOT, rule)
+        stale = Image.new("RGB", expected.size, (0, 0, 0))
+        stale_bytes = image_bytes(stale)
+        page_markup[page_url] = page_markup.get(page_url, "") + (
+            f'<meta content="{media_url}">'
+        )
+        responses[media_url] = stale_bytes
+        stale_media[rule["name"]] = media_url
+    responses.update({url: markup.encode() for url, markup in page_markup.items()})
+
+    checks = consumer_drift.audit_live_assets(
+        consumer_drift.ROOT,
+        {"live_assets": profile_rules},
+        fetcher=lambda url, headers=None: responses[url],
+    )
+
+    assert {check["asset"] for check in checks} == stale_media.keys()
+    for check in checks:
+        assert check["status"] == "stale"
+        assert check["consumer"] in {
+            "x.com/jedardencodes",
+            "linkedin.com/in/jed-arden",
+            "linkedin.com/company/runsybil",
+        }
+        assert check["source"]
+        assert check["url"].startswith("https://")
+        assert check["media_url"] == stale_media[check["asset"]]
+        assert len(check["observed_sha256"]) == 64
+        assert check["reason"]
+
+
 def make_root(tmp_path):
     root = tmp_path / "brand-kit"
     (root / "source").mkdir(parents=True)
@@ -1366,6 +1429,35 @@ def test_release_checklist_runs_site_favicon_generator_before_commit():
     assert 'cd -- "$SITE" || exit' in workflow
     assert workflow.index(sync) < workflow.index(generate) < workflow.index(commit)
     assert workflow.index(commit) < workflow.index(push) < workflow.index(detect)
+
+
+def test_profile_media_runbook_covers_every_monitored_surface_and_safe_handoff():
+    document = Path("docs/notes/post-tag-consumer-update.md").read_text(
+        encoding="utf-8"
+    )
+    config = consumer_drift.load_config()
+    profile_rules = [
+        rule
+        for rule in config["live_assets"]
+        if str(rule["consumer"]).startswith(("x.com/", "linkedin.com/"))
+    ]
+
+    assert "Reconcile X and LinkedIn profile media" in document
+    assert "Credential boundary" in document
+    assert "Post-upload CDN verification" in document
+    assert "stale-media handoff" in document
+    assert "--json --report \"$AFTER\"" in document
+    assert "no-cache" in document
+    assert "pbs.twimg.com" in document
+    assert "media.licdn.com" in document
+    assert "FORGEJO_TOKEN` used by the release audit is read-only" in document
+    assert "provider cookie" in document
+    assert "blind repeated uploads" in document
+    for rule in profile_rules:
+        assert rule["name"] in document
+        assert rule["consumer"] in document
+        assert rule["source"] in document
+        assert rule["url"] in document
 
 
 def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
