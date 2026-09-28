@@ -512,6 +512,11 @@ def write_attestations(
     ci_failure_watch_report.validate_report(report)
     if watcher_workflow_uid is None:
         raise release_publish.ReleaseError("durable attestation output requires the watcher workflow UID")
+    report_watcher_uid = report.get("watcher_workflow_uid")
+    if report_watcher_uid is not None and report_watcher_uid != watcher_workflow_uid:
+        raise release_publish.ReleaseError(
+            "durable attestation watcher UID does not match the producing workflow"
+        )
     document: dict[str, Any] = {
         "schema": ATTESTATION_SCHEMA,
         "attestations": report.get("attestations", []),

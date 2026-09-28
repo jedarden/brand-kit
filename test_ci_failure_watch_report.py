@@ -11,6 +11,7 @@ import yaml
 
 from tools import brand_kit_ci_failure_watch
 from tools import ci_failure_watch_report
+from tools import release_publish
 
 
 ROOT = Path(__file__).resolve().parent
@@ -62,6 +63,114 @@ def test_durable_attestation_fixture_satisfies_both_contracts(attestations_valid
     document = _fixture("attestations.json")
     assert list(attestations_validator.iter_errors(document)) == []
     assert ci_failure_watch_report.validate_attestations(document) is document
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda document: document.pop("schema"),
+        lambda document: document.pop("watcher_workflow_uid"),
+        lambda document: document.pop("attestations"),
+        lambda document: document.update(unexpected=True),
+        lambda document: document["attestations"][0].pop("finished_at"),
+        lambda document: document["attestations"][0].update(
+            finished_at="2026-09-27T12:45:00+00:00"
+        ),
+        lambda document: document["attestations"][0].update(unexpected=True),
+    ),
+)
+def test_durable_attestation_schema_rejects_missing_unknown_and_non_utc_fields(
+    mutate, attestations_validator
+):
+    document = _fixture("attestations.json")
+    mutate(document)
+
+    assert list(attestations_validator.iter_errors(document))
+    with pytest.raises(ci_failure_watch_report.ReportContractError):
+        ci_failure_watch_report.validate_attestations(document)
+
+
+@pytest.mark.parametrize("field", ("schema", "watcher_workflow_uid", "observed_at", "cutoff"))
+def test_report_schema_requires_attestation_linkage_and_window_metadata(
+    field, report_validator
+):
+    report = _fixture("pass-report.json")
+    report.pop(field)
+
+    assert list(report_validator.iter_errors(report))
+    with pytest.raises(ci_failure_watch_report.ReportContractError):
+        ci_failure_watch_report.validate_report(report)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda report: report["cutoff"].pop("at"),
+        lambda report: report["cutoff"].update(lookback_minutes=119),
+        lambda report: report["cutoff"].update(argo_failure_retention_seconds=7199),
+        lambda report: report["cutoff"].update(at="2026-09-27T11:00:00+00:00"),
+        lambda report: report.update(observed_at="2026-09-27T13:00:00+00:00"),
+    ),
+)
+def test_report_schema_rejects_unsafe_or_non_utc_window_metadata(mutate, report_validator):
+    report = _fixture("pass-report.json")
+    mutate(report)
+
+    assert list(report_validator.iter_errors(report))
+    with pytest.raises(ci_failure_watch_report.ReportContractError):
+        ci_failure_watch_report.validate_report(report)
+
+
+def test_watcher_accepts_an_attestation_at_the_inclusive_cutoff(report_validator):
+    observed_at = datetime.fromisoformat("2026-09-27T13:00:00+00:00")
+    report = brand_kit_ci_failure_watch.run_watch(
+        "watcher-token",
+        now=observed_at,
+        request=lambda *args, **kwargs: {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "brand-kit-ci-at-cutoff",
+                        "uid": "uid-brand-kit-ci-at-cutoff",
+                    },
+                    "status": {
+                        "phase": "Succeeded",
+                        "finishedAt": "2026-09-27T11:00:00Z",
+                        "outputs": {
+                            "parameters": [{"name": "commit", "value": "a" * 40}]
+                        },
+                    },
+                }
+            ]
+        },
+    )
+
+    assert report["cutoff"] == {
+        "at": "2026-09-27T11:00:00Z",
+        "lookback_minutes": 120,
+        "argo_failure_retention_seconds": 7200,
+    }
+    assert len(report["attestations"]) == 1
+    assert list(report_validator.iter_errors(report)) == []
+    assert ci_failure_watch_report.validate_report(report) is report
+
+
+def test_attestation_writer_binds_the_envelope_to_the_producing_watcher(tmp_path):
+    report = _fixture("pass-report.json")
+    watcher_uid = "watcher-producing-workflow"
+    report["watcher_workflow_uid"] = watcher_uid
+    report["attestations_url"] = ci_failure_watch_report.attestation_url(watcher_uid)
+    path = tmp_path / "attestations.json"
+
+    brand_kit_ci_failure_watch.write_attestations(
+        report, path, watcher_workflow_uid=watcher_uid
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["watcher_workflow_uid"] == watcher_uid
+    with pytest.raises(release_publish.ReleaseError, match="producing workflow"):
+        brand_kit_ci_failure_watch.write_attestations(
+            report, path, watcher_workflow_uid="another-watcher"
+        )
 
 
 @pytest.mark.parametrize(

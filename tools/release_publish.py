@@ -45,6 +45,9 @@ CI_ATTESTATION_OBJECT_PATTERN = re.compile(
     rf"^{re.escape(CI_ATTESTATION_PREFIX)}"
     rf"(?P<watcher_uid>[A-Za-z0-9][A-Za-z0-9._-]{{0,127}})/attestations\.json$"
 )
+CI_ATTESTATION_TIMESTAMP_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
+)
 TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 CHANGELOG_HEADING_PATTERN = re.compile(
@@ -1081,8 +1084,12 @@ def _attestation_timestamp(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ReleaseError("CI attestation finished_at is missing")
     normalized = value.strip()
-    if normalized.endswith("Z"):
-        normalized = f"{normalized[:-1]}+00:00"
+    if not CI_ATTESTATION_TIMESTAMP_PATTERN.fullmatch(normalized):
+        raise ReleaseError(
+            "CI attestation finished_at must be a UTC ISO-8601 timestamp ending in Z "
+            "(timezone required)"
+        )
+    normalized = f"{normalized[:-1]}+00:00"
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as error:
@@ -1102,14 +1109,7 @@ def validate_ci_attestation(
         raise ReleaseError(f"release commit is not a full object ID: {release_commit!r}")
     if not isinstance(record, dict):
         raise ReleaseError("CI attestation is not an object")
-    allowed_fields = {
-        "commit",
-        "workflow_name",
-        "workflow_uid",
-        "phase",
-        "finished_at",
-        "schema",
-    }
+    allowed_fields = {"commit", "workflow_name", "workflow_uid", "phase", "finished_at"}
     unexpected_fields = sorted(set(record) - allowed_fields)
     if unexpected_fields:
         raise ReleaseError(
@@ -1121,6 +1121,8 @@ def validate_ci_attestation(
     commit = record.get("commit")
     if not isinstance(commit, str) or not OBJECT_ID_PATTERN.fullmatch(commit):
         raise ReleaseError("CI attestation commit is not a full object ID")
+    if commit != commit.lower():
+        raise ReleaseError("CI attestation commit must be lowercase")
     if commit.lower() != release_commit.lower():
         raise ReleaseError(
             f"CI attestation commits {commit.lower()} but release expects {release_commit.lower()}"
@@ -1129,7 +1131,7 @@ def validate_ci_attestation(
     if not isinstance(workflow_uid, str) or not WORKFLOW_UID_PATTERN.fullmatch(workflow_uid):
         raise ReleaseError("CI attestation workflow_uid is malformed")
     workflow_name = record.get("workflow_name")
-    if not isinstance(workflow_name, str):
+    if not isinstance(workflow_name, str) or not WORKFLOW_NAME_PATTERN.fullmatch(workflow_name):
         raise ReleaseError("CI attestation workflow_name is missing")
     try:
         normalized_workflow_name = argo_run_name(workflow_name)

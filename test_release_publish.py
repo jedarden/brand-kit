@@ -856,7 +856,7 @@ def test_argo_attestation_uses_the_durable_record_after_workflow_reaping(monkeyp
             "watcher_workflow_uid": "watcher-uid",
             "attestations": [
                 {
-                    "commit": COMMIT.upper(),
+                    "commit": COMMIT,
                     "workflow_name": "brand-kit-ci-abc123",
                     "workflow_uid": "brand-kit-ci-uid",
                     "phase": "Succeeded",
@@ -883,6 +883,52 @@ def test_argo_attestation_uses_the_durable_record_after_workflow_reaping(monkeyp
         attestation_url,
     ]
     assert calls[1][2] is None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda record: record.update(schema=release_publish.CI_ATTESTATION_SCHEMA),
+        lambda record: record.update(finished_at="2026-09-27T12:30:00+00:00"),
+        lambda record: record.update(commit=COMMIT.upper()),
+    ),
+)
+def test_release_consumer_fails_closed_on_schema_invalid_durable_attestation(
+    monkeypatch, mutate
+):
+    attestation_url = (
+        "https://s3.ardenone.com/needle-ci-artifacts/attestations/"
+        "brand-kit-ci/v1/watcher-uid/attestations.json"
+    )
+    document = {
+        "schema": release_publish.CI_ATTESTATION_SCHEMA,
+        "watcher_workflow_uid": "watcher-uid",
+        "attestations": [
+            {
+                "commit": COMMIT,
+                "workflow_name": "brand-kit-ci-abc123",
+                "workflow_uid": "brand-kit-ci-uid",
+                "phase": "Succeeded",
+                "finished_at": "2026-09-27T12:30:00Z",
+            }
+        ],
+    }
+    mutate(document["attestations"][0])
+
+    def request(method, url, **kwargs):
+        if "/workflows/" in url:
+            raise release_publish.HttpFailure(404, "workflow reaped", service="Argo API")
+        return document
+
+    monkeypatch.setattr(release_publish, "request_json", request)
+
+    with pytest.raises(release_publish.ReleaseError, match="record 0 is invalid"):
+        release_publish.attest_argo_ci_run(
+            "brand-kit-ci/brand-kit-ci-abc123",
+            COMMIT,
+            token=ARGO_READ_TOKEN,
+            attestation_url=attestation_url,
+        )
 
 
 def test_durable_attestation_requires_the_exact_workflow_when_commits_repeat(monkeypatch):
