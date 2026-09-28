@@ -35,6 +35,11 @@ ALLOWED_SUFFIXES = {".yml", ".yaml"}
 ARGO_API_VERSION = "argoproj.io/v1alpha1"
 WORKFLOW_NAMESPACE = "argo-workflows"
 WORKFLOW_SERVICE_ACCOUNT = "argo-workflow"
+WORKFLOW_TEMPLATE_SERVICE_ACCOUNTS = {
+    "brand-kit-ci-failure-watch": "brand-kit-ci-failure-watch",
+    "brand-kit-workflow-liveness": "brand-kit-workflow-liveness",
+    "brand-kit-consumer-drift": "brand-kit-consumer-drift",
+}
 PARITY_WORKFLOW_NAME = "brand-kit-forgejo-github-parity"
 APPLICATION_NAME = "brand-kit-automation-iad-ci"
 APPLICATION_NAMESPACE = "argocd"
@@ -409,11 +414,14 @@ def _check_manifest_shape(manifest: Manifest) -> list[str]:
         return errors + [_path_error(path, "spec must be an object")]
 
     if kind == "WorkflowTemplate":
-        if spec.get("serviceAccountName") != WORKFLOW_SERVICE_ACCOUNT:
+        expected_service_account = WORKFLOW_TEMPLATE_SERVICE_ACCOUNTS.get(
+            name, WORKFLOW_SERVICE_ACCOUNT
+        )
+        if spec.get("serviceAccountName") != expected_service_account:
             errors.append(
                 _path_error(
                     path,
-                    f"spec.serviceAccountName must be {WORKFLOW_SERVICE_ACCOUNT!r}",
+                    f"spec.serviceAccountName must be {expected_service_account!r}",
                 )
             )
         deadline = spec.get("activeDeadlineSeconds")

@@ -13,7 +13,7 @@ metadata:
 spec:
   entrypoint: watch
   onExit: route-ci-failure-watch
-  serviceAccountName: argo-workflow
+  serviceAccountName: brand-kit-ci-failure-watch
   activeDeadlineSeconds: 600
   templates:
     - name: watch

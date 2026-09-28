@@ -108,7 +108,12 @@
                   "type": "string"
                 },
                 "serviceAccountName": {
-                  "const": "argo-workflow"
+                  "enum": [
+                    "argo-workflow",
+                    "brand-kit-ci-failure-watch",
+                    "brand-kit-workflow-liveness",
+                    "brand-kit-consumer-drift"
+                  ]
                 },
                 "activeDeadlineSeconds": {
                   "type": "integer",

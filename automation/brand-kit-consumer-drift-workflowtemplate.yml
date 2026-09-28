@@ -11,7 +11,7 @@ spec:
   # Keep the handler best-effort so an Alertmanager outage cannot hide the
   # detector's original non-zero result.
   onExit: route-drift
-  serviceAccountName: argo-workflow
+  serviceAccountName: brand-kit-consumer-drift
   activeDeadlineSeconds: 1800
   arguments:
     parameters:

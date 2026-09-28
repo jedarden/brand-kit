@@ -25,8 +25,8 @@ through `controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure` in
 The token comes from Secret `brand-kit-workflow-readonly` in namespace
 `argo-workflows`, delivered by the same-named ExternalSecret; it is not the
 release operator's `ARGO_TOKEN` from `brand-kit-release-tokens`. The watcher
-runs as service account `argo-workflow` and calls only the Argo Workflow list
-and detail `GET` endpoints. See
+runs as dedicated service account `brand-kit-ci-failure-watch` and calls only
+the Argo Workflow list and detail `GET` endpoints. See
 [`argo-credential-separation.md`](argo-credential-separation.md) for the full
 role map and the submit/mutation boundary.
 The watcher contract requires its lookback to cover that full retention window,

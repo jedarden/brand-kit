@@ -7,9 +7,14 @@ from tools import brand_kit_ci_failure_watch, brand_kit_workflow_liveness, consu
 
 ROOT = Path(__file__).parent
 WORKFLOW_NAMESPACE = "argo-workflows"
-WORKFLOW_SERVICE_ACCOUNT = "argo-workflow"
 WORKFLOW_SECRET = "brand-kit-workflow-readonly"
 RELEASE_SECRET = "brand-kit-release-tokens"
+
+WORKLOAD_SERVICE_ACCOUNTS = {
+    "brand-kit-ci-failure-watch-workflowtemplate.yml": "brand-kit-ci-failure-watch",
+    "brand-kit-workflow-liveness-workflowtemplate.yml": "brand-kit-workflow-liveness",
+    "brand-kit-consumer-drift-workflowtemplate.yml": "brand-kit-consumer-drift",
+}
 
 
 def _manifest(filename):
@@ -23,6 +28,42 @@ def _container_env(manifest, template_name):
 
 def _env_by_name(env):
     return {item["name"]: item for item in env}
+
+
+def _secret_ref_names(value):
+    names = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"secretKeyRef", "accessKeySecret", "secretKeySecret"}:
+                if isinstance(child, dict) and "name" in child:
+                    names.add(child["name"])
+            names.update(_secret_ref_names(child))
+    elif isinstance(value, list):
+        for child in value:
+            names.update(_secret_ref_names(child))
+    return names
+
+
+def test_each_workload_references_only_its_namespaced_secret_allow_list():
+    expected = {
+        "brand-kit-ci-failure-watch-workflowtemplate.yml": {
+            "brand-kit-workflow-readonly",
+            "needle-ci-artifact-reader",
+            "needle-ci-artifact-publisher",
+        },
+        "brand-kit-workflow-liveness-workflowtemplate.yml": {
+            "brand-kit-workflow-readonly",
+            "needle-ci-artifact-publisher",
+        },
+        "brand-kit-consumer-drift-workflowtemplate.yml": {
+            "brand-kit-consumer-drift",
+            "needle-ci-artifact-reader",
+            "needle-ci-artifact-publisher",
+        },
+    }
+
+    for filename, allowed in expected.items():
+        assert _secret_ref_names(_manifest(filename)) == allowed
 
 
 def test_watch_workloads_use_only_the_dedicated_readonly_secret():
@@ -40,7 +81,7 @@ def test_watch_workloads_use_only_the_dedicated_readonly_secret():
     for filename, template_name in manifests:
         manifest = _manifest(filename)
         assert manifest["metadata"]["namespace"] == WORKFLOW_NAMESPACE
-        assert manifest["spec"]["serviceAccountName"] == WORKFLOW_SERVICE_ACCOUNT
+        assert manifest["spec"]["serviceAccountName"] == WORKLOAD_SERVICE_ACCOUNTS[filename]
         env = _env_by_name(_container_env(manifest, template_name))
         workload_token = env["ARGO_WORKFLOW_TOKEN"]
         assert workload_token["valueFrom"]["secretKeyRef"] == {
@@ -61,7 +102,9 @@ def test_watch_workloads_use_only_the_dedicated_readonly_secret():
 def test_consumer_audit_uses_its_external_secret_and_no_operator_argo_token():
     manifest = _manifest("brand-kit-consumer-drift-workflowtemplate.yml")
     assert manifest["metadata"]["namespace"] == WORKFLOW_NAMESPACE
-    assert manifest["spec"]["serviceAccountName"] == WORKFLOW_SERVICE_ACCOUNT
+    assert manifest["spec"]["serviceAccountName"] == WORKLOAD_SERVICE_ACCOUNTS[
+        "brand-kit-consumer-drift-workflowtemplate.yml"
+    ]
     env = _env_by_name(_container_env(manifest, "audit"))
     assert env["FORGEJO_TOKEN"]["valueFrom"]["secretKeyRef"] == {
         "name": "brand-kit-consumer-drift",
@@ -142,6 +185,9 @@ def test_documentation_names_every_credential_boundary():
         "ARGO_TOKEN",
         "ARGO_SUBMIT_TOKEN",
         "argo-workflows",
+        "brand-kit-ci-failure-watch",
+        "brand-kit-workflow-liveness",
+        "brand-kit-consumer-drift",
         "argo-workflow",
         "https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows",
         "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases?limit=1",

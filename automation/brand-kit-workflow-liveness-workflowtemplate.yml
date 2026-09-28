@@ -8,7 +8,7 @@ metadata:
 spec:
   entrypoint: check
   onExit: route-liveness
-  serviceAccountName: argo-workflow
+  serviceAccountName: brand-kit-workflow-liveness
   activeDeadlineSeconds: 600
   templates:
     - name: check
