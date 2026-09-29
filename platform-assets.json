@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "upload_constraints": {
     "formats": [
       "PNG",
@@ -13,67 +13,80 @@
     {
       "platform": "X / Twitter",
       "source_url": "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": null
     },
     {
       "platform": "LinkedIn (personal)",
       "source_url": "https://www.linkedin.com/help/linkedin/answer/a549049",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "7a5fdf78ddd0c7333d815963b43bca8834d6d842a75d4c67f3b3244e1c7558ab"
     },
     {
       "platform": "LinkedIn (company)",
       "source_url": "https://www.linkedin.com/help/linkedin/answer/a417335",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "86b64ea231db64f5217330cca6d1274a541e309baa90e97c44e25659dfc3a8bc"
     },
     {
       "platform": "GitHub",
       "source_url": "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "3fee048e3f3bfc61210601b7f95d69fb29bbc67b10f65fc6a4753eaf5fc1103d"
     },
     {
       "platform": "Instagram",
       "source_url": "https://help.instagram.com/",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "a78cebc44214256ba361dcee3f1cc1408e55ea6940c65067615abd4fdcc2d788"
     },
     {
       "platform": "Threads",
       "source_url": "https://help.instagram.com/",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "a78cebc44214256ba361dcee3f1cc1408e55ea6940c65067615abd4fdcc2d788"
     },
     {
       "platform": "Facebook",
       "source_url": "https://www.facebook.com/help/163248423739693",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "1f41aee803daa2965f2f601c1829f28623c4c55737be67c090da211247bc9149"
     },
     {
       "platform": "YouTube",
       "source_url": "https://support.google.com/youtube/answer/10456525?hl=en",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "b0f17488973bc0fbfc97bedb8e11a217165d9f537146d3d4f8bc72f2501554c1"
     },
     {
       "platform": "TikTok",
       "source_url": "https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "c3dd7b78df5d94e0790c66f708029445c1560b603fb43a7bebe280c989589ef2"
     },
     {
       "platform": "Mastodon",
       "source_url": "https://docs.joinmastodon.org/user/profile/",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "94f98d792eb6e4a3b72aea49557b22a304ae4f0298da7c306a8df7838e6a23fa"
     },
     {
       "platform": "Bluesky",
       "source_url": "https://docs.bsky.app/docs/api/app-bsky-actor-profile",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "38fe12958dd10cbeb39a5d1fc38780ce8139696ae903ecdd7cd75625a20b0c77"
     },
     {
       "platform": "Discord",
       "source_url": "https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "1b36a6eca32632756a2915d635ed7aaab937d5a585d2c0872e90be1b72565c32"
     },
     {
       "platform": "Web / Open Graph",
       "source_url": "https://ogp.me/",
-      "last_verified": "2026-09-27"
+      "last_verified": "2026-09-28",
+      "source_content_sha256": "8369148db254a5e894e86380d9eb39aaa317ece52651b53562b307208891db5c"
     }
   ],
   "assets": [
@@ -250,10 +263,10 @@
     {
       "platform": "Mastodon",
       "role": "banner",
-      "path": "banners/open-graph-1200x630.png",
+      "path": "banners/mastodon-header-1500x500.png",
       "dimensions": {
-        "width": 1200,
-        "height": 630
+        "width": 1500,
+        "height": 500
       },
       "source": "source/hero.png"
     },
@@ -412,6 +425,404 @@
         "height": 628
       },
       "source": "source/hero.png"
+    }
+  ],
+  "requirement_evidence": [
+    {
+      "platform": "X / Twitter",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "classification": "recommendation",
+      "source_url": "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo",
+      "source_content_sha256": null,
+      "evidence": "The first-party guidance labels 400\u00d7400 px as the recommended profile image size."
+    },
+    {
+      "platform": "X / Twitter",
+      "role": "banner",
+      "dimensions": {
+        "width": 1500,
+        "height": 500
+      },
+      "classification": "recommendation",
+      "source_url": "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo",
+      "source_content_sha256": null,
+      "evidence": "The first-party guidance labels 1500\u00d7500 px as the recommended header image size."
+    },
+    {
+      "platform": "LinkedIn (personal)",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "classification": "upload_minimum",
+      "source_url": "https://www.linkedin.com/help/linkedin/answer/a549049",
+      "source_content_sha256": "7a5fdf78ddd0c7333d815963b43bca8834d6d842a75d4c67f3b3244e1c7558ab",
+      "evidence": "The source accepts profile photos from 400\u00d7400 px; this export meets the stated minimum."
+    },
+    {
+      "platform": "LinkedIn (personal)",
+      "role": "banner",
+      "dimensions": {
+        "width": 1584,
+        "height": 396
+      },
+      "classification": "recommendation",
+      "source_url": "https://www.linkedin.com/help/linkedin/answer/a549049",
+      "source_content_sha256": "7a5fdf78ddd0c7333d815963b43bca8834d6d842a75d4c67f3b3244e1c7558ab",
+      "evidence": "The source recommends a 1584\u00d7396 px background photo."
+    },
+    {
+      "platform": "LinkedIn (company)",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "classification": "recommendation",
+      "source_url": "https://www.linkedin.com/help/linkedin/answer/a570368",
+      "source_content_sha256": "e374edacd71ad0bcd509e3d3f3b6ed69d43640b70310985b0f29720c390cd2bf",
+      "evidence": "The Page logo table gives 268\u00d7268 px as minimum and 400\u00d7400 px as recommended."
+    },
+    {
+      "platform": "LinkedIn (company)",
+      "role": "banner",
+      "dimensions": {
+        "width": 1128,
+        "height": 191
+      },
+      "classification": "specified_size",
+      "source_url": "https://www.linkedin.com/help/linkedin/answer/a417335",
+      "source_content_sha256": "86b64ea231db64f5217330cca6d1274a541e309baa90e97c44e25659dfc3a8bc",
+      "evidence": "The Landing Pages table specifies a 1128\u00d7191 px cover image."
+    },
+    {
+      "platform": "GitHub",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 460,
+        "height": 460
+      },
+      "classification": "within_limits",
+      "source_url": "https://docs.github.com/en/account-and-profile/reference/profile-reference",
+      "source_content_sha256": "d45f8dfbffb5b562be8580288f7e6fbe147df4bf4229b71cad389970ef2964d6",
+      "evidence": "The profile guide caps images below 3000\u00d73000 px and recommends about 500\u00d7500; 460\u00d7460 is the selected square export within the cap."
+    },
+    {
+      "platform": "GitHub",
+      "role": "banner",
+      "dimensions": {
+        "width": 1280,
+        "height": 640
+      },
+      "classification": "specified_size",
+      "source_url": "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview",
+      "source_content_sha256": "3fee048e3f3bfc61210601b7f95d69fb29bbc67b10f65fc6a4753eaf5fc1103d",
+      "evidence": "The repository social-preview guidance specifies the 1280\u00d7640 px image target."
+    },
+    {
+      "platform": "Instagram",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 320,
+        "height": 320
+      },
+      "classification": "project_choice",
+      "source_url": "https://help.instagram.com/",
+      "source_content_sha256": "a78cebc44214256ba361dcee3f1cc1408e55ea6940c65067615abd4fdcc2d788",
+      "evidence": "The linked Help Center landing page states no numeric avatar dimensions; 320\u00d7320 is the kit's square export choice."
+    },
+    {
+      "platform": "Threads",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 320,
+        "height": 320
+      },
+      "classification": "project_choice",
+      "source_url": "https://help.instagram.com/",
+      "source_content_sha256": "a78cebc44214256ba361dcee3f1cc1408e55ea6940c65067615abd4fdcc2d788",
+      "evidence": "The linked Help Center landing page states no numeric avatar dimensions; 320\u00d7320 is the kit's square export choice."
+    },
+    {
+      "platform": "Facebook",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 320,
+        "height": 320
+      },
+      "classification": "upload_minimum",
+      "source_url": "https://www.facebook.com/help/163248423739693",
+      "source_content_sha256": "1f41aee803daa2965f2f601c1829f28623c4c55737be67c090da211247bc9149",
+      "evidence": "Facebook's profile-photo guidance says at least 320\u00d7320 px for best quality."
+    },
+    {
+      "platform": "Facebook",
+      "role": "banner",
+      "dimensions": {
+        "width": 851,
+        "height": 315
+      },
+      "classification": "project_choice",
+      "source_url": "https://www.facebook.com/help/193629617349922/",
+      "source_content_sha256": "b213e8dee7eb785421df56c0a49e5fce32b2e6bcfb13613d3e3916c634e232fc",
+      "evidence": "The linked help article covers profile and cover photos but publishes no cover dimensions; the 851\u00d7315 export and its 2\u00d7 derivative are kit choices."
+    },
+    {
+      "platform": "Facebook",
+      "role": "banner",
+      "dimensions": {
+        "width": 1702,
+        "height": 630
+      },
+      "classification": "project_choice",
+      "source_url": "https://www.facebook.com/help/193629617349922/",
+      "source_content_sha256": "b213e8dee7eb785421df56c0a49e5fce32b2e6bcfb13613d3e3916c634e232fc",
+      "evidence": "The linked help article covers profile and cover photos but publishes no cover dimensions; the 851\u00d7315 export and its 2\u00d7 derivative are kit choices."
+    },
+    {
+      "platform": "YouTube",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 800,
+        "height": 800
+      },
+      "classification": "project_choice",
+      "source_url": "https://support.google.com/youtube/answer/10456525?hl=en",
+      "source_content_sha256": "b0f17488973bc0fbfc97bedb8e11a217165d9f537146d3d4f8bc72f2501554c1",
+      "evidence": "The source documents file limits and a 98\u00d798 rendered size, not an upload dimension; 800\u00d7800 is the kit's square master."
+    },
+    {
+      "platform": "YouTube",
+      "role": "banner",
+      "dimensions": {
+        "width": 2560,
+        "height": 1440
+      },
+      "classification": "recommendation",
+      "source_url": "https://support.google.com/youtube/answer/10456525?hl=en",
+      "source_content_sha256": "b0f17488973bc0fbfc97bedb8e11a217165d9f537146d3d4f8bc72f2501554c1",
+      "evidence": "The source lists 2048\u00d71152 as the upload minimum and 2560\u00d71440 as the recommended size."
+    },
+    {
+      "platform": "TikTok",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 200,
+        "height": 200
+      },
+      "classification": "upload_minimum",
+      "source_url": "https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile",
+      "source_content_sha256": "c3dd7b78df5d94e0790c66f708029445c1560b603fb43a7bebe280c989589ef2",
+      "evidence": "TikTok's profile-photo help states a 20\u00d720 px minimum; this 200\u00d7200 px square exceeds it."
+    },
+    {
+      "platform": "Mastodon",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "classification": "specified_size",
+      "source_url": "https://docs.joinmastodon.org/user/profile/",
+      "source_content_sha256": "94f98d792eb6e4a3b72aea49557b22a304ae4f0298da7c306a8df7838e6a23fa",
+      "evidence": "Mastodon downscales uploaded avatars to 400\u00d7400 px."
+    },
+    {
+      "platform": "Mastodon",
+      "role": "banner",
+      "dimensions": {
+        "width": 1500,
+        "height": 500
+      },
+      "classification": "specified_size",
+      "source_url": "https://docs.joinmastodon.org/user/profile/",
+      "source_content_sha256": "94f98d792eb6e4a3b72aea49557b22a304ae4f0298da7c306a8df7838e6a23fa",
+      "evidence": "Mastodon downscales uploaded profile headers to 1500\u00d7500 px."
+    },
+    {
+      "platform": "Bluesky",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 400,
+        "height": 400
+      },
+      "classification": "project_choice",
+      "source_url": "https://docs.bsky.app/docs/api/app-bsky-actor-profile",
+      "source_content_sha256": "38fe12958dd10cbeb39a5d1fc38780ce8139696ae903ecdd7cd75625a20b0c77",
+      "evidence": "The profile schema exposes an avatar without specifying pixel dimensions; 400\u00d7400 is the kit's square choice."
+    },
+    {
+      "platform": "Bluesky",
+      "role": "banner",
+      "dimensions": {
+        "width": 1200,
+        "height": 628
+      },
+      "classification": "project_choice",
+      "source_url": "https://docs.bsky.app/docs/api/app-bsky-actor-profile",
+      "source_content_sha256": "38fe12958dd10cbeb39a5d1fc38780ce8139696ae903ecdd7cd75625a20b0c77",
+      "evidence": "The profile schema exposes a banner without specifying pixel dimensions; 1200\u00d7628 is a reusable kit choice."
+    },
+    {
+      "platform": "Discord",
+      "role": "profile_picture",
+      "dimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "classification": "project_choice",
+      "source_url": "https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles",
+      "source_content_sha256": "1b36a6eca32632756a2915d635ed7aaab937d5a585d2c0872e90be1b72565c32",
+      "evidence": "The linked profile guide lists accepted avatar types but no pixel size; 512\u00d7512 is the kit's square choice."
+    },
+    {
+      "platform": "Discord",
+      "role": "banner",
+      "dimensions": {
+        "width": 960,
+        "height": 540
+      },
+      "classification": "upload_minimum",
+      "source_url": "https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles",
+      "source_content_sha256": "1b36a6eca32632756a2915d635ed7aaab937d5a585d2c0872e90be1b72565c32",
+      "evidence": "The profile-banner minimum is 680\u00d7240 px; the 960\u00d7540 px export exceeds both minimum dimensions."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 16,
+        "height": 16
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 16\u00d716; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 32,
+        "height": 32
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 32\u00d732; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 48,
+        "height": 48
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 48\u00d748; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 64,
+        "height": 64
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 64\u00d764; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 128,
+        "height": 128
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 128\u00d7128; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 256,
+        "height": 256
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 256\u00d7256; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 192,
+        "height": 192
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 192\u00d7192; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 512,
+        "height": 512
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 512\u00d7512; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "favicon",
+      "dimensions": {
+        "width": 180,
+        "height": 180
+      },
+      "classification": "project_choice",
+      "source_url": "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+      "source_content_sha256": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+      "evidence": "The HTML icon link model does not prescribe 180\u00d7180; this is a project-selected browser/device export size."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "banner",
+      "dimensions": {
+        "width": 1200,
+        "height": 630
+      },
+      "classification": "project_choice",
+      "source_url": "https://ogp.me/",
+      "source_content_sha256": "8369148db254a5e894e86380d9eb39aaa317ece52651b53562b307208891db5c",
+      "evidence": "Open Graph defines an image URL and optional dimensions without mandating pixel dimensions; these are reusable project export sizes."
+    },
+    {
+      "platform": "Web / Open Graph",
+      "role": "banner",
+      "dimensions": {
+        "width": 1200,
+        "height": 628
+      },
+      "classification": "project_choice",
+      "source_url": "https://ogp.me/",
+      "source_content_sha256": "8369148db254a5e894e86380d9eb39aaa317ece52651b53562b307208891db5c",
+      "evidence": "Open Graph defines an image URL and optional dimensions without mandating pixel dimensions; these are reusable project export sizes."
     }
   ]
 }

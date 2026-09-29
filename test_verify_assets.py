@@ -892,11 +892,11 @@ def test_generated_inventory_matches_documented_assets(monkeypatch, tmp_path):
 
     rows, ok = verify_assets.verify_inventory()
 
-    assert len(verify_assets.EXPECTED_ASSETS) == 37
-    assert len(verify_assets.EXPECTED_INVENTORY) == 38
+    assert len(verify_assets.EXPECTED_ASSETS) == 38
+    assert len(verify_assets.EXPECTED_INVENTORY) == 39
     assert ok
     assert rows == [
-        ("asset inventory", "37 derived assets + palette.json", "38 files", "✓")
+        ("asset inventory", "38 derived assets + palette.json", "39 files", "✓")
     ]
 
 

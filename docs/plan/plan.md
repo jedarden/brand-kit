@@ -18,7 +18,7 @@ for banners/covers. `source/logo.png` is preserved provenance, is copied
 byte-for-byte to `logo/logo-original.png`, and may explicitly replace the
 opaque SVG through
 `tools/trace_logo.py`; it is not the source used for normal vector rendering
-and there is no raster fallback. The build produces 37 asset files plus
+and there is no raster fallback. The build produces 38 asset files plus
 `palette.json`. This repository ships two related surfaces: (1) the static
 brand package as committed here, referenced directly by consumers or copied
 into downstream repos, and (2) Argo automation that validates and observes

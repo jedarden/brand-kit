@@ -168,6 +168,7 @@ def test_build_generates_from_authoritative_fixture_sources(
         "upload_constraints": build_assets.PLATFORM_UPLOAD_CONSTRAINTS,
         "platform_requirements": build_assets.PLATFORM_REQUIREMENTS,
         "assets": build_assets.PLATFORM_ASSETS,
+        "requirement_evidence": build_assets.PLATFORM_REQUIREMENT_EVIDENCE,
     }
     assert not (asset_fixture.src / "logo.svg.sha256").exists()
     with Image.open(asset_fixture.root / "avatars/avatar.png") as avatar:

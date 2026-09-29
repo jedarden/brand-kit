@@ -2,18 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://git.ardenone.com/jedarden/brand-kit/platform-assets.schema.json",
   "title": "Brand Kit Platform Assets",
-  "description": "Version 3 of the generated asset index. Every asset has a platform role, repository path, dimensions, and source; every platform has first-party requirement provenance; upload_constraints defines the repository-level file preflight contract.",
+  "description": "Version 4 of the generated asset index. Every platform role and dimension has cited evidence classified as an upload minimum, recommendation, specified size, within-limits choice, or project choice; source fingerprints detect content changes.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "upload_constraints",
     "platform_requirements",
-    "assets"
+    "assets",
+    "requirement_evidence"
   ],
   "properties": {
     "schema_version": {
-      "const": 3
+      "const": 4
     },
     "upload_constraints": {
       "$ref": "#/$defs/upload_constraints"
@@ -32,6 +33,14 @@
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/asset"
+      }
+    },
+    "requirement_evidence": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/requirement_evidence"
       }
     }
   },
@@ -66,7 +75,8 @@
       "required": [
         "platform",
         "source_url",
-        "last_verified"
+        "last_verified",
+        "source_content_sha256"
       ],
       "properties": {
         "platform": {
@@ -100,6 +110,13 @@
           "format": "date",
           "description": "A real calendar date in YYYY-MM-DD form; CI also rejects future dates.",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "source_content_sha256": {
+          "description": "SHA-256 of normalized visible source text; null only when the source blocks automated retrieval.",
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          ]
         }
       }
     },
@@ -202,6 +219,48 @@
             "source/hero.png"
           ]
         }
+      }
+    },
+    "requirement_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "role",
+        "dimensions",
+        "classification",
+        "source_url",
+        "source_content_sha256",
+        "evidence"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "minLength": 1,
+          "enum": [
+            "X / Twitter", "LinkedIn (personal)", "LinkedIn (company)", "GitHub",
+            "Instagram", "Threads", "Facebook", "YouTube", "TikTok", "Mastodon",
+            "Bluesky", "Discord", "Web / Open Graph"
+          ]
+        },
+        "role": {"type": "string", "enum": ["profile_picture", "banner", "favicon"]},
+        "dimensions": {"$ref": "#/$defs/size"},
+        "classification": {
+          "type": "string",
+          "enum": ["upload_minimum", "recommendation", "specified_size", "within_limits", "project_choice"]
+        },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://[^\\s/@?#]+(?:[/?#][^\\s]*)?$"
+        },
+        "source_content_sha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          ]
+        },
+        "evidence": {"type": "string", "minLength": 1}
       }
     }
   }

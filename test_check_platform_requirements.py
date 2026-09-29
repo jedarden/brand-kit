@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import date
+import hashlib
 import json
 from pathlib import Path
 import urllib.error
@@ -20,7 +21,7 @@ def test_current_platform_requirement_metadata_is_covered_and_fresh():
     manifest = _manifest()
 
     assert check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27)
+        manifest, as_of=date(2026, 9, 28)
     ) == []
 
 
@@ -29,20 +30,20 @@ def test_checker_reports_stale_requirement_metadata():
     manifest["platform_requirements"][0]["last_verified"] = "2025-01-01"
 
     issues = check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27), max_age_days=180
+        manifest, as_of=date(2026, 9, 28), max_age_days=180
     )
 
     assert issues == [
-        "X / Twitter: last_verified 2025-01-01 is 634 days old (maximum 180)"
+        "X / Twitter: last_verified 2025-01-01 is 635 days old (maximum 180)"
     ]
 
 
 def test_checker_accepts_metadata_on_the_expiry_boundary():
     manifest = _manifest()
-    manifest["platform_requirements"][0]["last_verified"] = "2026-03-31"
+    manifest["platform_requirements"][0]["last_verified"] = "2026-04-01"
 
     assert check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27), max_age_days=180
+        manifest, as_of=date(2026, 9, 28), max_age_days=180
     ) == []
 
 
@@ -53,7 +54,8 @@ def test_checker_accepts_metadata_on_the_expiry_boundary():
         (lambda manifest: manifest["platform_requirements"].append({
             "platform": "Unknown",
             "source_url": "https://example.com/requirements",
-            "last_verified": "2026-09-27",
+            "last_verified": "2026-09-28",
+            "source_content_sha256": None,
         }), "requirements have no assets: Unknown"),
     ),
 )
@@ -62,7 +64,7 @@ def test_checker_reports_platform_coverage_drift(change, expected):
     change(manifest)
 
     assert expected in check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27)
+        manifest, as_of=date(2026, 9, 28)
     )
 
 
@@ -70,23 +72,27 @@ def test_checker_reports_future_dates_and_invalid_urls():
     manifest = _manifest()
     requirement = manifest["platform_requirements"][0]
     requirement["source_url"] = "http://example.com/requirements"
-    requirement["last_verified"] = "2026-09-28"
+    requirement["last_verified"] = "2026-09-29"
 
     assert check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27)
+        manifest, as_of=date(2026, 9, 28)
     ) == [
         "X / Twitter: source_url must be an HTTPS URL",
-        "X / Twitter: last_verified 2026-09-28 is in the future",
+        "X / Twitter: last_verified 2026-09-29 is in the future",
     ]
 
 
 class _Response:
-    def __init__(self, status):
+    def __init__(self, status, body=b"<p>source text</p>"):
         self.status = status
+        self.body = body
         self.closed = False
 
     def getcode(self):
         return self.status
+
+    def read(self):
+        return self.body
 
     def close(self):
         self.closed = True
@@ -99,6 +105,12 @@ def _one_requirement_manifest():
     manifest["assets"] = [
         asset for asset in manifest["assets"] if asset["platform"] == platform
     ]
+    manifest["requirement_evidence"] = [
+        item for item in manifest["requirement_evidence"] if item["platform"] == platform
+    ]
+    manifest["platform_requirements"][0]["source_content_sha256"] = hashlib.sha256(
+        b"source text"
+    ).hexdigest()
     return manifest
 
 
@@ -116,7 +128,7 @@ def test_invalid_requirement_urls_fail_without_mutating_manifest(source_url):
     before = deepcopy(manifest)
 
     assert check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27)
+        manifest, as_of=date(2026, 9, 28)
     ) == ["X / Twitter: source_url must be an HTTPS URL"]
     assert manifest == before
 
@@ -129,12 +141,12 @@ def test_invalid_requirement_urls_fail_without_mutating_manifest(source_url):
             "X / Twitter: last_verified is not an ISO date: '2026-02-30'",
         ),
         (
-            "2026-09-28",
-            "X / Twitter: last_verified 2026-09-28 is in the future",
+            "2026-09-29",
+            "X / Twitter: last_verified 2026-09-29 is in the future",
         ),
         (
             "2025-01-01",
-            "X / Twitter: last_verified 2025-01-01 is 634 days old (maximum 180)",
+            "X / Twitter: last_verified 2025-01-01 is 635 days old (maximum 180)",
         ),
     ),
 )
@@ -146,7 +158,7 @@ def test_verification_date_failures_are_reported_without_mutating_manifest(
     before = deepcopy(manifest)
 
     assert check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27), max_age_days=180
+        manifest, as_of=date(2026, 9, 28), max_age_days=180
     ) == [expected]
     assert manifest == before
 
@@ -164,7 +176,11 @@ def test_source_reachability_uses_injected_opener_and_accepts_success():
     )
 
     assert [(check.platform, check.status, check.detail) for check in checks] == [
-        ("X / Twitter", check_platform_requirements.REACHABILITY_PASS, "HTTP 204")
+        (
+            "X / Twitter",
+            check_platform_requirements.REACHABILITY_PASS,
+            "HTTP 204; source content SHA-256 matches",
+        )
     ]
     assert calls[0][0].full_url == (
         "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo"
@@ -183,7 +199,10 @@ def test_source_reachability_accepts_redirects_without_mutating_manifest():
     )
 
     assert [(check.status, check.detail) for check in checks] == [
-        (check_platform_requirements.REACHABILITY_PASS, "HTTP 302")
+        (
+            check_platform_requirements.REACHABILITY_PASS,
+            "HTTP 302; source content SHA-256 matches",
+        )
     ]
     assert response.closed
     assert manifest == before
@@ -209,6 +228,36 @@ def test_source_reachability_distinguishes_http_failure_from_network_failure():
     assert network_checks[0].detail == "network error: <urlopen error DNS unavailable>"
 
 
+def test_source_content_change_fails_even_when_url_and_review_date_are_current():
+    manifest = _one_requirement_manifest()
+    manifest["platform_requirements"][0]["last_verified"] = "2026-09-28"
+    current_metadata_issues = check_platform_requirements.check_platform_requirements(
+        manifest, as_of=date(2026, 9, 28)
+    )
+
+    checks = check_platform_requirements.check_platform_requirement_sources(
+        manifest,
+        opener=lambda request, timeout: _Response(
+            200, b"<p>Updated upload dimensions: 500x500.</p>"
+        ),
+    )
+
+    assert current_metadata_issues == []
+    assert checks[0].status == check_platform_requirements.REACHABILITY_CONTENT_CHANGED
+    assert checks[0].source_url == manifest["platform_requirements"][0]["source_url"]
+    assert "HTTP 200; source content SHA-256 changed" in checks[0].detail
+
+
+def test_requirement_evidence_covers_each_role_and_dimension():
+    manifest = _manifest()
+    assert check_platform_requirements.check_requirement_evidence(manifest) == []
+
+    manifest["assets"][0]["dimensions"]["width"] = 401
+    issues = check_platform_requirements.check_requirement_evidence(manifest)
+    assert any("missing dimension evidence" in issue for issue in issues)
+    assert any("evidence has no matching asset" in issue for issue in issues)
+
+
 def test_source_reachability_skips_invalid_urls_and_reports_metadata_separately():
     manifest = _one_requirement_manifest()
     manifest["platform_requirements"][0]["source_url"] = "https://user:password@example.test/"
@@ -221,7 +270,7 @@ def test_source_reachability_skips_invalid_urls_and_reports_metadata_separately(
     assert checks == []
     assert calls == []
     assert "source_url must be an HTTPS URL" in check_platform_requirements.check_platform_requirements(
-        manifest, as_of=date(2026, 9, 27)
+        manifest, as_of=date(2026, 9, 28)
     )[0]
 
 
@@ -232,7 +281,7 @@ def test_main_returns_indeterminate_for_network_failure(monkeypatch, capsys):
     monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", offline)
 
     assert check_platform_requirements.main(
-        ["--check-reachability", "--as-of", "2026-09-27"]
+        ["--check-reachability", "--as-of", "2026-09-28"]
     ) == 2
     output = capsys.readouterr().out
     assert "INDETERMINATE platform requirement sources (network failure):" in output
@@ -258,7 +307,7 @@ def test_main_reports_unreachable_source_and_preserves_manifest(
         [
             "--check-reachability",
             "--as-of",
-            "2026-09-27",
+            "2026-09-28",
             "--report",
             str(report),
         ]
@@ -282,21 +331,30 @@ def test_main_reports_stale_provenance_and_preserves_manifest(monkeypatch, capsy
     assert check_platform_requirements.main(
         [
             "--as-of",
-            "2026-09-27",
+            "2026-09-28",
             "--report",
             str(report),
         ]
     ) == 1
     output = capsys.readouterr().out
     assert "FAIL platform requirement metadata:" in output
-    assert "X / Twitter: last_verified 2025-01-01 is 634 days old (maximum 180)" in output
+    assert "X / Twitter: last_verified 2025-01-01 is 635 days old (maximum 180)" in output
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["status"] == "fail"
     assert payload["summary"]["metadata_failures"] == 1
     assert manifest_path.read_bytes() == before
 
 
-def test_main_returns_pass_when_all_sources_are_reachable(monkeypatch, capsys):
+def test_main_returns_pass_when_all_sources_are_reachable(monkeypatch, capsys, tmp_path):
+    manifest = _manifest()
+    fixture_digest = hashlib.sha256(b"source text").hexdigest()
+    for requirement in manifest["platform_requirements"]:
+        requirement["source_content_sha256"] = fixture_digest
+    for evidence in manifest["requirement_evidence"]:
+        evidence["source_content_sha256"] = fixture_digest
+    manifest_path = tmp_path / "platform-assets.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(check_platform_requirements, "MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(
         check_platform_requirements.urllib.request,
         "urlopen",
@@ -304,7 +362,7 @@ def test_main_returns_pass_when_all_sources_are_reachable(monkeypatch, capsys):
     )
 
     assert check_platform_requirements.main(
-        ["--check-reachability", "--as-of", "2026-09-27"]
+        ["--check-reachability", "--as-of", "2026-09-28"]
     ) == 0
     assert "PASS platform requirement metadata and sources: 13 platforms" in capsys.readouterr().out
 
@@ -323,7 +381,7 @@ def test_main_returns_conclusive_failure_for_http_failure_and_writes_report(
         [
             "--check-reachability",
             "--as-of",
-            "2026-09-27",
+            "2026-09-28",
             "--report",
             str(report),
         ]
@@ -331,7 +389,7 @@ def test_main_returns_conclusive_failure_for_http_failure_and_writes_report(
     assert "FAIL platform requirement sources:" in capsys.readouterr().out
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["status"] == "fail"
-    assert payload["summary"][check_platform_requirements.REACHABILITY_HTTP_FAILURE] == 13
+    assert payload["summary"][check_platform_requirements.REACHABILITY_HTTP_FAILURE] == 17
 
 
 def test_workflow_contract_runs_reachability_check_and_retains_result():
@@ -350,7 +408,7 @@ def test_workflow_contract_runs_reachability_check_and_retains_result():
     assert "--timeout-seconds 15" in template
     assert "git.ardenone.com/jedarden/brand-kit.git" in template
     assert "artifactGC:\n                strategy: Never" in template
-    assert "failures/brand-kit-platform-requirements/v1/{{workflow.uid}}/report.json" in template
+    assert "failures/brand-kit-platform-requirements/v2/{{workflow.uid}}/report.json" in template
     assert '"alertname": "BrandKitPlatformRequirements"' in template
     assert 'when: "{{workflow.status}} != Succeeded"' in template
     assert "git push" not in template

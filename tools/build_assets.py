@@ -33,7 +33,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
-PLATFORM_MANIFEST_SCHEMA_VERSION = 3
+PLATFORM_MANIFEST_SCHEMA_VERSION = 4
 PLATFORM_UPLOAD_CONSTRAINTS = {
     "formats": ["PNG", "ICO"],
     "color_mode": "RGB",
@@ -147,6 +147,7 @@ BANNERS = {
     "banners/x-header-1500x500.png": (1500, 500, 0.42),
     "banners/linkedin-personal-1584x396.png": (1584, 396, 0.42),
     "banners/linkedin-company-1128x191.png": (1128, 191, 0.42),
+    "banners/mastodon-header-1500x500.png": (1500, 500, 0.42),
     "banners/facebook-cover-851x315.png": (851, 315, 0.42),
     "banners/facebook-cover-2x-1702x630.png": (1702, 630, 0.42),
     "banners/youtube-banner-2560x1440.png": (2560, 1440, 0.45),
@@ -213,69 +214,224 @@ PLATFORM_REQUIREMENTS = [
     {
         "platform": "X / Twitter",
         "source_url": "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": None,
     },
     {
         "platform": "LinkedIn (personal)",
         "source_url": "https://www.linkedin.com/help/linkedin/answer/a549049",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "7a5fdf78ddd0c7333d815963b43bca8834d6d842a75d4c67f3b3244e1c7558ab",
     },
     {
         "platform": "LinkedIn (company)",
         "source_url": "https://www.linkedin.com/help/linkedin/answer/a417335",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "86b64ea231db64f5217330cca6d1274a541e309baa90e97c44e25659dfc3a8bc",
     },
     {
         "platform": "GitHub",
         "source_url": "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "3fee048e3f3bfc61210601b7f95d69fb29bbc67b10f65fc6a4753eaf5fc1103d",
     },
     {
         "platform": "Instagram",
         "source_url": "https://help.instagram.com/",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "a78cebc44214256ba361dcee3f1cc1408e55ea6940c65067615abd4fdcc2d788",
     },
     {
         "platform": "Threads",
         "source_url": "https://help.instagram.com/",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "a78cebc44214256ba361dcee3f1cc1408e55ea6940c65067615abd4fdcc2d788",
     },
     {
         "platform": "Facebook",
         "source_url": "https://www.facebook.com/help/163248423739693",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "1f41aee803daa2965f2f601c1829f28623c4c55737be67c090da211247bc9149",
     },
     {
         "platform": "YouTube",
         "source_url": "https://support.google.com/youtube/answer/10456525?hl=en",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "b0f17488973bc0fbfc97bedb8e11a217165d9f537146d3d4f8bc72f2501554c1",
     },
     {
         "platform": "TikTok",
         "source_url": "https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "c3dd7b78df5d94e0790c66f708029445c1560b603fb43a7bebe280c989589ef2",
     },
     {
         "platform": "Mastodon",
         "source_url": "https://docs.joinmastodon.org/user/profile/",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "94f98d792eb6e4a3b72aea49557b22a304ae4f0298da7c306a8df7838e6a23fa",
     },
     {
         "platform": "Bluesky",
         "source_url": "https://docs.bsky.app/docs/api/app-bsky-actor-profile",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "38fe12958dd10cbeb39a5d1fc38780ce8139696ae903ecdd7cd75625a20b0c77",
     },
     {
         "platform": "Discord",
         "source_url": "https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "1b36a6eca32632756a2915d635ed7aaab937d5a585d2c0872e90be1b72565c32",
     },
     {
         "platform": "Web / Open Graph",
         "source_url": "https://ogp.me/",
-        "last_verified": "2026-09-27",
+        "last_verified": "2026-09-28",
+        "source_content_sha256": "8369148db254a5e894e86380d9eb39aaa317ece52651b53562b307208891db5c",
     },
 ]
+
+
+EVIDENCE_SOURCE_CONTENT_SHA256 = {
+    "https://www.linkedin.com/help/linkedin/answer/a570368": "e374edacd71ad0bcd509e3d3f3b6ed69d43640b70310985b0f29720c390cd2bf",
+    "https://docs.github.com/en/account-and-profile/reference/profile-reference": "d45f8dfbffb5b562be8580288f7e6fbe147df4bf4229b71cad389970ef2964d6",
+    "https://www.facebook.com/help/193629617349922/": "b213e8dee7eb785421df56c0a49e5fce32b2e6bcfb13613d3e3916c634e232fc",
+    "https://html.spec.whatwg.org/multipage/links.html#rel-icon": "c4bf3410be3b13870fa17fbf32909e201ad0f73e53f7152c48dc3d02e54f9ab4",
+}
+EVIDENCE_SOURCE_CONTENT_SHA256.update({
+    requirement["source_url"]: requirement["source_content_sha256"]
+    for requirement in PLATFORM_REQUIREMENTS
+})
+
+
+def _evidence(platform, role, sizes, classification, source_url, evidence):
+    return [
+        {
+            "platform": platform,
+            "role": role,
+            "dimensions": {"width": width, "height": height},
+            "classification": classification,
+            "source_url": source_url,
+            "source_content_sha256": EVIDENCE_SOURCE_CONTENT_SHA256.get(source_url),
+            "evidence": evidence,
+        }
+        for width, height in sizes
+    ]
+
+
+PLATFORM_REQUIREMENT_EVIDENCE = []
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "X / Twitter", "profile_picture", [(400, 400)], "recommendation",
+    "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo",
+    "The first-party guidance labels 400×400 px as the recommended profile image size.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "X / Twitter", "banner", [(1500, 500)], "recommendation",
+    "https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo",
+    "The first-party guidance labels 1500×500 px as the recommended header image size.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "LinkedIn (personal)", "profile_picture", [(400, 400)], "upload_minimum",
+    "https://www.linkedin.com/help/linkedin/answer/a549049",
+    "The source accepts profile photos from 400×400 px; this export meets the stated minimum.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "LinkedIn (personal)", "banner", [(1584, 396)], "recommendation",
+    "https://www.linkedin.com/help/linkedin/answer/a549049",
+    "The source recommends a 1584×396 px background photo.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "LinkedIn (company)", "profile_picture", [(400, 400)], "recommendation",
+    "https://www.linkedin.com/help/linkedin/answer/a570368",
+    "The Page logo table gives 268×268 px as minimum and 400×400 px as recommended.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "LinkedIn (company)", "banner", [(1128, 191)], "specified_size",
+    "https://www.linkedin.com/help/linkedin/answer/a417335",
+    "The Landing Pages table specifies a 1128×191 px cover image.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "GitHub", "profile_picture", [(460, 460)], "within_limits",
+    "https://docs.github.com/en/account-and-profile/reference/profile-reference",
+    "The profile guide caps images below 3000×3000 px and recommends about 500×500; 460×460 is the selected square export within the cap.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "GitHub", "banner", [(1280, 640)], "specified_size",
+    "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview",
+    "The repository social-preview guidance specifies the 1280×640 px image target.",
+)
+for platform in ("Instagram", "Threads"):
+    PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+        platform, "profile_picture", [(320, 320)], "project_choice",
+        "https://help.instagram.com/",
+        "The linked Help Center landing page states no numeric avatar dimensions; 320×320 is the kit's square export choice.",
+    )
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Facebook", "profile_picture", [(320, 320)], "upload_minimum",
+    "https://www.facebook.com/help/163248423739693",
+    "Facebook's profile-photo guidance says at least 320×320 px for best quality.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Facebook", "banner", [(851, 315), (1702, 630)], "project_choice",
+    "https://www.facebook.com/help/193629617349922/",
+    "The linked help article covers profile and cover photos but publishes no cover dimensions; the 851×315 export and its 2× derivative are kit choices.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "YouTube", "profile_picture", [(800, 800)], "project_choice",
+    "https://support.google.com/youtube/answer/10456525?hl=en",
+    "The source documents file limits and a 98×98 rendered size, not an upload dimension; 800×800 is the kit's square master.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "YouTube", "banner", [(2560, 1440)], "recommendation",
+    "https://support.google.com/youtube/answer/10456525?hl=en",
+    "The source lists 2048×1152 as the upload minimum and 2560×1440 as the recommended size.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "TikTok", "profile_picture", [(200, 200)], "upload_minimum",
+    "https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile",
+    "TikTok's profile-photo help states a 20×20 px minimum; this 200×200 px square exceeds it.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Mastodon", "profile_picture", [(400, 400)], "specified_size",
+    "https://docs.joinmastodon.org/user/profile/",
+    "Mastodon downscales uploaded avatars to 400×400 px.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Mastodon", "banner", [(1500, 500)], "specified_size",
+    "https://docs.joinmastodon.org/user/profile/",
+    "Mastodon downscales uploaded profile headers to 1500×500 px.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Bluesky", "profile_picture", [(400, 400)], "project_choice",
+    "https://docs.bsky.app/docs/api/app-bsky-actor-profile",
+    "The profile schema exposes an avatar without specifying pixel dimensions; 400×400 is the kit's square choice.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Bluesky", "banner", [(1200, 628)], "project_choice",
+    "https://docs.bsky.app/docs/api/app-bsky-actor-profile",
+    "The profile schema exposes a banner without specifying pixel dimensions; 1200×628 is a reusable kit choice.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Discord", "profile_picture", [(512, 512)], "project_choice",
+    "https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles",
+    "The linked profile guide lists accepted avatar types but no pixel size; 512×512 is the kit's square choice.",
+)
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Discord", "banner", [(960, 540)], "upload_minimum",
+    "https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles",
+    "The profile-banner minimum is 680×240 px; the 960×540 px export exceeds both minimum dimensions.",
+)
+for width, height in ((16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256), (192, 192), (512, 512), (180, 180)):
+    PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+        "Web / Open Graph", "favicon", [(width, height)], "project_choice",
+        "https://html.spec.whatwg.org/multipage/links.html#rel-icon",
+        f"The HTML icon link model does not prescribe {width}×{height}; this is a project-selected browser/device export size.",
+    )
+PLATFORM_REQUIREMENT_EVIDENCE += _evidence(
+    "Web / Open Graph", "banner", [(1200, 630), (1200, 628)], "project_choice",
+    "https://ogp.me/",
+    "Open Graph defines an image URL and optional dimensions without mandating pixel dimensions; these are reusable project export sizes.",
+)
 
 
 # Keep this list in the same order as the README table.  It is the build
@@ -299,7 +455,7 @@ PLATFORM_ASSETS = [
     _manifest_asset("YouTube", "banner", "banners/youtube-banner-2560x1440.png", "source/hero.png"),
     _manifest_asset("TikTok", "profile_picture", "avatars/tiktok-200.png", "source/logo.svg"),
     _manifest_asset("Mastodon", "profile_picture", "avatars/mastodon-400.png", "source/logo.svg"),
-    _manifest_asset("Mastodon", "banner", "banners/open-graph-1200x630.png", "source/hero.png"),
+    _manifest_asset("Mastodon", "banner", "banners/mastodon-header-1500x500.png", "source/hero.png"),
     _manifest_asset("Bluesky", "profile_picture", "avatars/bluesky-400.png", "source/logo.svg"),
     _manifest_asset("Bluesky", "banner", "banners/twitter-card-1200x628.png", "source/hero.png"),
     _manifest_asset("Discord", "profile_picture", "avatars/discord-512.png", "source/logo.svg"),
@@ -325,6 +481,7 @@ def save_platform_manifest():
                 "upload_constraints": PLATFORM_UPLOAD_CONSTRAINTS,
                 "platform_requirements": PLATFORM_REQUIREMENTS,
                 "assets": PLATFORM_ASSETS,
+                "requirement_evidence": PLATFORM_REQUIREMENT_EVIDENCE,
             },
             indent=2,
         )

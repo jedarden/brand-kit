@@ -18,7 +18,7 @@ spec:
         args:
           - |
             set -euo pipefail
-            printf '%s\n' '{"schema":"brand-kit-platform-requirements/v1","status":"indeterminate","summary":{"metadata_failures":0,"pass":0,"http_failure":0,"network_failure":1},"metadata_issues":[],"source_checks":[],"error":"workflow did not reach the platform requirement checker"}' \
+            printf '%s\n' '{"schema":"brand-kit-platform-requirements/v2","status":"indeterminate","summary":{"metadata_failures":0,"pass":0,"http_failure":0,"network_failure":1,"content_changed":0,"content_unpinned":1},"metadata_issues":[],"evidence_issues":[],"source_checks":[],"error":"workflow did not reach the platform requirement checker"}' \
               > /tmp/brand-kit-platform-requirements-report.json
             printf '2\n' > /tmp/brand-kit-platform-requirements-exit-code
             apt-get update
@@ -54,7 +54,7 @@ spec:
                 bucket: needle-ci-artifacts
                 region: garage
                 insecure: false
-                key: failures/brand-kit-platform-requirements/v1/{{workflow.uid}}/report.json
+                key: failures/brand-kit-platform-requirements/v2/{{workflow.uid}}/report.json
                 accessKeySecret:
                   name: needle-ci-artifact-publisher
                   key: access-key
@@ -83,7 +83,7 @@ spec:
         args:
           - |
             set -eu
-            REPORT_URL="https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-platform-requirements/v1/{{workflow.uid}}/report.json"
+            REPORT_URL="https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-platform-requirements/v2/{{workflow.uid}}/report.json"
             curl --fail --silent --show-error --retry 3 --retry-delay 5 \
               -H 'Content-Type: application/json' \
               --data-binary @- \

@@ -32,7 +32,7 @@ the generated
 table; it records each platform, role, path, dimensions, source asset, upload
 constraints, external requirement URL, and last-verified date.
 The versioned contract is [`platform-assets.schema.json`](platform-assets.schema.json)
-(schema version `3`); CI validates the manifest against its required fields,
+(schema version `4`); CI validates the manifest against its required fields,
 allowed roles and sources, positive dimensions, safe repository-relative paths,
 HTTPS requirement URLs, real `YYYY-MM-DD` verification dates, and README parity.
 
@@ -47,7 +47,7 @@ HTTPS requirement URLs, real `YYYY-MM-DD` verification dates, and README parity.
 | Facebook | `avatars/facebook-320.png` (320×320) | `banners/facebook-cover-851x315.png` (851×315) · `banners/facebook-cover-2x-1702x630.png` (1702×630) |
 | YouTube | `avatars/youtube-800.png` (800×800) | `banners/youtube-banner-2560x1440.png` (2560×1440, TV-safe) |
 | TikTok | `avatars/tiktok-200.png` (200×200) | — |
-| Mastodon | `avatars/mastodon-400.png` (400×400) | use `banners/open-graph-1200x630.png` (1200×630) |
+| Mastodon | `avatars/mastodon-400.png` (400×400) | `banners/mastodon-header-1500x500.png` (1500×500) |
 | Bluesky | `avatars/bluesky-400.png` (400×400) | use `banners/twitter-card-1200x628.png` (1200×628) |
 | Discord | `avatars/discord-512.png` (512×512) | `banners/discord-banner-960x540.png` (960×540) |
 | Web / Open Graph | `favicon/` set | `banners/open-graph-1200x630.png` (1200×630) · `banners/twitter-card-1200x628.png` (1200×628) |
@@ -74,13 +74,15 @@ channels and can be composited onto any surface.
 ### Platform requirement provenance
 
 `platform-assets.json` keeps one provenance record for every platform named in
-the asset table. The URL is the first-party upload guidance reviewed for the
-listed target; `last_verified` is the date that guidance was opened and
-compared with the README table and generated files. A source may describe a
-minimum, a recommendation, or a role-specific surface, so read the linked
-page before treating a dimension as a hard limit.
+the asset table and one evidence row for every distinct role and pixel size.
+Each evidence row classifies the value as an upload minimum, recommendation,
+specified size, a value within documented limits, or a project choice where
+the source gives no pixel dimension. It includes the specific source URL, its
+content fingerprint, and a short comparison with the manifest value.
+`last_verified` is the date that source evidence was reviewed against the
+README table and generated files.
 
-The manifest is schema version `3`. Its `upload_constraints` object requires
+The manifest is schema version `4`. Its `upload_constraints` object requires
 PNG or ICO formats, RGB color mode, no alpha channel, and a positive maximum
 file size in bytes; the verifier checks those properties on every committed
 asset. Each asset requires `platform`, `role`,
@@ -88,33 +90,36 @@ asset. Each asset requires `platform`, `role`,
 multi-resolution assets), and `source`. Roles are `profile_picture`, `banner`, or `favicon`,
 and sources are `source/logo.svg` or `source/hero.png`. Each requirement record
 requires `platform`, an absolute HTTPS `source_url` without credentials, and a
-real calendar `last_verified` date in `YYYY-MM-DD` form. The CI verifier also
-rejects future verification dates and stale requirement records.
+real calendar `last_verified` date in `YYYY-MM-DD` form, and a SHA-256
+fingerprint of each cited source's normalized visible text. A changed page
+triggers review even while its URL responds and its verification date is
+current. X's help host currently blocks automated reads, so its fingerprint
+is null and a successful live response without a baseline is reported as
+indeterminate. The live report includes each source URL and its observed
+`content_sha256` so a reviewer can update the fingerprint after comparing the
+changed text with the evidence row.
 
 | Platform | Requirement source | Last verified |
 |---|---|---|
-| X / Twitter | <https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo> | 2026-09-27 |
-| LinkedIn (personal) | <https://www.linkedin.com/help/linkedin/answer/a549049> | 2026-09-27 |
-| LinkedIn (company) | <https://www.linkedin.com/help/linkedin/answer/a417335> | 2026-09-27 |
-| GitHub | <https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview> | 2026-09-27 |
-| Instagram | <https://help.instagram.com/> | 2026-09-27 |
-| Threads | <https://help.instagram.com/> | 2026-09-27 |
-| Facebook | <https://www.facebook.com/help/163248423739693> | 2026-09-27 |
-| YouTube | <https://support.google.com/youtube/answer/10456525?hl=en> | 2026-09-27 |
-| TikTok | <https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile> | 2026-09-27 |
-| Mastodon | <https://docs.joinmastodon.org/user/profile/> | 2026-09-27 |
-| Bluesky | <https://docs.bsky.app/docs/api/app-bsky-actor-profile> | 2026-09-27 |
-| Discord | <https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles> | 2026-09-27 |
-| Web / Open Graph | <https://ogp.me/> | 2026-09-27 |
+| X / Twitter | <https://help.x.com/en/managing-your-account/common-issues-when-uploading-profile-photo> | 2026-09-28 |
+| LinkedIn (personal) | <https://www.linkedin.com/help/linkedin/answer/a549049> | 2026-09-28 |
+| LinkedIn (company) | <https://www.linkedin.com/help/linkedin/answer/a417335> | 2026-09-28 |
+| GitHub | <https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview> | 2026-09-28 |
+| Instagram | <https://help.instagram.com/> | 2026-09-28 |
+| Threads | <https://help.instagram.com/> | 2026-09-28 |
+| Facebook | <https://www.facebook.com/help/163248423739693> | 2026-09-28 |
+| YouTube | <https://support.google.com/youtube/answer/10456525?hl=en> | 2026-09-28 |
+| TikTok | <https://support.tiktok.com/en/getting-started/setting-up-your-profile/editing-your-profile> | 2026-09-28 |
+| Mastodon | <https://docs.joinmastodon.org/user/profile/> | 2026-09-28 |
+| Bluesky | <https://docs.bsky.app/docs/api/app-bsky-actor-profile> | 2026-09-28 |
+| Discord | <https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles> | 2026-09-28 |
+| Web / Open Graph | <https://ogp.me/> | 2026-09-28 |
 
 ### Reviewing changed upload requirements
 
-The default freshness check is intentionally local and deterministic. The
-expiry policy is 180 calendar days: a record remains current through day 180
-and expires after that. The scheduled Argo check also probes every valid HTTPS
-source once per day; it does not silently turn a network failure or a changed
-web page into a passing result. Run the deterministic check during release
-review and at least every 180 days:
+The local check verifies evidence coverage for every manifest role and size.
+The expiry policy is 180 calendar days: a record remains current through day
+180 and expires after that. Run it during release review:
 
 ```bash
 python3 tools/check_platform_requirements.py
@@ -128,23 +133,25 @@ python3 tools/check_platform_requirements.py \
   --check-reachability --max-age-days 180 --timeout-seconds 15
 ```
 
-The command exits `0` only when metadata is current and every source returns
-HTTP 2xx/3xx. Metadata errors and HTTP failures exit `1`; DNS, TLS, timeout,
-and connection failures exit `2` as `INDETERMINATE`, so an outage cannot look
-like a pass. The reachability mode is intentionally opt-in so the normal test
-suite remains deterministic.
+The live mode reads each source body and compares its normalized visible text
+with the recorded fingerprint. It exits `0` only when metadata is current,
+the evidence covers every asset, and each source returns unchanged content.
+HTTP errors and content changes exit `1`; DNS, TLS, timeout, blocked automated
+access, or missing fingerprints exit `2` as `INDETERMINATE`.
 
-When it reports an overdue platform, open that platform's linked source and
-compare each applicable profile, banner, cover, or favicon target with the
-current upload guidance. If the page has moved, changed a minimum or
-recommendation, changed a role's surface, or is no longer authoritative:
+When it reports an overdue platform or changed source content, open that
+platform's linked sources and compare each applicable profile, banner, cover,
+or favicon target with current guidance. If the page moved, changed a minimum
+or recommendation, changed a role's surface, or is no longer authoritative:
 
 1. Open the linked first-party source. If it moved, update the URL in
    `tools/build_assets.py`; if a target changed, update the dimensions there,
    the matching README row, and generated assets together.
-2. Set that platform's `last_verified` date to the review date only after the
-   external comparison is complete. Do not merely bump the date to silence the
-   freshness check.
+2. Update the evidence classification and comparison text, then refresh the
+   fingerprint for each reviewed source from `source_checks[].content_sha256`
+   in the live report. Set `last_verified` to the
+   review date only after the external comparison is complete. Do not merely bump the date
+   to clear stale metadata.
 3. Run both checker modes, `.venv/bin/python tools/verify_assets.py`, and the
    full test suite; review the generated-image diff before committing. If the
    live mode exits `2`, retry once connectivity is restored rather than

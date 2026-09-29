@@ -17,7 +17,7 @@ Eleven classes of README-vs-repo drift are checked:
      opaque one.
   7. The required names and exact six-digit hex values in palette.json match
      the canonical palette table.
-  8. The generated asset inventory is exactly the 37 documented derived
+  8. The generated asset inventory is exactly the 38 documented derived
      assets plus palette.json.
   9. source/logo.svg.sha256 and source/logo-transparent.svg.sha256 are valid
      digests of their authoritative SVGs.
@@ -39,10 +39,15 @@ from urllib.parse import urlparse
 
 from PIL import Image
 
+try:
+    from tools.check_platform_requirements import check_requirement_evidence
+except ModuleNotFoundError:
+    from check_platform_requirements import check_requirement_evidence
+
 ROOT = Path(__file__).resolve().parent.parent
 PLATFORM_MANIFEST_RELPATH = "platform-assets.json"
 PLATFORM_MANIFEST_SCHEMA_RELPATH = "platform-assets.schema.json"
-PLATFORM_MANIFEST_SCHEMA_VERSION = 3
+PLATFORM_MANIFEST_SCHEMA_VERSION = 4
 PLATFORM_UPLOAD_CONSTRAINTS = {
     "formats": ["PNG", "ICO"],
     "color_mode": "RGB",
@@ -106,6 +111,7 @@ EXPECTED_DIMENSIONS = {
     "banners/x-header-1500x500.png": (1500, 500),
     "banners/linkedin-personal-1584x396.png": (1584, 396),
     "banners/linkedin-company-1128x191.png": (1128, 191),
+    "banners/mastodon-header-1500x500.png": (1500, 500),
     "banners/facebook-cover-851x315.png": (851, 315),
     "banners/facebook-cover-2x-1702x630.png": (1702, 630),
     "banners/youtube-banner-2560x1440.png": (2560, 1440),
@@ -145,6 +151,7 @@ EXPECTED_ASSETS = frozenset({
     "banners/x-header-1500x500.png",
     "banners/linkedin-personal-1584x396.png",
     "banners/linkedin-company-1128x191.png",
+    "banners/mastodon-header-1500x500.png",
     "banners/facebook-cover-851x315.png",
     "banners/facebook-cover-2x-1702x630.png",
     "banners/youtube-banner-2560x1440.png",
@@ -515,11 +522,14 @@ def _platform_requirements_are_valid(requirements, expected_platforms):
     for index, requirement in enumerate(requirements):
         if not isinstance(requirement, dict):
             return False, f"platform requirement {index} is not an object"
-        if set(requirement) != {"platform", "source_url", "last_verified"}:
+        if set(requirement) != {
+            "platform", "source_url", "last_verified", "source_content_sha256"
+        }:
             return False, f"platform requirement {index} has invalid fields"
         platform = requirement["platform"]
         source_url = requirement["source_url"]
         last_verified = requirement["last_verified"]
+        source_digest = requirement["source_content_sha256"]
         if (
             not isinstance(platform, str)
             or not platform
@@ -531,6 +541,11 @@ def _platform_requirements_are_valid(requirements, expected_platforms):
             return False, f"duplicate platform requirement: {platform}"
         if not _manifest_source_url_is_valid(source_url):
             return False, f"platform requirement {platform} has an invalid source_url"
+        if source_digest is not None and (
+            not isinstance(source_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", source_digest)
+        ):
+            return False, f"platform requirement {platform} has an invalid source fingerprint"
         if not isinstance(last_verified, str):
             return False, f"platform requirement {platform} has an invalid last_verified"
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", last_verified):
@@ -595,10 +610,11 @@ def verify_platform_manifest():
         "upload_constraints",
         "platform_requirements",
         "assets",
+        "requirement_evidence",
     }:
         return [(
             PLATFORM_MANIFEST_RELPATH,
-            "schema_version, upload_constraints, platform_requirements, and assets only",
+            "schema_version, upload_constraints, platform_requirements, assets, and requirement_evidence only",
             ", ".join(sorted(manifest)),
             "✗ invalid top-level fields",
         )], False
@@ -657,6 +673,16 @@ def verify_platform_manifest():
             "one HTTPS source and ISO date per README platform",
             requirements_error,
             "✗ invalid requirement provenance",
+        ))
+        all_match = False
+
+    evidence_issues = check_requirement_evidence(manifest)
+    if evidence_issues:
+        rows.append((
+            PLATFORM_MANIFEST_RELPATH,
+            "source evidence for every platform role and dimension",
+            "; ".join(evidence_issues),
+            "✗ invalid requirement evidence",
         ))
         all_match = False
 
@@ -838,7 +864,7 @@ def verify_inventory():
     if not rows:
         rows.append((
             "asset inventory",
-            "37 derived assets + palette.json",
+            "38 derived assets + palette.json",
             f"{len(actual)} files",
             "✓",
         ))

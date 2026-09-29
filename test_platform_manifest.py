@@ -52,7 +52,7 @@ EXPECTED_PLATFORM_ASSETS = [
     _asset("YouTube", "banner", "banners/youtube-banner-2560x1440.png", 2560, 1440, "source/hero.png"),
     _asset("TikTok", "profile_picture", "avatars/tiktok-200.png", 200, 200, "source/logo.svg"),
     _asset("Mastodon", "profile_picture", "avatars/mastodon-400.png", 400, 400, "source/logo.svg"),
-    _asset("Mastodon", "banner", "banners/open-graph-1200x630.png", 1200, 630, "source/hero.png"),
+    _asset("Mastodon", "banner", "banners/mastodon-header-1500x500.png", 1500, 500, "source/hero.png"),
     _asset("Bluesky", "profile_picture", "avatars/bluesky-400.png", 400, 400, "source/logo.svg"),
     _asset("Bluesky", "banner", "banners/twitter-card-1200x628.png", 1200, 628, "source/hero.png"),
     _asset("Discord", "profile_picture", "avatars/discord-512.png", 512, 512, "source/logo.svg"),
@@ -90,6 +90,7 @@ EXPECTED_PLATFORM_REQUIREMENTS = [
         "platform": requirement["platform"],
         "source_url": requirement["source_url"],
         "last_verified": requirement["last_verified"],
+        "source_content_sha256": requirement["source_content_sha256"],
     }
     for requirement in build_assets.PLATFORM_REQUIREMENTS
 ]
@@ -99,10 +100,11 @@ def test_platform_manifest_is_exact_readme_contract():
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     assert manifest == {
-        "schema_version": 3,
+        "schema_version": 4,
         "upload_constraints": build_assets.PLATFORM_UPLOAD_CONSTRAINTS,
         "platform_requirements": EXPECTED_PLATFORM_REQUIREMENTS,
         "assets": EXPECTED_PLATFORM_ASSETS,
+        "requirement_evidence": build_assets.PLATFORM_REQUIREMENT_EVIDENCE,
     }
     assert verify_assets.read_readme_platform_assets() == EXPECTED_PLATFORM_ASSETS
 
@@ -129,7 +131,7 @@ def test_platform_manifest_is_exact_readme_contract():
         if asset["role"] == "banner"
         and asset["platform"] in {"Mastodon", "Web / Open Graph"}
     ] == [
-        "banners/open-graph-1200x630.png",
+        "banners/mastodon-header-1500x500.png",
         "banners/open-graph-1200x630.png",
         "banners/twitter-card-1200x628.png",
     ]
@@ -150,12 +152,13 @@ def test_platform_manifest_schema_declares_strict_asset_shape():
 
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["schema_version"] == {"const": 3}
+    assert schema["properties"]["schema_version"] == {"const": 4}
     assert schema["required"] == [
         "schema_version",
         "upload_constraints",
         "platform_requirements",
         "assets",
+        "requirement_evidence",
     ]
     assert schema["properties"]["upload_constraints"] == {
         "$ref": "#/$defs/upload_constraints"
@@ -188,9 +191,16 @@ def test_platform_manifest_schema_declares_strict_asset_shape():
         "platform",
         "source_url",
         "last_verified",
+        "source_content_sha256",
     ]
     assert schema["$defs"]["platform_requirement"]["properties"]["source_url"]["format"] == "uri"
     assert schema["$defs"]["platform_requirement"]["properties"]["last_verified"]["format"] == "date"
+    assert schema["$defs"]["platform_requirement"]["properties"]["source_content_sha256"]["oneOf"][0] == {"type": "null"}
+    assert schema["properties"]["requirement_evidence"]["items"] == {"$ref": "#/$defs/requirement_evidence"}
+    assert schema["$defs"]["requirement_evidence"]["properties"]["classification"]["enum"] == [
+        "upload_minimum", "recommendation", "specified_size", "within_limits", "project_choice"
+    ]
+    assert "source_content_sha256" in schema["$defs"]["requirement_evidence"]["required"]
     assert schema["$defs"]["platform_requirement"]["properties"]["source_url"]["pattern"] == (
         r"^https://[^\s/@?#]+(?:[/?#][^\s]*)?$"
     )
@@ -240,7 +250,7 @@ def test_readme_documents_requirement_provenance_and_review_check():
     assert "### Platform requirement provenance" in readme
     assert "### Reviewing changed upload requirements" in readme
     assert "platform-assets.schema.json" in readme
-    assert "schema version `3`" in readme
+    assert "schema version `4`" in readme
     assert "PNG or ICO formats" in readme
     assert "RGB color mode" in readme
     assert "no alpha channel" in readme
@@ -250,7 +260,9 @@ def test_readme_documents_requirement_provenance_and_review_check():
     assert "tools/verify_assets.py" in readme
     assert "python3 tools/check_platform_requirements.py" in readme
     assert "--check-reachability" in readme
-    assert "HTTP 2xx/3xx" in readme
+    assert "SHA-256" in readme
+    assert "recommendation" in readme
+    assert "upload minimum" in readme
     assert "exit `2` as `INDETERMINATE`" in readme
     assert "180 calendar days" in readme
     assert "--as-of YYYY-MM-DD" in readme
@@ -285,7 +297,7 @@ def test_platform_manifest_rejects_entry_drift(tmp_path, monkeypatch, drift):
 
     assert not ok
     assert rows[0][0] == "platform-assets.json"
-    assert rows[0][3].startswith("✗ MISMATCH")
+    assert any(row[3].startswith("✗ MISMATCH") for row in rows)
 
 
 def test_platform_manifest_rejects_unexpected_top_level_field(tmp_path, monkeypatch):
@@ -304,9 +316,9 @@ def test_platform_manifest_rejects_unexpected_top_level_field(tmp_path, monkeypa
     assert not ok
     assert rows == [
         (
-            "platform-assets.json",
-            "schema_version, upload_constraints, platform_requirements, and assets only",
-            "assets, platform_requirements, schema_version, unexpected, upload_constraints",
+        "platform-assets.json",
+            "schema_version, upload_constraints, platform_requirements, assets, and requirement_evidence only",
+            "assets, platform_requirements, requirement_evidence, schema_version, unexpected, upload_constraints",
             "✗ invalid top-level fields",
         )
     ]
