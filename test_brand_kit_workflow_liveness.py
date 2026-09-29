@@ -90,6 +90,60 @@ def test_liveness_is_stale_when_a_target_has_no_recent_success():
     assert report["checks"][0]["reason"] == "no successful run was returned by Argo"
 
 
+@pytest.mark.parametrize(
+    "platform_items",
+    (
+        pytest.param([], id="missing-run"),
+        pytest.param(
+            [workflow("platform-requirements-failed", "Failed", "2026-09-27T12:59:00Z")],
+            id="stopped-run",
+        ),
+    ),
+)
+def test_missing_or_stopped_platform_requirements_run_fails_liveness(
+    platform_items,
+):
+    responses = {
+        "brand-kit-ci-failure-watch": {
+            "items": [workflow("failure-watch", "Succeeded", "2026-09-27T12:30:00Z")]
+        },
+        "brand-kit-consumer-drift": {
+            "items": [workflow("consumer-drift", "Succeeded", "2026-09-27T12:00:00Z")]
+        },
+        "brand-kit-mirror-health": {
+            "items": [workflow("mirror-health", "Succeeded", "2026-09-27T12:00:00Z")]
+        },
+        "brand-kit-platform-requirements": {"items": platform_items},
+        "brand-kit-release-token-probe": {
+            "items": [workflow("release-token-probe", "Succeeded", "2026-09-27T12:00:00Z")]
+        },
+    }
+
+    def request(method, url, **kwargs):
+        assert method == "GET"
+        assert kwargs["authorization_scheme"] == "Bearer"
+        for workflow_template, response in responses.items():
+            if workflow_template in url:
+                return response
+        raise AssertionError(f"unexpected Argo URL: {url}")
+
+    report = brand_kit_workflow_liveness.run_liveness(
+        "argo-secret", now=NOW, request=request
+    )
+
+    checks = {check["workflow_template"]: check for check in report["checks"]}
+    platform_check = checks["brand-kit-platform-requirements"]
+    assert report["status"] == "stale"
+    assert platform_check["status"] == "stale"
+    assert platform_check["last_success_at"] is None
+    assert platform_check["reason"] == "no successful run was returned by Argo"
+    assert all(
+        check["status"] == "fresh"
+        for name, check in checks.items()
+        if name != "brand-kit-platform-requirements"
+    )
+
+
 def test_liveness_distinguishes_missing_and_late_runs_and_uses_latest_success():
     responses = {
         "brand-kit-ci-failure-watch": {"items": []},
