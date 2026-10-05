@@ -344,7 +344,7 @@ def test_scheduled_consumer_drift_end_to_end_report_retention_and_owner_alert(
         "name": "brand-kit-consumer-drift"
     }
     templates = {template["name"]: template for template in workflow["spec"]["templates"]}
-    artifact = templates["audit"]["container"]["outputs"]["artifacts"][0]
+    artifact = templates["audit"]["outputs"]["artifacts"][0]
     assert artifact["artifactGC"] == {"strategy": "Never"}
     assert artifact["s3"]["key"] == f"{ARTIFACT_PREFIX}{{{{workflow.uid}}}}/report.json"
 

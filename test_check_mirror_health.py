@@ -454,7 +454,7 @@ def test_workflow_bootstraps_indeterminate_report_before_setup_failure():
     assert "printf '2\\n' > /tmp/brand-kit-mirror-health-exit-code" in template
     assert "default: \"2\"" in template
     assert 'exit "$CHECK_EXIT"' in template
-    assert "artifactGC:\n                strategy: Never" in template
+    assert "artifactGC:\n              strategy: Never" in template
     assert 'when: "{{workflow.status}} != Succeeded"' in template
 
 
@@ -469,7 +469,7 @@ def test_workflow_contract_is_scheduled_read_only_and_alerts_owner():
     assert "tools/check_mirror_health.py" in template
     assert "git.ardenone.com/jedarden/brand-kit.git" in template
     assert "github.com/jedarden/brand-kit.git" in template
-    assert "artifactGC:\n                strategy: Never" in template
+    assert "artifactGC:\n              strategy: Never" in template
     assert "failures/brand-kit-mirror-health/v1/{{workflow.uid}}/report.json" in template
     assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in template
     assert '"alertname": "BrandKitMirrorHealth"' in template

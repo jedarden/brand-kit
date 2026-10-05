@@ -312,7 +312,7 @@ def test_liveness_workflow_contract_is_independent_and_retains_evidence():
             },
         }
     ]
-    artifact = check["container"]["outputs"]["artifacts"][0]
+    artifact = check["outputs"]["artifacts"][0]
     assert artifact["artifactGC"] == {"strategy": "Never"}
     assert artifact["s3"]["key"] == (
         "failures/brand-kit-workflow-liveness/v1/{{workflow.uid}}/report.json"

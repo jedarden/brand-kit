@@ -40,31 +40,6 @@ spec:
                 name: brand-kit-workflow-readonly
                 key: token
                 optional: true
-        outputs:
-          parameters:
-            - name: liveness-exit-code
-              valueFrom:
-                path: /tmp/brand-kit-workflow-liveness-exit-code
-                default: "2"
-          artifacts:
-            - name: brand-kit-workflow-liveness-report
-              path: /tmp/brand-kit-workflow-liveness-report.json
-              archive:
-                none: {}
-              artifactGC:
-                strategy: Never
-              s3:
-                endpoint: s3.ardenone.com
-                bucket: needle-ci-artifacts
-                region: garage
-                insecure: false
-                key: failures/brand-kit-workflow-liveness/v1/{{workflow.uid}}/report.json
-                accessKeySecret:
-                  name: needle-ci-artifact-publisher
-                  key: access-key
-                secretKeySecret:
-                  name: needle-ci-artifact-publisher
-                  key: secret-key
         resources:
           requests:
             cpu: 100m
@@ -72,6 +47,31 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
+      outputs:
+        parameters:
+          - name: liveness-exit-code
+            valueFrom:
+              path: /tmp/brand-kit-workflow-liveness-exit-code
+              default: "2"
+        artifacts:
+          - name: brand-kit-workflow-liveness-report
+            path: /tmp/brand-kit-workflow-liveness-report.json
+            archive:
+              none: {}
+            artifactGC:
+              strategy: Never
+            s3:
+              endpoint: s3.ardenone.com
+              bucket: needle-ci-artifacts
+              region: garage
+              insecure: false
+              key: failures/brand-kit-workflow-liveness/v1/{{workflow.uid}}/report.json
+              accessKeySecret:
+                name: needle-ci-artifact-publisher
+                key: access-key
+              secretKeySecret:
+                name: needle-ci-artifact-publisher
+                key: secret-key
     - name: route-liveness
       steps:
         - - name: notify-owner

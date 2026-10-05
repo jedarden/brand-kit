@@ -41,31 +41,6 @@ spec:
             set -e
             printf '%s\n' "$CHECK_EXIT" > /tmp/brand-kit-mirror-health-exit-code
             exit "$CHECK_EXIT"
-        outputs:
-          parameters:
-            - name: mirror-health-exit-code
-              valueFrom:
-                path: /tmp/brand-kit-mirror-health-exit-code
-                default: "2"
-          artifacts:
-            - name: brand-kit-mirror-health-report
-              path: /tmp/brand-kit-mirror-health-report.json
-              archive:
-                none: {}
-              artifactGC:
-                strategy: Never
-              s3:
-                endpoint: s3.ardenone.com
-                bucket: needle-ci-artifacts
-                region: garage
-                insecure: false
-                key: failures/brand-kit-mirror-health/v1/{{workflow.uid}}/report.json
-                accessKeySecret:
-                  name: needle-ci-artifact-publisher
-                  key: access-key
-                secretKeySecret:
-                  name: needle-ci-artifact-publisher
-                  key: secret-key
         resources:
           requests:
             cpu: 150m
@@ -73,6 +48,31 @@ spec:
           limits:
             cpu: 750m
             memory: 768Mi
+      outputs:
+        parameters:
+          - name: mirror-health-exit-code
+            valueFrom:
+              path: /tmp/brand-kit-mirror-health-exit-code
+              default: "2"
+        artifacts:
+          - name: brand-kit-mirror-health-report
+            path: /tmp/brand-kit-mirror-health-report.json
+            archive:
+              none: {}
+            artifactGC:
+              strategy: Never
+            s3:
+              endpoint: s3.ardenone.com
+              bucket: needle-ci-artifacts
+              region: garage
+              insecure: false
+              key: failures/brand-kit-mirror-health/v1/{{workflow.uid}}/report.json
+              accessKeySecret:
+                name: needle-ci-artifact-publisher
+                key: access-key
+              secretKeySecret:
+                name: needle-ci-artifact-publisher
+                key: secret-key
     # The checker exits non-zero for confirmed drift and for inconclusive
     # provider responses. Alertmanager routes both states to the owner.
     - name: route-mirror-health

@@ -126,41 +126,6 @@ spec:
             fi
             printf '%s\n' "$DETECTOR_EXIT" > /tmp/consumer-drift-exit-code
             exit "$DETECTOR_EXIT"
-        outputs:
-          parameters:
-            - name: detector-exit-code
-              valueFrom:
-                path: /tmp/consumer-drift-exit-code
-                default: "2"
-            - name: selected-release-tag
-              valueFrom:
-                path: /tmp/consumer-drift-release-tag
-                default: ""
-            - name: selected-release-commit
-              valueFrom:
-                path: /tmp/consumer-drift-release-commit
-                default: ""
-          artifacts:
-            - name: consumer-drift-report
-              path: /tmp/consumer-drift-report.json
-              archive:
-                none: {}
-              # The owner notification links to this object after Argo has
-              # deleted the pod and (eventually) the Workflow CR.
-              artifactGC:
-                strategy: Never
-              s3:
-                endpoint: s3.ardenone.com
-                bucket: needle-ci-artifacts
-                region: garage
-                insecure: false
-                key: failures/brand-kit-consumer-drift/v1/{{workflow.uid}}/report.json
-                accessKeySecret:
-                  name: needle-ci-artifact-publisher
-                  key: access-key
-                secretKeySecret:
-                  name: needle-ci-artifact-publisher
-                  key: secret-key
         env:
           - name: FORGEJO_TOKEN
             valueFrom:
@@ -198,6 +163,41 @@ spec:
           limits:
             cpu: 1000m
             memory: 1Gi
+      outputs:
+        parameters:
+          - name: detector-exit-code
+            valueFrom:
+              path: /tmp/consumer-drift-exit-code
+              default: "2"
+          - name: selected-release-tag
+            valueFrom:
+              path: /tmp/consumer-drift-release-tag
+              default: ""
+          - name: selected-release-commit
+            valueFrom:
+              path: /tmp/consumer-drift-release-commit
+              default: ""
+        artifacts:
+          - name: consumer-drift-report
+            path: /tmp/consumer-drift-report.json
+            archive:
+              none: {}
+            # The owner notification links to this object after Argo has
+            # deleted the pod and (eventually) the Workflow CR.
+            artifactGC:
+              strategy: Never
+            s3:
+              endpoint: s3.ardenone.com
+              bucket: needle-ci-artifacts
+              region: garage
+              insecure: false
+              key: failures/brand-kit-consumer-drift/v1/{{workflow.uid}}/report.json
+              accessKeySecret:
+                name: needle-ci-artifact-publisher
+                key: access-key
+              secretKeySecret:
+                name: needle-ci-artifact-publisher
+                key: secret-key
     # Workflow-level exit handler. Alertmanager's configured ntfy receiver
     # routes this alert to the brand-kit owner. The step is conditional on a
     # non-success workflow, which includes detector exit 1 (confirmed drift),
