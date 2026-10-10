@@ -6,6 +6,27 @@ metadata:
   annotations:
     workflows.argoproj.io/description: "Every-15-minute independent heartbeat check for all scheduled brand-kit workflows"
 spec:
+  # SUSPENDED 2026-10-10 (brandkit-00a96a8d): 528/528 runs failed (exit 2,
+  # INDETERMINATE) and the check cannot succeed on iad-ci as designed:
+  #   1. Its Argo API token (Secret brand-kit-workflow-readonly, OpenBao
+  #      secret/rs-manager/iad-ci/argo/workflow-readonly) has never existed,
+  #      and argo-server runs --auth-mode=sso only, which rejects bearer
+  #      ServiceAccount tokens anyway.
+  #   2. It judges liveness by finding a Succeeded Workflow object within
+  #      max_age_minutes (up to 48h), but iad-ci deletes Succeeded workflows
+  #      300s after completion (workflowDefaults ttlStrategy) and keeps at
+  #      most 20 completed workflows (controller retentionPolicy). A healthy
+  #      daily target therefore looks dead within minutes; the check would
+  #      false-alarm forever even with a working token. It needs a durable
+  #      success signal (e.g. its targets' S3 reports) rather than Workflow
+  #      records.
+  #   3. The dedicated ServiceAccount brand-kit-workflow-liveness lacks the
+  #      workflowtaskresults create/patch grant (declarative-config
+  #      brand-kit-automation-rbac.yml); the wait container exits 64.
+  # Its targets are each handled directly in brandkit-00a96a8d (fixed,
+  # suspended with a reason, or left alarming on a real condition), so this
+  # suspension hides no unowned failure.
+  suspend: true
   schedules:
     - "*/15 * * * *"
   timezone: UTC

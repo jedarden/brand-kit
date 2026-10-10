@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ALERTMANAGER_ENDPOINT = (
-    "http://alertmanager.monitoring.svc:9093/api/v1/alerts"
+    "http://alertmanager.monitoring.svc:9093/api/v2/alerts"
 )
 ALERT_PAYLOAD_RE = re.compile(
     r"--data-binary @-[ \t]*(?:\\\n[ \t]*)?"

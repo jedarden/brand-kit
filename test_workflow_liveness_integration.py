@@ -11,7 +11,7 @@ from tools import brand_kit_workflow_liveness
 
 
 ROOT = Path(__file__).parent
-ALERTMANAGER_ENDPOINT = "http://alertmanager.monitoring.svc:9093/api/v1/alerts"
+ALERTMANAGER_ENDPOINT = "http://alertmanager.monitoring.svc:9093/api/v2/alerts"
 LIVENESS_POLL_MINUTES = 15
 
 

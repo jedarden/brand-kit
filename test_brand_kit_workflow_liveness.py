@@ -331,7 +331,7 @@ def test_liveness_non_success_route_generates_owner_alert_with_durable_report():
         "when": "{{workflow.status}} != Succeeded",
         "continueOn": {"failed": True, "error": True},
     }
-    assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in notify
+    assert "http://alertmanager.monitoring.svc:9093/api/v2/alerts" in notify
     assert "curl --fail --silent --show-error --retry 3 --retry-delay 5" in notify
     assert '"alertname": "BrandKitWorkflowLiveness"' in notify
     assert '"owner": "jedarden"' in notify

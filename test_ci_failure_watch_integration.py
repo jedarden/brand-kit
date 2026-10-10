@@ -117,7 +117,7 @@ class _Garage:
 
 
 def _alert_payload(template, workflow_status, report_url):
-    endpoint = "http://alertmanager.monitoring.svc:9093/api/v1/alerts"
+    endpoint = "http://alertmanager.monitoring.svc:9093/api/v2/alerts"
     match = re.search(
         r"--data-binary @-[ \t]*(?:\\\n[ \t]*)?"
         + re.escape(endpoint)
@@ -315,7 +315,7 @@ def test_failure_watch_flow_lists_publishes_prunes_and_alerts_without_leaking_cr
     }
     assert alert["annotations"]["report_url"] == report_url
     assert alert["annotations"]["summary"] == "brand-kit-ci regression gate needs follow-up"
-    assert "alertmanager.monitoring.svc:9093/api/v1/alerts" in notify_owner
+    assert "alertmanager.monitoring.svc:9093/api/v2/alerts" in notify_owner
     assert "secretKeyRef" not in notify_owner
 
     evidence = "\n".join(

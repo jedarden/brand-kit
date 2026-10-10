@@ -518,7 +518,7 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "--watcher-workflow-uid \"{{workflow.uid}}\"" in workflow
     assert "tools/validate_ci_failure_watch_artifacts.py" in workflow
     assert "trap validate_watch_artifacts_on_exit EXIT" in workflow
-    assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow
+    assert "http://alertmanager.monitoring.svc:9093/api/v2/alerts" in workflow
     assert '"alertname": "BrandKitCIRegressionGate"' in workflow
     assert '"owner": "jedarden"' in workflow
     assert '"follow_up": "regression-gate"' in workflow
@@ -549,7 +549,7 @@ def test_exit_handler_alert_contract_links_the_durable_report_without_credential
         'failures/brand-kit-ci-failure-watch/v1/{{workflow.uid}}/report.json"'
     ) in notify_owner
     assert '"report_url": "${REPORT_URL}"' in notify_owner
-    assert 'http://alertmanager.monitoring.svc:9093/api/v1/alerts' in notify_owner
+    assert 'http://alertmanager.monitoring.svc:9093/api/v2/alerts' in notify_owner
     assert '"alertname": "BrandKitCIRegressionGate"' in notify_owner
     assert "ARGO_TOKEN" not in notify_owner
     assert "ARGO_SUBMIT_TOKEN" not in notify_owner

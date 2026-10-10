@@ -23,8 +23,14 @@ spec:
             printf '2\n' > /tmp/brand-kit-platform-requirements-exit-code
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
+            # Clone the public GitHub mirror, like the other scheduled
+            # brand-kit checks: git.ardenone.com runs REQUIRE_SIGNIN_VIEW=true,
+            # so the anonymous Forgejo clone this used to do died with
+            # "could not read Username" (exit 128) on every run. This check
+            # reads only platform-assets.json and the public platform help
+            # pages, so it needs no Forgejo credential at all.
             git clone --filter=blob:none --no-tags --depth=1 --branch main \
-              https://git.ardenone.com/jedarden/brand-kit.git /brand-kit
+              https://github.com/jedarden/brand-kit.git /brand-kit
             cd /brand-kit
             set +e
             python3 tools/check_platform_requirements.py \
@@ -87,7 +93,7 @@ spec:
             curl --fail --silent --show-error --retry 3 --retry-delay 5 \
               -H 'Content-Type: application/json' \
               --data-binary @- \
-              http://alertmanager.monitoring.svc:9093/api/v1/alerts <<EOF
+              http://alertmanager.monitoring.svc:9093/api/v2/alerts <<EOF
             [{
               "labels": {
                 "alertname": "BrandKitPlatformRequirements",

@@ -6,6 +6,24 @@ metadata:
   annotations:
     workflows.argoproj.io/description: "Daily read-only fallback: audit the newest stable Forgejo release at least 24 hours old and visible on the read-only mirror"
 spec:
+  # SUSPENDED 2026-10-10 (brandkit-00a96a8d): every daily run failed and
+  # none can succeed until conditions outside this repo change:
+  #   1. jedarden/brand-kit has no Forgejo release at all (releases API
+  #      returns []), so the daily fallback has no release to audit and no
+  #      consumer drift can exist yet.
+  #   2. Report pruning fails first: the needle-ci-artifact-reader
+  #      credential gets "Garage GET request failed with HTTP 403" listing
+  #      failures/brand-kit-consumer-drift/v1/ (credential scope is managed
+  #      outside brand-kit).
+  #   3. The dedicated ServiceAccount brand-kit-consumer-drift lacks the
+  #      workflowtaskresults create/patch grant (declarative-config
+  #      k8s/iad-ci/argo-workflows/brand-kit-automation-rbac.yml), so the
+  #      executor cannot report outputs and the wait container exits 64.
+  # Resume (delete this field) once a stable release exists and 2-3 are
+  # fixed. This suspends only the daily fallback; the release-triggered
+  # submission path (tools/consumer_drift_submit.py) is untouched but shares
+  # causes 2-3.
+  suspend: true
   # 06:17 UTC daily. consumer-drift.json owns the 24-hour release propagation delay.
   schedules:
     - "17 6 * * *"

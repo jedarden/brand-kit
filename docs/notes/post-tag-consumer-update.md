@@ -125,7 +125,7 @@ The detector's non-zero result is now an owner-facing event. The
 run is not `Succeeded` — including detector exit `1` (confirmed drift), exit
 `2` (indeterminate), and failures before the detector starts — the handler
 posts a `BrandKitConsumerDrift` alert to the in-cluster
-`alertmanager.monitoring.svc:9093/api/v1/alerts` endpoint. Alertmanager's
+`alertmanager.monitoring.svc:9093/api/v2/alerts` endpoint. Alertmanager's
 configured `ntfy` receiver delivers it to the `jedarden` owner channel. The
 handler is best-effort and cannot turn the detector's failed workflow green;
 if the notification hop is unavailable, the Argo run and durable report still

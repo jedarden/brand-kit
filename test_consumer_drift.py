@@ -1579,7 +1579,7 @@ def test_scheduled_workflow_routes_failures_and_retains_report():
     assert "          - name: S3_PUBLISHER_SECRET_KEY" in workflow
 
     assert "        image: curlimages/curl:8.12.1" in workflow
-    assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in workflow
+    assert "http://alertmanager.monitoring.svc:9093/api/v2/alerts" in workflow
     assert '"alertname": "BrandKitConsumerDrift"' in workflow
     assert '"owner": "jedarden"' in workflow
     assert (

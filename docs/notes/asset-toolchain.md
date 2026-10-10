@@ -243,7 +243,7 @@ https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1
 
 When the watcher finds a failed gate — or cannot inspect Argo — its workflow
 exit handler posts a `BrandKitCIRegressionGate` alert to
-`alertmanager.monitoring.svc:9093/api/v1/alerts`. Alertmanager's configured
+`alertmanager.monitoring.svc:9093/api/v2/alerts`. Alertmanager's configured
 ntfy receiver routes the alert to the `jedarden` owner channel. This is the
 owner path for pin/install drift, test failures, unexpected generated files,
 regenerated diffs, and watcher/API errors; it is intentionally best-effort and
@@ -335,9 +335,12 @@ Alertmanager route.
 
 The complete label payloads also include `bucket: brand-kit` and the
 `workflow_status` template value. All six handlers POST to
-`http://alertmanager.monitoring.svc:9093/api/v1/alerts`; their `onExit` steps
+`http://alertmanager.monitoring.svc:9093/api/v2/alerts`; their `onExit` steps
 run only for non-successful workflows and use `continueOn` so an Alertmanager
-or ntfy outage cannot change the original failure result.
+or ntfy outage cannot change the original failure result. Use the v2 API only:
+Alertmanager removed `/api/v1/alerts` in 0.27, and iad-ci's 0.34.1 answered
+every v1 POST with HTTP 410, so until 2026-10-10 no brand-kit owner alert was
+ever delivered (`continueOn` hid the 410 behind the original failure).
 
 For a live, redacted check in the iad-ci cluster, first inspect only the
 non-secret route fields from the rendered config. This command must print the
@@ -363,7 +366,7 @@ trap 'kill "$PORT_FORWARD_PID" 2>/dev/null || true' EXIT
 curl --fail --silent --show-error \
   -H 'Content-Type: application/json' \
   --data '[{"labels":{"alertname":"BrandKitCIRegressionGate","owner":"jedarden","component":"brand-kit-ci","follow_up":"regression-gate","bucket":"brand-kit","workflow_status":"routing-canary"},"annotations":{"summary":"brand-kit Alertmanager routing canary"}}]' \
-  http://127.0.0.1:19093/api/v1/alerts
+  http://127.0.0.1:19093/api/v2/alerts
 curl --fail --silent --show-error \
   'http://127.0.0.1:19093/api/v2/alerts?filter=alertname%3D%22BrandKitCIRegressionGate%22'
 kubectl -n monitoring logs deploy/alertmanager --since=2m |

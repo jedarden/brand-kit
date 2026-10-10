@@ -406,7 +406,10 @@ def test_workflow_contract_runs_reachability_check_and_retains_result():
     assert "--check-reachability" in template
     assert "--max-age-days 180" in template
     assert "--timeout-seconds 15" in template
-    assert "git.ardenone.com/jedarden/brand-kit.git" in template
+    # Forgejo requires sign-in (REQUIRE_SIGNIN_VIEW); the check clones the
+    # public mirror and must not regress to an anonymous Forgejo clone.
+    assert "https://github.com/jedarden/brand-kit.git /brand-kit" in template
+    assert "git.ardenone.com/jedarden/brand-kit.git" not in template
     assert "artifactGC:\n              strategy: Never" in template
     assert "failures/brand-kit-platform-requirements/v2/{{workflow.uid}}/report.json" in template
     assert '"alertname": "BrandKitPlatformRequirements"' in template

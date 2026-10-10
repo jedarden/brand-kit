@@ -25,8 +25,17 @@ spec:
             printf '2\n' > /tmp/brand-kit-mirror-health-exit-code
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
+            # The checker's own code comes from the public GitHub mirror, like
+            # every other scheduled brand-kit check. Cloning it from Forgejo
+            # fails twice over: anonymously (REQUIRE_SIGNIN_VIEW, "could not
+            # read Username", exit 128 on every run to 2026-10-10) and, even
+            # authenticated, the full-tree pack download from git.ardenone.com
+            # dies with "fetch-pack: unexpected disconnect while reading
+            # sideband packet" (reproduced 2026-10-10, partial and shallow).
+            # The canonical side is still read from Forgejo below -- by
+            # ls-remote and a ref fetch, which the checker does itself.
             git clone --filter=blob:none --no-tags --depth=1 --branch main \
-              https://git.ardenone.com/jedarden/brand-kit.git /brand-kit
+              https://github.com/jedarden/brand-kit.git /brand-kit
             cd /brand-kit
             # This scheduled parity audit is read-only. Release publication
             # additionally runs tools/check_release_mirror.py for the exact
@@ -41,6 +50,28 @@ spec:
             set -e
             printf '%s\n' "$CHECK_EXIT" > /tmp/brand-kit-mirror-health-exit-code
             exit "$CHECK_EXIT"
+        # git.ardenone.com runs with REQUIRE_SIGNIN_VIEW=true, so the
+        # checker's canonical ls-remote/fetch needs a credential. The token
+        # is the existing READ-ONLY Forgejo repo token
+        # (rs-manager/iad-ci/forgejo/repo-readonly, synced as Secret
+        # brand-kit-consumer-drift) -- deliberately not the CI-wide
+        # write-capable forgejo-webhook-token, since this audit only reads.
+        # It reaches git through a credential helper, never a URL or argv,
+        # so neither the report nor a failed-command message can carry it.
+        env:
+          - name: GIT_TERMINAL_PROMPT
+            value: "0"
+          - name: GIT_CONFIG_COUNT
+            value: "1"
+          - name: GIT_CONFIG_KEY_0
+            value: credential.https://git.ardenone.com.helper
+          - name: GIT_CONFIG_VALUE_0
+            value: '!f() { test "$1" = get && echo "username=x-token" && echo "password=$FORGEJO_TOKEN"; }; f'
+          - name: FORGEJO_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: brand-kit-consumer-drift
+                key: token
         resources:
           requests:
             cpu: 150m
@@ -94,7 +125,7 @@ spec:
             curl --fail --silent --show-error --retry 3 --retry-delay 5 \
               -H 'Content-Type: application/json' \
               --data-binary @- \
-              http://alertmanager.monitoring.svc:9093/api/v1/alerts <<EOF
+              http://alertmanager.monitoring.svc:9093/api/v2/alerts <<EOF
             [{
               "labels": {
                 "alertname": "BrandKitMirrorHealth",

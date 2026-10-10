@@ -471,7 +471,7 @@ def test_workflow_contract_is_scheduled_read_only_and_alerts_owner():
     assert "github.com/jedarden/brand-kit.git" in template
     assert "artifactGC:\n              strategy: Never" in template
     assert "failures/brand-kit-mirror-health/v1/{{workflow.uid}}/report.json" in template
-    assert "http://alertmanager.monitoring.svc:9093/api/v1/alerts" in template
+    assert "http://alertmanager.monitoring.svc:9093/api/v2/alerts" in template
     assert '"alertname": "BrandKitMirrorHealth"' in template
     assert '"owner": "jedarden"' in template
     assert 'when: "{{workflow.status}} != Succeeded"' in template
@@ -494,3 +494,34 @@ def test_report_contains_all_failure_counts(tmp_path):
     check_mirror_health.write_report(report, report_path)
 
     assert json.loads(report_path.read_text(encoding="utf-8"))["summary"]["stale"] == 1
+
+
+def test_workflow_reads_forgejo_with_scoped_read_only_credential():
+    # git.ardenone.com requires sign-in for every git read (REQUIRE_SIGNIN_VIEW),
+    # so an anonymous canonical clone fails with "could not read Username".
+    # The credential must be the read-only repo token, offered only to the
+    # Forgejo host through a credential helper -- never the CI-wide
+    # write-capable token, a URL, or argv.
+    import yaml
+
+    document = yaml.safe_load(
+        Path("automation/brand-kit-mirror-health-workflowtemplate.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    check = next(t for t in document["spec"]["templates"] if t["name"] == "check")
+    env = {item["name"]: item for item in check["container"]["env"]}
+
+    assert env["GIT_CONFIG_KEY_0"]["value"] == "credential.https://git.ardenone.com.helper"
+    assert "$FORGEJO_TOKEN" in env["GIT_CONFIG_VALUE_0"]["value"]
+    assert env["FORGEJO_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "brand-kit-consumer-drift",
+        "key": "token",
+    }
+    script = check["container"]["args"][0]
+    assert "forgejo-webhook-token" not in yaml.safe_dump(document)
+    assert "@git.ardenone.com" not in script
+    # The checker's code is cloned from the public mirror; Forgejo is read
+    # only by the checker's own ls-remote/fetch.
+    assert "https://github.com/jedarden/brand-kit.git /brand-kit" in script
+    assert "--canonical-repository https://git.ardenone.com/jedarden/brand-kit.git" in script

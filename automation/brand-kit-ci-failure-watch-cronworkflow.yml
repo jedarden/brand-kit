@@ -9,6 +9,31 @@ spec:
   # The two-hour lookback covers the cluster's failure-log TTL. The watcher
   # also copies each recent successful run's minimal attestation to Garage
   # before the brand-kit-ci Workflow record can be reaped.
+  # SUSPENDED 2026-10-10 (brandkit-00a96a8d): 672/672 runs failed in the
+  # prior 7 days and none can succeed until three things outside this repo
+  # exist. Every watch pod sat in CreateContainerConfigError for the full
+  # 600s deadline ("Pod was active on the node longer than the specified
+  # deadline") because:
+  #   1. Secret brand-kit-workflow-readonly is never created: its
+  #      ExternalSecret has been SecretSyncedError since 2026-09-28 because
+  #      OpenBao secret/rs-manager/iad-ci/argo/workflow-readonly does not
+  #      exist (metadata lookup: "No value found").
+  #   2. Even with a token, argo-ci.ardenone.com runs argo-server with
+  #      --auth-mode=sso only, which rejects ServiceAccount bearer tokens; the
+  #      watcher's Argo API design needs `client` auth mode or a rewrite onto
+  #      the Kubernetes API.
+  #   3. The dedicated ServiceAccount brand-kit-ci-failure-watch has no
+  #      workflowtaskresults create/patch grant (declarative-config
+  #      k8s/iad-ci/argo-workflows/brand-kit-automation-rbac.yml), so the
+  #      executor cannot report outputs and the wait container exits 64.
+  # Also stale: the lookback assumes a 7200s failure TTL; the cluster default
+  # is 1800s plus a 20-failed-workflow retention cap, so a 15-minute watcher
+  # cannot see failures that the cap reaps sooner.
+  # Nothing real is being hidden: no brand-kit-ci Workflow ran in the 7 days
+  # before suspension, so there was no gate failure to report -- the only
+  # alarm was the watcher's own missing credential. Resume (delete this
+  # field) once 1-3 are resolved.
+  suspend: true
   schedules:
     - "*/15 * * * *"
   timezone: UTC
