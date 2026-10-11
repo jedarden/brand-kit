@@ -25,9 +25,11 @@ or the read-only consumer-audit token for release publication.
 The existing Argo consumer-audit `ExternalSecret` remains a separate,
 read-only workload credential. It is not an operator release credential and
 does not authorize Forgejo release publication or Argo workflow submission.
-The failure watcher and workflow-liveness workloads use a different dedicated
-read-only Argo Secret, `brand-kit-workflow-readonly`, through
-`ARGO_WORKFLOW_TOKEN`; they never mount `brand-kit-release-tokens`. See the
+The failure watcher and workflow-liveness workloads use no Argo token at all:
+the watcher reads Workflow objects from the Kubernetes API with its own
+ServiceAccount, and liveness reads durable Garage reports (the former
+`brand-kit-workflow-readonly` Secret was retired 2026-10-11). They never mount
+`brand-kit-release-tokens`. See the
 [Argo credential separation](argo-credential-separation.md) role map for the
 exact namespace, service account, ExternalSecret, and API paths.
 

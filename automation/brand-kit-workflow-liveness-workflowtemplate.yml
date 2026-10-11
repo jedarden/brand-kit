@@ -33,13 +33,28 @@ spec:
             set -e
             printf '%s\n' "$LIVENESS_EXIT" > /tmp/brand-kit-workflow-liveness-exit-code
             exit "$LIVENESS_EXIT"
+        # Liveness is judged from each target's durable report.json in
+        # Garage, not from Workflow objects: iad-ci deletes a Succeeded
+        # Workflow 300s after it finishes and keeps at most 20 completed
+        # ones, so Workflow records cannot show a daily target's last
+        # success. Listing and reading those reports needs only the
+        # read-only artifact credential; the check itself makes no Argo or
+        # Kubernetes API call.
         env:
-          - name: ARGO_WORKFLOW_TOKEN
+          - name: S3_READER_ACCESS_KEY
             valueFrom:
               secretKeyRef:
-                name: brand-kit-workflow-readonly
-                key: token
-                optional: true
+                name: needle-ci-artifact-reader
+                key: access-key
+          - name: S3_READER_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: needle-ci-artifact-reader
+                key: secret-key
+          - name: S3_ENDPOINT
+            value: https://s3.ardenone.com
+          - name: S3_REGION
+            value: garage
         resources:
           requests:
             cpu: 100m

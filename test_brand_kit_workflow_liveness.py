@@ -1,264 +1,270 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 import yaml
 
 from tools import brand_kit_workflow_liveness
-from tools import release_publish
+from tools import prune_ci_failure_watch_reports as s3_reports
 
 
 NOW = datetime(2026, 9, 27, 13, 0, tzinfo=timezone.utc)
+SUCCESS = {
+    target["name"]: target["success_statuses"][0]
+    for target in brand_kit_workflow_liveness.TARGETS
+}
 
 
-def workflow(name, phase, finished_at):
-    return {
-        "metadata": {
-            "name": name,
-            "uid": f"uid-{name}",
-            "creationTimestamp": finished_at,
-        },
-        "status": {
-            "phase": phase,
-            "startedAt": finished_at,
-            "finishedAt": finished_at,
-        },
-    }
-
-
-def test_liveness_is_fresh_when_all_targets_have_recent_successes():
-    def request(method, url, **kwargs):
-        assert method == "GET"
-        assert kwargs["authorization_scheme"] == "Bearer"
-        if "brand-kit-ci-failure-watch" in url:
-            return {"items": [workflow("failure-watch", "Succeeded", "2026-09-27T12:30:00Z")]}
-        if "brand-kit-consumer-drift" in url:
-            return {"items": [workflow("consumer-drift", "Succeeded", "2026-09-26T12:00:00Z")]}
-        if "brand-kit-mirror-health" in url:
-            return {"items": [workflow("mirror-health", "Succeeded", "2026-09-27T12:00:00Z")]}
-        if "brand-kit-platform-requirements" in url:
-            return {"items": [workflow("platform-requirements", "Succeeded", "2026-09-26T12:00:00Z")]}
-        assert "brand-kit-release-token-probe" in url
-        return {"items": [workflow("release-token-probe", "Succeeded", "2026-09-26T12:00:00Z")]}
-
-    report = brand_kit_workflow_liveness.run_liveness(
-        "argo-secret", now=NOW, api_url="https://argo.example", request=request
+def _target(name):
+    return next(
+        target for target in brand_kit_workflow_liveness.TARGETS if target["name"] == name
     )
 
+
+class FakeReader:
+    """In-memory stand-in for the Garage report bucket."""
+
+    def __init__(self, reports=(), *, fail_list=(), fail_get=()):
+        self.objects = {}
+        self.fail_list = set(fail_list)
+        self.fail_get = set(fail_get)
+        self.reads = []
+        for name, uid, status, minutes_ago, *schema in reports:
+            self.add(name, uid, status, NOW - timedelta(minutes=minutes_ago), *schema)
+
+    def add(self, name, uid, status, modified, schema=None):
+        target = _target(name)
+        body = {"schema": schema or target["report_schema"], "status": status}
+        key = f"{target['report_prefix']}{uid}/report.json"
+        self.objects[key] = (json.dumps(body).encode("utf-8"), modified)
+
+    def list_objects(self, prefix):
+        if prefix in self.fail_list:
+            raise s3_reports.RetentionError("Garage GET request failed with HTTP 403")
+        return [
+            s3_reports.S3Object(key=key, last_modified=modified)
+            for key, (_, modified) in self.objects.items()
+            if key.startswith(prefix)
+        ]
+
+    def get_object(self, key):
+        self.reads.append(key)
+        if key in self.fail_get:
+            raise s3_reports.RetentionError("Garage GET request failed with HTTP 503")
+        return self.objects[key][0]
+
+
+def _all_fresh(minutes_ago=5):
+    return [
+        (target["name"], f"uid-{target['name']}", SUCCESS[target["name"]], minutes_ago)
+        for target in brand_kit_workflow_liveness.TARGETS
+    ]
+
+
+def _checks(report):
+    return {check["name"]: check for check in report["checks"]}
+
+
+def test_liveness_is_fresh_when_all_targets_have_recent_successful_reports():
+    report = brand_kit_workflow_liveness.run_liveness(FakeReader(_all_fresh()), now=NOW)
+
+    assert report["schema"] == "brand-kit-workflow-liveness/v1"
     assert report["status"] == "fresh"
-    assert [check["status"] for check in report["checks"]] == [
-        "fresh",
-        "fresh",
-        "fresh",
-        "fresh",
-        "fresh",
-    ]
-    assert [check["max_age_minutes"] for check in report["checks"]] == [
-        60,
-        48 * 60,
-        12 * 60,
-        48 * 60,
-        48 * 60,
-    ]
+    assert report["observed_at"] == "2026-09-27T13:00:00Z"
+    for check in report["checks"]:
+        assert check["status"] == "fresh"
+        assert check["last_success_at"] == "2026-09-27T12:55:00Z"
+        assert check["age_minutes"] == 5.0
 
 
-def test_liveness_is_stale_when_a_target_has_no_recent_success():
-    def request(method, url, **kwargs):
-        if "brand-kit-ci-failure-watch" in url:
-            return {"items": []}
-        if "brand-kit-consumer-drift" in url:
-            return {
-                "items": [
-                    workflow("consumer-drift-old", "Succeeded", "2026-09-25T12:00:00Z")
-                ]
-            }
-        return {"items": []}
-
-    report = brand_kit_workflow_liveness.run_liveness(
-        "argo-secret", now=NOW, request=request
-    )
-
-    assert report["status"] == "stale"
-    assert [check["status"] for check in report["checks"]] == [
-        "stale",
-        "stale",
-        "stale",
-        "stale",
-        "stale",
-    ]
-    assert report["checks"][0]["reason"] == "no successful run was returned by Argo"
-
-
-@pytest.mark.parametrize(
-    "platform_items",
-    (
-        pytest.param([], id="missing-run"),
-        pytest.param(
-            [workflow("platform-requirements-failed", "Failed", "2026-09-27T12:59:00Z")],
-            id="stopped-run",
-        ),
-    ),
-)
-def test_missing_or_stopped_platform_requirements_run_fails_liveness(
-    platform_items,
-):
-    responses = {
-        "brand-kit-ci-failure-watch": {
-            "items": [workflow("failure-watch", "Succeeded", "2026-09-27T12:30:00Z")]
-        },
-        "brand-kit-consumer-drift": {
-            "items": [workflow("consumer-drift", "Succeeded", "2026-09-27T12:00:00Z")]
-        },
-        "brand-kit-mirror-health": {
-            "items": [workflow("mirror-health", "Succeeded", "2026-09-27T12:00:00Z")]
-        },
-        "brand-kit-platform-requirements": {"items": platform_items},
-        "brand-kit-release-token-probe": {
-            "items": [workflow("release-token-probe", "Succeeded", "2026-09-27T12:00:00Z")]
-        },
+def test_each_target_is_judged_by_its_own_schema_and_success_status():
+    expected = {
+        "brand-kit-ci-failure-watch": ("brand-kit-ci-failure-watch/v1", "pass"),
+        "brand-kit-consumer-drift": ("brand-kit-consumer-drift/v1", "current"),
+        "brand-kit-mirror-health": ("brand-kit-mirror-health/v1", "healthy"),
+        "brand-kit-platform-requirements": ("brand-kit-platform-requirements/v2", "pass"),
+        "brand-kit-release-token-probe": ("brand-kit-release-token-probe/v1", "pass"),
     }
+    assert {
+        target["name"]: (target["report_schema"], target["success_statuses"][0])
+        for target in brand_kit_workflow_liveness.TARGETS
+    } == expected
+    for target in brand_kit_workflow_liveness.TARGETS:
+        version = target["report_schema"].rsplit("/", 1)[1]
+        assert target["report_prefix"] == f"failures/{target['name']}/{version}/"
 
-    def request(method, url, **kwargs):
-        assert method == "GET"
-        assert kwargs["authorization_scheme"] == "Bearer"
-        for workflow_template, response in responses.items():
-            if workflow_template in url:
-                return response
-        raise AssertionError(f"unexpected Argo URL: {url}")
 
-    report = brand_kit_workflow_liveness.run_liveness(
-        "argo-secret", now=NOW, request=request
+def test_a_suspended_or_unscheduled_target_without_reports_is_stale():
+    reports = [item for item in _all_fresh() if item[0] != "brand-kit-consumer-drift"]
+
+    report = brand_kit_workflow_liveness.run_liveness(FakeReader(reports), now=NOW)
+
+    check = _checks(report)["brand-kit-consumer-drift"]
+    assert report["status"] == "stale"
+    assert check["status"] == "stale"
+    assert check["last_success_at"] is None
+    assert check["reason"].startswith(
+        "no run report exists under failures/brand-kit-consumer-drift/v1/"
     )
 
-    checks = {check["workflow_template"]: check for check in report["checks"]}
-    platform_check = checks["brand-kit-platform-requirements"]
+
+@pytest.mark.parametrize("status", ("fail", "indeterminate", "error"))
+def test_a_target_whose_recent_runs_all_failed_is_stale(status):
+    reader = FakeReader(_all_fresh())
+    reader.add(
+        "brand-kit-platform-requirements",
+        "uid-brand-kit-platform-requirements",
+        status,
+        NOW - timedelta(minutes=5),
+    )
+
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
+
+    check = _checks(report)["brand-kit-platform-requirements"]
     assert report["status"] == "stale"
-    assert platform_check["status"] == "stale"
-    assert platform_check["last_success_at"] is None
-    assert platform_check["reason"] == "no successful run was returned by Argo"
+    assert check["status"] == "stale"
+    assert f"(newest status: {status})" in check["reason"]
     assert all(
-        check["status"] == "fresh"
-        for name, check in checks.items()
+        other["status"] == "fresh"
+        for name, other in _checks(report).items()
         if name != "brand-kit-platform-requirements"
     )
 
 
-def test_liveness_distinguishes_missing_and_late_runs_and_uses_latest_success():
-    responses = {
-        "brand-kit-ci-failure-watch": {"items": []},
-        "brand-kit-consumer-drift": {
-            "items": [
-                workflow("consumer-drift-failed", "Failed", "2026-09-27T12:59:00Z"),
-                workflow("consumer-drift-late", "Succeeded", "2026-09-25T12:00:00Z"),
-            ]
-        },
-        "brand-kit-mirror-health": {
-            "items": [
-                workflow("mirror-health-old", "Succeeded", "2026-09-27T00:00:00Z"),
-                workflow("mirror-health-latest", "Succeeded", "2026-09-27T12:30:00Z"),
-            ]
-        },
-        "brand-kit-platform-requirements": {
-            "items": [workflow("platform-requirements", "Succeeded", "2026-09-27T12:00:00Z")]
-        },
-        "brand-kit-release-token-probe": {
-            "items": [workflow("release-token-probe", "Succeeded", "2026-09-27T12:00:00Z")]
-        },
-    }
-    calls = []
+def test_latest_success_counts_even_when_newer_runs_failed():
+    reader = FakeReader(
+        [item for item in _all_fresh() if item[0] != "brand-kit-mirror-health"]
+    )
+    reader.add("brand-kit-mirror-health", "uid-new-1", "unhealthy", NOW - timedelta(minutes=10))
+    reader.add("brand-kit-mirror-health", "uid-new-2", "unhealthy", NOW - timedelta(minutes=20))
+    reader.add("brand-kit-mirror-health", "uid-old", "healthy", NOW - timedelta(minutes=40))
 
-    def request(method, url, **kwargs):
-        calls.append((method, url, kwargs))
-        for template_name, response in responses.items():
-            if template_name in url:
-                return response
-        raise AssertionError(f"unexpected Argo URL: {url}")
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
 
-    report = brand_kit_workflow_liveness.run_liveness(
-        "argo-secret", now=NOW, api_url="https://argo.example", request=request
+    check = _checks(report)["brand-kit-mirror-health"]
+    assert check["status"] == "fresh"
+    assert check["last_success_at"] == "2026-09-27T12:20:00Z"
+    assert [key for key in reader.reads if "mirror-health" in key] == [
+        "failures/brand-kit-mirror-health/v1/uid-new-1/report.json",
+        "failures/brand-kit-mirror-health/v1/uid-new-2/report.json",
+        "failures/brand-kit-mirror-health/v1/uid-old/report.json",
+    ]
+
+
+def test_a_success_older_than_its_limit_is_stale_and_reports_its_age():
+    reader = FakeReader(_all_fresh())
+    target = _target("brand-kit-ci-failure-watch")
+    key = f"{target['report_prefix']}uid-{target['name']}/report.json"
+    reader.objects[key] = (reader.objects[key][0], NOW - timedelta(minutes=61))
+
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
+
+    check = _checks(report)["brand-kit-ci-failure-watch"]
+    assert check["status"] == "stale"
+    assert check["last_success_at"] == "2026-09-27T11:59:00Z"
+    assert check["age_minutes"] == 61.0
+    assert check["reason"] == (
+        "latest successful run is 61.0 minutes old (limit 60; newest status: pass)"
     )
 
-    checks = {check["workflow_template"]: check for check in report["checks"]}
-    assert report["status"] == "stale"
+
+def test_a_report_with_another_schema_or_malformed_body_is_not_a_success():
+    reader = FakeReader(_all_fresh())
+    reader.add(
+        "brand-kit-release-token-probe",
+        "uid-brand-kit-release-token-probe",
+        "pass",
+        NOW - timedelta(minutes=5),
+        schema="brand-kit-mirror-health/v1",
+    )
+    target = _target("brand-kit-ci-failure-watch")
+    key = f"{target['report_prefix']}uid-{target['name']}/report.json"
+    reader.objects[key] = (b"not json", reader.objects[key][1])
+
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
+
+    checks = _checks(report)
+    assert checks["brand-kit-release-token-probe"]["status"] == "stale"
+    assert "(newest status: unrecognized)" in checks["brand-kit-release-token-probe"]["reason"]
     assert checks["brand-kit-ci-failure-watch"]["status"] == "stale"
-    assert checks["brand-kit-ci-failure-watch"]["last_success_at"] is None
-    assert checks["brand-kit-ci-failure-watch"]["reason"] == (
-        "no successful run was returned by Argo"
-    )
-    assert checks["brand-kit-consumer-drift"]["status"] == "stale"
-    assert checks["brand-kit-consumer-drift"]["last_success_at"] == (
-        "2026-09-25T12:00:00Z"
-    )
-    assert checks["brand-kit-consumer-drift"]["age_minutes"] == 2940.0
-    assert checks["brand-kit-mirror-health"]["status"] == "fresh"
-    assert checks["brand-kit-mirror-health"]["last_success_at"] == (
-        "2026-09-27T12:30:00Z"
-    )
-    assert checks["brand-kit-mirror-health"]["age_minutes"] == 30.0
-    assert len(calls) == len(brand_kit_workflow_liveness.TARGETS)
 
 
-def test_liveness_is_indeterminate_when_argo_cannot_prove_one_target():
-    token = "argo-liveness-contract-secret"
-    calls = []
+def test_keys_outside_the_report_layout_are_ignored():
+    reader = FakeReader(_all_fresh())
+    target = _target("brand-kit-consumer-drift")
+    body = json.dumps({"schema": target["report_schema"], "status": "current"}).encode()
+    reader.objects = {
+        key: value
+        for key, value in reader.objects.items()
+        if not key.startswith(target["report_prefix"])
+    }
+    reader.objects[f"{target['report_prefix']}uid/nested/report.json"] = (body, NOW)
+    reader.objects[f"{target['report_prefix']}uid/other.json"] = (body, NOW)
 
-    def request(method, url, **kwargs):
-        calls.append(url)
-        if "brand-kit-ci-failure-watch" in url:
-            raise release_publish.ReleaseError("cannot reach Argo API")
-        if "brand-kit-consumer-drift" in url:
-            return {"items": [workflow("consumer-drift", "Succeeded", "2026-09-27T12:00:00Z")]}
-        return {"items": [workflow("mirror-health", "Succeeded", "2026-09-27T12:00:00Z")]}
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
 
-    report = brand_kit_workflow_liveness.run_liveness(
-        token, now=NOW, request=request
-    )
+    assert _checks(report)["brand-kit-consumer-drift"]["status"] == "stale"
+    assert not [key for key in reader.reads if key.startswith(target["report_prefix"])]
 
+
+def test_storage_errors_make_one_target_indeterminate_without_hiding_others():
+    mirror = _target("brand-kit-mirror-health")
+    reader = FakeReader(_all_fresh(), fail_list={mirror["report_prefix"]})
+
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
+
+    check = _checks(report)["brand-kit-mirror-health"]
     assert report["status"] == "indeterminate"
-    assert report["checks"][0]["status"] == "indeterminate"
-    assert report["checks"][1]["status"] == "fresh"
-    assert report["checks"][2]["status"] == "fresh"
-    assert report["checks"][3]["status"] == "fresh"
-    assert report["checks"][4]["status"] == "fresh"
-    assert len(calls) == len(brand_kit_workflow_liveness.TARGETS)
-    assert "cannot reach Argo API" in report["checks"][0]["reason"]
-    assert token not in json.dumps(report)
+    assert check["status"] == "indeterminate"
+    assert "HTTP 403" in check["reason"]
 
-
-def test_liveness_treats_a_malformed_api_response_as_indeterminate():
-    def request(method, url, **kwargs):
-        if "brand-kit-consumer-drift" in url:
-            return {"error": "temporarily unavailable"}
-        return {
-            "items": [
-                workflow("healthy", "Succeeded", "2026-09-27T12:00:00Z")
-            ]
-        }
-
-    report = brand_kit_workflow_liveness.run_liveness(
-        "argo-secret", now=NOW, request=request
+    probe = _target("brand-kit-release-token-probe")
+    reader = FakeReader(
+        _all_fresh(),
+        fail_get={f"{probe['report_prefix']}uid-{probe['name']}/report.json"},
     )
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
+    assert _checks(report)["brand-kit-release-token-probe"]["status"] == "indeterminate"
 
+    reports = [item for item in _all_fresh() if item[0] != "brand-kit-consumer-drift"]
+    reader = FakeReader(reports, fail_list={mirror["report_prefix"]})
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
+    assert report["status"] == "stale"
+
+
+def test_report_reads_per_target_are_bounded():
+    reader = FakeReader(_all_fresh())
+    for index in range(brand_kit_workflow_liveness.MAX_REPORT_READS_PER_TARGET + 5):
+        reader.add(
+            "brand-kit-ci-failure-watch",
+            f"uid-failed-{index}",
+            "fail",
+            NOW - timedelta(seconds=index + 1),
+        )
+
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=NOW)
+
+    prefix = _target("brand-kit-ci-failure-watch")["report_prefix"]
+    assert len([key for key in reader.reads if key.startswith(prefix)]) == (
+        brand_kit_workflow_liveness.MAX_REPORT_READS_PER_TARGET
+    )
+    assert _checks(report)["brand-kit-ci-failure-watch"]["status"] == "stale"
+
+
+def test_main_without_reader_credentials_writes_an_indeterminate_report(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("S3_READER_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_READER_SECRET_KEY", raising=False)
+    report_path = tmp_path / "report.json"
+
+    assert brand_kit_workflow_liveness.main(["--report", str(report_path)]) == 2
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "indeterminate"
-    assert report["checks"][0]["status"] == "fresh"
-    assert report["checks"][1]["status"] == "indeterminate"
-    assert report["checks"][1]["reason"] == (
-        "Argo workflow-list response for brand-kit-consumer-drift has no items list"
-    )
-    assert report["checks"][2]["status"] == "fresh"
-
-
-def test_success_without_a_timestamp_is_indeterminate():
-    def request(method, url, **kwargs):
-        return {"items": [{"status": {"phase": "Succeeded"}, "metadata": {}}]}
-
-    report = brand_kit_workflow_liveness.run_liveness(
-        "argo-secret", now=NOW, request=request
-    )
-
-    assert report["status"] == "indeterminate"
-    assert all(check["status"] == "indeterminate" for check in report["checks"])
+    assert "S3_READER_ACCESS_KEY is required" in report["error"]
+    assert "INDETERMINATE" in capsys.readouterr().err
 
 
 def _load_manifest(name):
@@ -302,16 +308,21 @@ def test_liveness_workflow_contract_is_independent_and_retains_evidence():
     assert "tools/brand_kit_workflow_liveness.py" in check["container"]["args"][0]
     assert check["container"]["env"] == [
         {
-            "name": "ARGO_WORKFLOW_TOKEN",
+            "name": "S3_READER_ACCESS_KEY",
             "valueFrom": {
-                "secretKeyRef": {
-                    "name": "brand-kit-workflow-readonly",
-                    "key": "token",
-                    "optional": True,
-                }
+                "secretKeyRef": {"name": "needle-ci-artifact-reader", "key": "access-key"}
             },
-        }
+        },
+        {
+            "name": "S3_READER_SECRET_KEY",
+            "valueFrom": {
+                "secretKeyRef": {"name": "needle-ci-artifact-reader", "key": "secret-key"}
+            },
+        },
+        {"name": "S3_ENDPOINT", "value": "https://s3.ardenone.com"},
+        {"name": "S3_REGION", "value": "garage"},
     ]
+    assert manifest["spec"]["serviceAccountName"] == "brand-kit-workflow-liveness"
     artifact = check["outputs"]["artifacts"][0]
     assert artifact["artifactGC"] == {"strategy": "Never"}
     assert artifact["s3"]["key"] == (

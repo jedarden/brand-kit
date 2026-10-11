@@ -164,3 +164,43 @@ def test_active_retention_hold_preserves_failure_watch_report(tmp_path):
     assert pruned == 1
     assert publisher.deleted == [f"{PREFIX}expired/report.json"]
     assert held_key not in publisher.deleted
+
+
+def test_s3_requests_send_a_non_default_user_agent_outside_the_signature():
+    """Cloudflare in front of s3.ardenone.com 403s urllib's default agent."""
+    requests = []
+
+    def opener(request, timeout):
+        requests.append(request)
+        return Response(b'{"schema": "x", "status": "pass"}')
+
+    client = prune_ci_failure_watch_reports.S3Client(
+        "https://s3.example",
+        "needle-ci-artifacts",
+        prune_ci_failure_watch_reports.S3Credentials("reader", "reader-secret"),
+        opener=opener,
+        now=NOW,
+    )
+
+    assert client.get_object(f"{PREFIX}uid-1/report.json") == b'{"schema": "x", "status": "pass"}'
+
+    request = requests[0]
+    assert request.get_method() == "GET"
+    assert request.full_url == f"https://s3.example/needle-ci-artifacts/{PREFIX}uid-1/report.json"
+    user_agent = request.get_header("User-agent")
+    assert user_agent == prune_ci_failure_watch_reports.USER_AGENT
+    assert not user_agent.startswith("Python-urllib")
+    signed = request.get_header("Authorization").split("SignedHeaders=", 1)[1].split(",", 1)[0]
+    assert signed == "host;x-amz-content-sha256;x-amz-date"
+
+
+@pytest.mark.parametrize("key", ("", "/absolute", "a//b", "a/../b", "./a"))
+def test_get_object_rejects_keys_that_could_escape_the_bucket(key):
+    client = prune_ci_failure_watch_reports.S3Client(
+        "https://s3.example",
+        "needle-ci-artifacts",
+        prune_ci_failure_watch_reports.S3Credentials("reader", "reader-secret"),
+        opener=lambda request, timeout: pytest.fail("no request may be sent"),
+    )
+    with pytest.raises(prune_ci_failure_watch_reports.RetentionError):
+        client.get_object(key)

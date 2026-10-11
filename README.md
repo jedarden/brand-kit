@@ -393,15 +393,19 @@ is rejected by the submitter and by the release publisher's exact-commit
 attestation.
 
 The application-owned `brand-kit-ci-failure-watch` companion in
-`automation/` checks the Argo API every 15 minutes for `Failed` or `Error`
-`brand-kit-ci` runs from the preceding two hours. That lookback covers the
-cluster's two-hour `secondsAfterFailure` Workflow retention window, so the gate
-failure is reported before Argo reaps its record. The retention/lookback
+`automation/` lists `brand-kit-ci` Workflow objects from the in-cluster
+Kubernetes API every 15 minutes and reports `Failed` or `Error` runs from the
+preceding two hours. That lookback covers the watcher's 7,200-second retention
+contract and more than covers the cluster's current 1,800-second
+`secondsAfterFailure`, so the gate failure is reported before Argo reaps its
+record. The retention/lookback
 contract is encoded in the WorkflowTemplate annotations and checked by
 `python3 tools/check_ci_failure_watch_retention.py`; the watcher also rejects
-an unsafe shorter runtime window. The watcher uses the dedicated read-only
-`ARGO_WORKFLOW_TOKEN` from the dedicated `brand-kit-workflow-readonly` Secret
-in namespace `argo-workflows`, keeps a sanitized report at
+an unsafe shorter runtime window. The watcher authenticates with its own pod's
+projected ServiceAccount token (`brand-kit-ci-failure-watch`, granted only
+`workflows` `get`/`list` plus the executor's `workflowtaskresults` write in
+namespace `argo-workflows`); argo-server accepts only SSO sessions, so no Argo
+API token exists for it. It keeps a sanitized report at
 `failures/brand-kit-ci-failure-watch/v1/<workflow-uid>/report.json` with
 `artifactGC: Never`, and its exit handler posts a `BrandKitCIRegressionGate`
 alert to the iad-ci Alertmanager. Alertmanager's configured ntfy receiver
@@ -492,7 +496,11 @@ missing report as a passing gate.
 
 The separate `brand-kit-workflow-liveness` watchdog closes the gap where a
 scheduled detector never starts and therefore cannot run its own exit handler.
-Its CronWorkflow runs every 15 minutes and checks the latest successful runs
+Its CronWorkflow runs every 15 minutes and reads each target's own durable
+`failures/<target>/<version>/<workflow-uid>/report.json` in Garage (Workflow
+objects are reaped minutes after success, so they cannot show a daily target's
+last success). A report with the target's schema and success status is a
+successful run. It requires a recent one
 for `brand-kit-ci-failure-watch` (fresh within 60 minutes),
 `brand-kit-consumer-drift` and `brand-kit-platform-requirements` (fresh within
 48 hours), `brand-kit-mirror-health` (fresh within 12 hours), and
@@ -688,8 +696,10 @@ propagation, and submits that tag to
 `CronWorkflow` source remains
 `automation/brand-kit-consumer-drift-cronworkflow.yml` as a fallback; it clones
 the newest stable release at least 24 hours old whose tag is visible on the
-read-only mirror, emits the JSON report, and fails its run on drift. It runs at
-06:17 UTC daily. These workflows are intentionally not
+read-only mirror, emits the JSON report, and fails its run on drift. When no
+stable release is old enough to audit (none published yet), it writes a
+`current` report with no checks and succeeds: nothing can have drifted. It runs
+at 06:17 UTC daily. These workflows are intentionally not
 GitHub Actions workflows and have no consumer-write step. The submitter
 reconciles existing same-release or same-commit Argo runs with
 the read-only `ARGO_TOKEN`, sends one non-retryable `POST` with

@@ -1488,7 +1488,9 @@ def test_scheduled_workflow_contract_is_read_only_and_tag_safe():
     assert 'if [ -z "$TAG" ]; then' in workflow
     assert resolve_start in workflow
     assert mirror_argument in workflow
-    assert "--print-release-tag)" in workflow
+    assert "--print-release-tag \\\n" in workflow
+    assert "--allow-no-release \\\n" in workflow
+    assert "--report /tmp/consumer-drift-report.json)" in workflow
     assert workflow.index(tag_parameter) < workflow.index(resolve_start)
     assert workflow.index(resolve_start) < workflow.index('git clone --filter=blob:none --no-tags "{{workflow.parameters.brand-kit-repository}}" /release')
 
@@ -1590,3 +1592,110 @@ def test_scheduled_workflow_routes_failures_and_retains_report():
         "https://s3.ardenone.com/needle-ci-artifacts/failures/brand-kit-consumer-drift/v1/<workflow-uid>/report.json"
         in toolchain
     )
+
+
+def _no_release_config(tmp_path):
+    config = json.loads(Path("consumer-drift.json").read_text(encoding="utf-8"))
+    path = tmp_path / "consumer-drift.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    "records",
+    (
+        [],
+        [{"tag_name": "v1.0.0", "draft": True, "prerelease": False}],
+        [
+            {
+                "tag_name": "v1.0.0",
+                "draft": False,
+                "prerelease": False,
+                "published_at": "2999-01-01T00:00:00Z",
+            }
+        ],
+    ),
+    ids=("no-release", "draft-only", "too-new"),
+)
+def test_daily_fallback_with_no_eligible_release_passes_with_an_empty_current_report(
+    tmp_path, monkeypatch, capsys, records
+):
+    monkeypatch.setattr(
+        consumer_drift, "fetch_bytes", lambda url, headers=None: json.dumps(records).encode()
+    )
+    report_path = tmp_path / "report.json"
+    config_path = _no_release_config(tmp_path)
+
+    assert consumer_drift.main(
+        [
+            "--config",
+            str(config_path),
+            "--print-release-tag",
+            "--allow-no-release",
+            "--report",
+            str(report_path),
+        ]
+    ) == 0
+
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "NO RELEASE  nothing to audit" in output.err
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "current"
+    assert report["release"]["tag"] is None
+    assert report["checks"] == []
+    assert report["errors"] == []
+
+    # Without the explicit fallback flag the same condition stays indeterminate.
+    assert consumer_drift.main(["--config", str(config_path), "--print-release-tag"]) == 2
+
+
+def test_daily_fallback_still_fails_when_an_eligible_release_misses_the_mirror(
+    tmp_path, monkeypatch
+):
+    records = [
+        {
+            "tag_name": "v1.0.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+    monkeypatch.setattr(
+        consumer_drift, "fetch_bytes", lambda url, headers=None: json.dumps(records).encode()
+    )
+    monkeypatch.setattr(consumer_drift, "mirror_tag_commit", lambda repository, tag: None)
+    report_path = tmp_path / "report.json"
+
+    assert consumer_drift.main(
+        [
+            "--config",
+            str(_no_release_config(tmp_path)),
+            "--print-release-tag",
+            "--allow-no-release",
+            "--report",
+            str(report_path),
+        ]
+    ) == 2
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "indeterminate"
+    assert "visible on the read-only mirror" in report["errors"][0]
+
+
+def test_release_list_errors_are_not_treated_as_no_release(tmp_path, monkeypatch):
+    def unavailable(url, headers=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(consumer_drift, "fetch_bytes", unavailable)
+
+    assert consumer_drift.main(
+        [
+            "--config",
+            str(_no_release_config(tmp_path)),
+            "--print-release-tag",
+            "--allow-no-release",
+            "--report",
+            str(tmp_path / "report.json"),
+        ]
+    ) == 2

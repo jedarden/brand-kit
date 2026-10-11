@@ -319,9 +319,22 @@ def test_main_persists_incomplete_pagination_without_partial_results(
         return next(pages)
 
     def run_watch(token_arg, **kwargs):
-        return real_run_watch(token_arg, request=request, **kwargs)
+        kwargs["request"] = request
+        return real_run_watch(token_arg, **kwargs)
 
-    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", token)
+    service_account_dir = tmp_path / "serviceaccount"
+    service_account_dir.mkdir()
+    (service_account_dir / "token").write_text(token, encoding="utf-8")
+    monkeypatch.setattr(
+        brand_kit_ci_failure_watch.kubernetes_api,
+        "DEFAULT_SERVICE_ACCOUNT_DIR",
+        service_account_dir,
+    )
+    monkeypatch.setattr(
+        brand_kit_ci_failure_watch.kubernetes_api,
+        "request_function",
+        lambda directory=None: request,
+    )
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
     exit_code = brand_kit_ci_failure_watch.main(
         [

@@ -66,10 +66,24 @@ spec:
             TAG="{{workflow.parameters.release-tag}}"
             EXPECTED_COMMIT="{{workflow.parameters.release-commit}}"
             if [ -z "$TAG" ]; then
+              # Daily fallback: audit the newest eligible stable release. When
+              # none is eligible (none published yet, or none 24 hours old)
+              # nothing can have drifted, so the detector writes a "current"
+              # report with no checks and the run succeeds. Every other
+              # discovery failure (API error, release missing from the
+              # read-only mirror) still exits non-zero and alerts.
               TAG="$(python3 tools/consumer_drift.py \
                 --config consumer-drift.json \
                 --mirror-repository "{{workflow.parameters.brand-kit-repository}}" \
-                --print-release-tag)"
+                --print-release-tag \
+                --allow-no-release \
+                --report /tmp/consumer-drift-report.json)"
+              if [ -z "$TAG" ]; then
+                python3 /brand-kit/tools/validate_consumer_drift_report.py \
+                  /tmp/consumer-drift-report.json
+                printf '0\n' > /tmp/consumer-drift-exit-code
+                exit 0
+              fi
             fi
             printf '%s\n' "$TAG" > /tmp/consumer-drift-release-tag
 

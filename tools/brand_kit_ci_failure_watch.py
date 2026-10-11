@@ -2,7 +2,9 @@
 """Find recent brand-kit-ci runs for owner routing and durable CI evidence.
 
 The watcher is deliberately read-only.  It lists Workflow records through the
-Argo API, keeps only recent ``Failed``/``Error`` runs for the owner report,
+in-cluster Kubernetes API with the pod's own ServiceAccount token (argo-server
+on iad-ci accepts only SSO sessions; see ``tools/kubernetes_api.py``), keeps
+only recent ``Failed``/``Error`` runs for the owner report,
 and copies validated successful-run metadata into a separate durable
 attestation artifact.  Alert delivery is owned by the companion WorkflowTemplate
 exit handler so an Alertmanager outage cannot change the observed CI result.
@@ -13,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 import sys
 import urllib.parse
@@ -26,8 +27,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
 from tools import ci_failure_watch_report
+from tools import kubernetes_api
 from tools import release_publish
 
+# Workflow objects are listed from the Kubernetes API; the Argo server URL is
+# kept only to build the human-facing evidence link for each failed run.
+DEFAULT_KUBERNETES_API_URL = kubernetes_api.DEFAULT_API_URL
 DEFAULT_ARGO_API_URL = release_publish.DEFAULT_ARGO_API_URL
 DEFAULT_ARGO_NAMESPACE = release_publish.DEFAULT_ARGO_NAMESPACE
 DEFAULT_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
@@ -68,40 +73,9 @@ def _redact_text(value: Any, *secrets: str) -> Any:
     return redacted
 
 
-def argo_api_path(api_url: str, path: str) -> str:
-    if not isinstance(api_url, str) or not api_url.strip():
-        raise release_publish.ReleaseError("Argo API URL must be an absolute HTTPS URL")
-    parsed = urllib.parse.urlsplit(api_url)
-    try:
-        parsed.port
-    except ValueError as error:
-        raise release_publish.ReleaseError("Argo API URL has an invalid port") from error
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise release_publish.ReleaseError(
-            "Argo API URL must be HTTPS without credentials, query, or fragment"
-        )
-    base = api_url.rstrip("/")
-    if not base.endswith("/api/v1"):
-        base = f"{base}/api/v1"
-    return f"{base}/{path.lstrip('/')}"
-
-
 def argo_workflows_url(api_url: str, namespace: str) -> str:
-    if not isinstance(namespace, str) or not release_publish.WORKFLOW_NAME_PATTERN.fullmatch(
-        namespace
-    ):
-        raise release_publish.ReleaseError(f"Argo namespace is malformed: {namespace!r}")
-    return argo_api_path(
-        api_url,
-        f"workflows/{urllib.parse.quote(namespace, safe='')}",
-    )
+    """Kubernetes API collection URL for Argo Workflow objects."""
+    return kubernetes_api.argo_collection_url(api_url, namespace, "workflows")
 
 
 def workflow_list_url(
@@ -144,7 +118,7 @@ def _workflow_list_items(
 ) -> tuple[list[dict[str, Any]], int]:
     """Read one complete, consistently paginated Workflow list snapshot.
 
-    Argo exposes Kubernetes list pagination in ``metadata.continue``. A
+    The Kubernetes API paginates lists through ``metadata.continue``. A
     missing or empty token is the only terminal condition; pages are not
     assumed to be ordered by any workflow timestamp, so the caller must apply
     its time window after this function has collected every page.
@@ -175,7 +149,7 @@ def _workflow_list_items(
                 page_url,
                 token=token,
                 authorization_scheme="Bearer",
-                service="Argo API",
+                service=kubernetes_api.SERVICE,
             )
         except release_publish.ReleaseError as error:
             detail = _redact_text(str(error), token)
@@ -183,7 +157,7 @@ def _workflow_list_items(
                 "page_request_failed",
                 page_number,
                 page_number - 1,
-                f"Argo API workflow-list page {page_number} request failed: {detail}",
+                f"Kubernetes API workflow-list page {page_number} request failed: {detail}",
             ) from error
         if not isinstance(response, dict) or not isinstance(response.get("items"), list):
             raise WatchPaginationError(
@@ -427,15 +401,20 @@ def validate_lookback_coverage(lookback_minutes: int) -> None:
 def run_watch(
     token: str | None,
     *,
-    api_url: str = DEFAULT_ARGO_API_URL,
+    api_url: str = DEFAULT_KUBERNETES_API_URL,
+    evidence_api_url: str = DEFAULT_ARGO_API_URL,
     namespace: str = DEFAULT_ARGO_NAMESPACE,
     workflow_template: str = DEFAULT_WORKFLOW_TEMPLATE,
     lookback_minutes: int = DEFAULT_LOOKBACK_MINUTES,
     now: datetime | None = None,
     request: Callable[..., Any] = release_publish.request_json,
 ) -> dict[str, Any]:
-    """Return recent failures plus successful runs worth durably attesting."""
-    token = release_publish.require_token(token, "ARGO_WORKFLOW_TOKEN")
+    """Return recent failures plus successful runs worth durably attesting.
+
+    ``token`` is the pod's ServiceAccount token for ``api_url`` (the
+    Kubernetes API); ``evidence_api_url`` only shapes report links.
+    """
+    token = release_publish.require_token(token, "ServiceAccount token")
     validate_lookback_coverage(lookback_minutes)
 
     current = _utc_now(now)
@@ -453,7 +432,7 @@ def run_watch(
         if (summary := _failure_summary(
             item,
             cutoff=cutoff,
-            api_url=api_url,
+            api_url=evidence_api_url,
             namespace=namespace,
             redact_secrets=(token,),
         ))
@@ -537,7 +516,22 @@ def build_parser() -> argparse.ArgumentParser:
             "successful-run attestations."
         )
     )
-    parser.add_argument("--argo-api-url", default=DEFAULT_ARGO_API_URL)
+    parser.add_argument(
+        "--kubernetes-api-url",
+        default=DEFAULT_KUBERNETES_API_URL,
+        help="in-cluster Kubernetes API server that holds the Workflow objects",
+    )
+    parser.add_argument(
+        "--service-account-dir",
+        type=Path,
+        default=kubernetes_api.DEFAULT_SERVICE_ACCOUNT_DIR,
+        help="directory holding the pod's projected ServiceAccount token and CA",
+    )
+    parser.add_argument(
+        "--argo-api-url",
+        default=DEFAULT_ARGO_API_URL,
+        help="Argo server base URL used only for human-facing evidence links",
+    )
     parser.add_argument("--argo-namespace", default=DEFAULT_ARGO_NAMESPACE)
     parser.add_argument("--workflow-template", default=DEFAULT_WORKFLOW_TEMPLATE)
     parser.add_argument("--lookback-minutes", type=int, default=DEFAULT_LOOKBACK_MINUTES)
@@ -563,12 +557,14 @@ def main(argv: list[str] | None = None) -> int:
         workflow_template = DEFAULT_WORKFLOW_TEMPLATE
     try:
         report = run_watch(
-            os.environ.get("ARGO_WORKFLOW_TOKEN"),
-            api_url=args.argo_api_url,
+            kubernetes_api.read_service_account_token(args.service_account_dir),
+            api_url=args.kubernetes_api_url,
+            evidence_api_url=args.argo_api_url,
             namespace=args.argo_namespace,
             workflow_template=args.workflow_template,
             lookback_minutes=args.lookback_minutes,
             now=current,
+            request=kubernetes_api.request_function(args.service_account_dir),
         )
     except WatchPaginationError as error:
         cutoff = _cutoff_metadata(current, args.lookback_minutes)

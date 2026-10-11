@@ -17,16 +17,21 @@ The ordered commands and required Argo log evidence are documented under
 The gate has an application-owned companion check in
 `automation/brand-kit-ci-failure-watch-workflowtemplate.yml`, scheduled by
 `automation/brand-kit-ci-failure-watch-cronworkflow.yml`. Every 15 minutes it
-uses the dedicated read-only `ARGO_WORKFLOW_TOKEN` to list `brand-kit-ci` Workflow records
+lists `brand-kit-ci` Workflow objects from the in-cluster Kubernetes API
+(`https://kubernetes.default.svc/apis/argoproj.io/v1alpha1/namespaces/argo-workflows/workflows`)
 and retains `Failed`/`Error` runs from the preceding two hours. The lookback is
-intentional: iad-ci's Argo controller retains failed Workflows for 7200 seconds
-through `controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure` in
-`declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml`.
-The token comes from Secret `brand-kit-workflow-readonly` in namespace
-`argo-workflows`, delivered by the same-named ExternalSecret; it is not the
-release operator's `ARGO_TOKEN` from `brand-kit-release-tokens`. The watcher
-runs as dedicated service account `brand-kit-ci-failure-watch` and calls only
-the Argo Workflow list and detail `GET` endpoints. See
+intentional: it must cover how long iad-ci's Argo controller retains failed
+Workflows (`controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure`
+in `declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml`).
+The watcher's contract assumes 7200 seconds; the controller currently uses
+1800 seconds plus a 20-failed-Workflow retention cap, which the two-hour
+lookback more than covers. The watcher runs as dedicated service account
+`brand-kit-ci-failure-watch` and authenticates with that pod's own projected
+token -- argo-server runs `--auth-mode=sso` only, so there is no Argo API token
+for it, and it is never the release operator's `ARGO_TOKEN` from
+`brand-kit-release-tokens`. Its Role grants only `workflows` `get`/`list` (plus
+the executor's `workflowtaskresults` `create`/`patch`), and the watcher makes
+only the Workflow list `GET`. See
 [`argo-credential-separation.md`](argo-credential-separation.md) for the full
 role map and the submit/mutation boundary.
 The watcher contract requires its lookback to cover that full retention window,
@@ -260,8 +265,13 @@ the asset commit passed, so repair the read path and rerun the check first.
 Scheduled workflows cannot report that they are missing: their Alertmanager
 handlers run only after a target Workflow starts. The independent
 `brand-kit-workflow-liveness` CronWorkflow therefore runs every 15 minutes and
-lists successful runs for every scheduled brand-kit WorkflowTemplate except
-itself. This monitored-schedule list is an enforced contract: the tests require
+looks for a recent successful run of every scheduled brand-kit WorkflowTemplate
+except itself. The evidence is each target's own durable report
+(`failures/<target>/<version>/<workflow-uid>/report.json` in Garage, written for
+every run with `artifactGC: Never`), read newest first with the read-only
+`needle-ci-artifact-reader` credential. Workflow objects cannot serve: iad-ci
+deletes a Succeeded Workflow 300 seconds after it finishes and keeps at most 20
+completed Workflows. This monitored-schedule list is an enforced contract: the tests require
 every CronWorkflow (apart from the watchdog itself) to appear in the liveness
 targets below and in this documentation.
 
@@ -273,8 +283,9 @@ targets below and in this documentation.
 | `brand-kit-platform-requirements` | `27 6 * * *` | 48 hours |
 | `brand-kit-release-token-probe` | `7 6 * * *` | 48 hours |
 
-Missing/old successes are `stale`; an unavailable or malformed Argo response is
-`indeterminate`. Both non-fresh states fail the watchdog and invoke its
+Missing/old successes are `stale` (a target with no report at all is reported
+as possibly suspended, deleted, or never scheduled); a Garage listing or report
+read that fails is `indeterminate`. Both non-fresh states fail the watchdog and invoke its
 `BrandKitWorkflowLiveness` owner alert. Its report is retained at
 `failures/brand-kit-workflow-liveness/v1/<workflow-uid>/report.json`, so a
 suspended/deleted/mis-scheduled CronWorkflow or broken template reference has a

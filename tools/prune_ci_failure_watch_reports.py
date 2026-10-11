@@ -36,6 +36,14 @@ DEFAULT_TIMEOUT_SECONDS = http_policy.GARAGE_TIMEOUT_SECONDS
 AWS_SERVICE = "s3"
 AWS_TERMINATOR = "aws4_request"
 S3_XML_NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/"
+# s3.ardenone.com is fronted by Cloudflare, whose browser-integrity check
+# answers urllib's default "Python-urllib/3.x" User-Agent with HTTP 403
+# ("error code: 1010") before the request reaches Garage. Every scheduled
+# report-retention and liveness read failed that way until 2026-10-11
+# (brandkit-cbbcc260). The header is sent but deliberately left out of the
+# SigV4 SignedHeaders, so an intermediary rewriting it cannot break the
+# signature.
+USER_AGENT = "brand-kit-automation/1 (+https://github.com/jedarden/brand-kit)"
 
 
 RetentionError = retention_holds.RetentionError
@@ -114,7 +122,7 @@ def _parse_s3_timestamp(value: str | None) -> datetime:
 
 
 class S3Client:
-    """Minimal path-style S3 client for the two calls used by pruning."""
+    """Minimal path-style S3 client for report pruning and liveness reads."""
 
     def __init__(
         self,
@@ -157,13 +165,16 @@ class S3Client:
         *,
         body: bytes = b"",
         extra_headers: dict[str, str] | None = None,
+        key: str | None = None,
     ) -> bytes:
         current = _utc_now(self._now)
         amz_date = _timestamp(current)
         date_stamp = _date_stamp(current)
         body_hash = hashlib.sha256(body).hexdigest()
         path = "/".join(
-            part for part in (self._endpoint.path.strip("/"), self._bucket) if part
+            part
+            for part in (self._endpoint.path.strip("/"), self._bucket, key or "")
+            if part
         )
         path = f"/{path}"
         canonical_uri = _canonical_uri(path)
@@ -226,12 +237,17 @@ class S3Client:
             (
                 self._endpoint.scheme,
                 self._endpoint.netloc,
-                path,
+                canonical_uri,
                 canonical_query,
                 "",
             )
         )
-        request = urllib.request.Request(url, data=body or None, headers=headers, method=method)
+        request = urllib.request.Request(
+            url,
+            data=body or None,
+            headers={**headers, "User-Agent": USER_AGENT},
+            method=method,
+        )
         method = method.upper()
         max_attempts = http_policy.max_attempts(method)
         for attempt in range(1, max_attempts + 1):
@@ -253,6 +269,17 @@ class S3Client:
                     continue
                 raise RetentionError("cannot reach Garage during report pruning") from error
         raise AssertionError("Garage request loop exhausted without a response")
+
+    def get_object(self, key: str) -> bytes:
+        """Read one object body; the key must be a plain relative object key."""
+        if (
+            not isinstance(key, str)
+            or not key
+            or key.startswith("/")
+            or any(part in {"", ".", ".."} for part in key.split("/"))
+        ):
+            raise RetentionError("S3 object key is malformed")
+        return self._request("GET", [], key=key)
 
     def list_objects(self, prefix: str) -> list[S3Object]:
         objects: list[S3Object] = []

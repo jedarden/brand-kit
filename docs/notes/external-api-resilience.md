@@ -82,8 +82,8 @@ procedure is an operator gate; the client continues to make only one
 
 ## Fail-closed outcomes
 
-- Argo watcher and workflow-liveness reads that exhaust retries produce an
-  error or `indeterminate` report. They cannot produce a false `pass`, `fresh`,
+- Failure-watcher Kubernetes API reads and workflow-liveness Garage reads that
+  exhaust retries produce an error or `indeterminate` report. They cannot produce a false `pass`, `fresh`,
   or successful liveness result.
 - Forgejo release reads that exhaust retries block publication or consumer
   synchronization. A missing release (`404`) is not a passing audit.

@@ -8,6 +8,7 @@ import subprocess
 import yaml
 
 from tools import brand_kit_workflow_liveness
+from tools import prune_ci_failure_watch_reports as s3_reports
 
 
 ROOT = Path(__file__).parent
@@ -15,51 +16,46 @@ ALERTMANAGER_ENDPOINT = "http://alertmanager.monitoring.svc:9093/api/v2/alerts"
 LIVENESS_POLL_MINUTES = 15
 
 
-def _workflow(name, finished_at):
-    timestamp = finished_at.isoformat().replace("+00:00", "Z")
-    return {
-        "metadata": {"name": name, "uid": f"uid-{name}"},
-        "status": {
-            "phase": "Succeeded",
-            "startedAt": timestamp,
-            "finishedAt": timestamp,
-        },
-    }
+def _report_objects(last_successes):
+    """One successful durable report per target, written at its last success."""
+    objects = {}
+    for target in brand_kit_workflow_liveness.TARGETS:
+        key = f"{target['report_prefix']}uid-{target['name']}/report.json"
+        body = json.dumps(
+            {"schema": target["report_schema"], "status": target["success_statuses"][0]}
+        ).encode("utf-8")
+        objects[key] = (body, last_successes[target["workflow_template"]])
+    return objects
 
 
-def _workflow_records(now, last_successes):
-    return {
-        target["workflow_template"]: [
-            _workflow(target["name"], last_successes[target["workflow_template"]])
+class _ReportBucket:
+    def __init__(self, objects):
+        self.objects = objects
+        self.listed = []
+
+    def list_objects(self, prefix):
+        self.listed.append(prefix)
+        return [
+            s3_reports.S3Object(key=key, last_modified=modified)
+            for key, (_, modified) in self.objects.items()
+            if key.startswith(prefix)
         ]
-        for target in brand_kit_workflow_liveness.TARGETS
-    }
+
+    def get_object(self, key):
+        return self.objects[key][0]
 
 
 def _run_watchdog(now, last_successes, tmp_path):
     tmp_path.mkdir(parents=True, exist_ok=True)
-    records = _workflow_records(now, last_successes)
-    requests = []
+    reader = _ReportBucket(_report_objects(last_successes))
 
-    def request(method, url, **kwargs):
-        assert method == "GET"
-        assert kwargs["authorization_scheme"] == "Bearer"
-        requests.append(url)
-        for workflow_template, items in records.items():
-            if workflow_template in url:
-                return {"items": items}
-        raise AssertionError(f"unexpected Argo workflow list URL: {url}")
-
-    report = brand_kit_workflow_liveness.run_liveness(
-        "test-readonly-token",
-        api_url="https://argo.example",
-        now=now,
-        request=request,
-    )
+    report = brand_kit_workflow_liveness.run_liveness(reader, now=now)
     report_path = tmp_path / "liveness-report.json"
     brand_kit_workflow_liveness.write_report(report, report_path)
     assert json.loads(report_path.read_text(encoding="utf-8")) == report
-    assert len(requests) == len(brand_kit_workflow_liveness.TARGETS)
+    assert reader.listed == [
+        target["report_prefix"] for target in brand_kit_workflow_liveness.TARGETS
+    ]
     return report, report_path
 
 
@@ -264,10 +260,10 @@ def test_missed_scheduled_workflows_are_detected_on_the_next_liveness_tick(
             stale_report["checks"]
         )
 
-        records = _workflow_records(detection_tick, outage_successes)
         observed_successes = {
-            item["status"]["finishedAt"]
-            for item in records[scenario["template"]]
+            modified.isoformat().replace("+00:00", "Z")
+            for key, (_, modified) in _report_objects(outage_successes).items()
+            if key.startswith(target["report_prefix"])
         }
         assert all(slot not in observed_successes for slot in scenario["missed_scheduled_runs"])
 

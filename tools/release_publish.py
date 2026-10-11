@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -781,11 +782,17 @@ def request_json(
     authorization_scheme: str = "token",
     service: str = "Forgejo API",
     sleep: Callable[[float], None] | None = None,
+    context: ssl.SSLContext | None = None,
 ) -> Any:
     try:
         timeout = http_policy.validate_timeout(timeout)
     except ValueError as error:
         raise ReleaseError(str(error)) from error
+    # ``context`` pins the trust root for one API (the in-cluster Kubernetes
+    # API's ServiceAccount CA); None keeps the system trust store.
+    open_options: dict[str, Any] = {"timeout": timeout}
+    if context is not None:
+        open_options["context"] = context
     headers = {"Accept": "application/json", "User-Agent": "brand-kit-release-publisher"}
     if token:
         headers["Authorization"] = f"{authorization_scheme} {token}"
@@ -800,7 +807,7 @@ def request_json(
     body: bytes | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, **open_options) as response:
                 body = response.read()
             break
         except urllib.error.HTTPError as error:

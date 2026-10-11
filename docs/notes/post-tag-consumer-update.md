@@ -111,7 +111,12 @@ read-only run as a fallback. It runs at **06:17 UTC** and uses the configured
 semantic-version releases, then excludes any tag whose peeled ref is not yet
 visible on the read-only GitHub mirror; it therefore audits the newest stable
 release that both gates have cleared instead of failing on a just-published tag
-that is still propagating. The current checkout supplies the detector and
+that is still propagating. When the release list is read successfully but no
+stable release has cleared the age gate (for example, none has been published
+yet), the fallback has nothing to audit: `consumer_drift.py --print-release-tag
+--allow-no-release` writes a `current` report with no checks and the run
+succeeds. A release that has cleared the age gate but is missing from the
+mirror, or an unreadable release list, still fails the run. The current checkout supplies the detector and
 configuration, while the selected tag is checked out separately at
 `/release` and passed as `--source-root /release`. Infrastructure manifests are
 reconciled through `declarative-config`; this repository keeps the

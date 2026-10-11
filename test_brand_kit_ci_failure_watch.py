@@ -7,11 +7,35 @@ import urllib.error
 import pytest
 
 from tools import brand_kit_ci_failure_watch
+from tools import kubernetes_api
 from tools import release_publish
 
 
 NOW = datetime(2026, 9, 27, 13, 0, tzinfo=timezone.utc)
 COMMIT = "a" * 40
+
+
+@pytest.fixture
+def service_account(tmp_path, monkeypatch):
+    """Mount a fake projected ServiceAccount token for ``main``.
+
+    The CA-pinned request function is replaced by plain ``request_json`` so a
+    test can intercept ``urlopen`` without a real cluster CA bundle.
+    """
+
+    def mount(token):
+        directory = tmp_path / "serviceaccount"
+        directory.mkdir(exist_ok=True)
+        (directory / "token").write_text(f"{token}\n", encoding="utf-8")
+        monkeypatch.setattr(kubernetes_api, "DEFAULT_SERVICE_ACCOUNT_DIR", directory)
+        monkeypatch.setattr(
+            kubernetes_api,
+            "request_function",
+            lambda directory=None: release_publish.request_json,
+        )
+        return directory
+
+    return mount
 
 
 def workflow(name, phase, finished_at, *, commit=None):
@@ -246,11 +270,11 @@ def test_run_watch_extracts_recent_successes_into_minimal_durable_attestations()
     ]
 
 
-def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch):
+def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch, service_account):
     report_path = tmp_path / "failure-report.json"
     attestations_path = tmp_path / "attestations.json"
 
-    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", "argo-attestation-contract-secret")
+    service_account("argo-attestation-contract-secret")
     monkeypatch.setattr(
         brand_kit_ci_failure_watch,
         "run_watch",
@@ -348,7 +372,9 @@ def test_run_watch_rejects_a_lookback_shorter_than_argo_retention(lookback_minut
         )
 
 
-def test_main_writes_a_sanitized_durable_failure_report(tmp_path, monkeypatch, capsys):
+def test_main_writes_a_sanitized_durable_failure_report(
+    tmp_path, monkeypatch, capsys, service_account
+):
     token = "argo-watch-contract-secret"
     report_path = tmp_path / "failure-report.json"
     calls = []
@@ -369,9 +395,10 @@ def test_main_writes_a_sanitized_durable_failure_report(tmp_path, monkeypatch, c
 
     def run_watch(token_arg, **kwargs):
         kwargs["now"] = NOW
-        return real_run_watch(token_arg, request=request, **kwargs)
+        kwargs["request"] = request
+        return real_run_watch(token_arg, **kwargs)
 
-    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", token)
+    service_account(token)
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
 
     assert (
@@ -390,21 +417,20 @@ def test_main_writes_a_sanitized_durable_failure_report(tmp_path, monkeypatch, c
     assert token not in output.out + output.err
     assert calls[0][2]["token"] == token
     assert calls[0][2]["authorization_scheme"] == "Bearer"
+    assert calls[0][1].startswith(
+        "https://kubernetes.default.svc/apis/argoproj.io/v1alpha1/"
+        "namespaces/argo-workflows/workflows?"
+    )
+    assert durable_report["failures"][0]["api_url"] == (
+        "https://argo.example/api/v1/workflows/argo-workflows/brand-kit-ci-failed"
+    )
 
 
 def test_main_persists_an_argo_api_error_without_exposing_the_token(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, service_account
 ):
     token = "argo-api-contract-secret"
     report_path = tmp_path / "api-error-report.json"
-    real_run_watch = brand_kit_ci_failure_watch.run_watch
-
-    def run_watch(token_arg, **kwargs):
-        return real_run_watch(
-            token_arg,
-            request=release_publish.request_json,
-            **kwargs,
-        )
 
     def urlopen(request, timeout):
         raise urllib.error.HTTPError(
@@ -412,11 +438,10 @@ def test_main_persists_an_argo_api_error_without_exposing_the_token(
             503,
             "Service Unavailable",
             hdrs=None,
-            fp=io.BytesIO(f"Argo rejected credential {token}".encode()),
+            fp=io.BytesIO(f"API server rejected credential {token}".encode()),
         )
 
-    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", token)
-    monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
+    service_account(token)
     monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
 
     assert (
@@ -429,26 +454,23 @@ def test_main_persists_an_argo_api_error_without_exposing_the_token(
     assert durable_report["status"] == "incomplete"
     assert durable_report["pagination"]["error"]["code"] == "page_request_failed"
     assert durable_report["failures"] == []
-    assert "Argo API" in durable_report["error"]
+    assert "Kubernetes API" in durable_report["error"]
     assert "[REDACTED]" in durable_report["error"]
     assert token not in report_path.read_text(encoding="utf-8")
     assert token not in output.out + output.err
 
 
 def test_main_returns_success_and_writes_pass_report_when_no_alert_is_needed(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, service_account
 ):
     report_path = tmp_path / "pass-report.json"
     real_run_watch = brand_kit_ci_failure_watch.run_watch
 
     def run_watch(token_arg, **kwargs):
-        return real_run_watch(
-            token_arg,
-            request=lambda *args, **kwargs: {"items": []},
-            **kwargs,
-        )
+        kwargs["request"] = lambda *args, **kwargs: {"items": []}
+        return real_run_watch(token_arg, **kwargs)
 
-    monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", "argo-pass-contract-secret")
+    service_account("argo-pass-contract-secret")
     monkeypatch.setattr(brand_kit_ci_failure_watch, "run_watch", run_watch)
 
     assert brand_kit_ci_failure_watch.main(["--report", str(report_path)]) == 0
@@ -497,9 +519,9 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     note = Path("docs/notes/asset-toolchain.md").read_text()
 
     assert "onExit: route-ci-failure-watch" in workflow
-    assert "brand-kit-workflow-readonly" in workflow
-    assert "key: token" in workflow
-    assert "ARGO_WORKFLOW_TOKEN" in workflow
+    assert "serviceAccountName: brand-kit-ci-failure-watch" in workflow
+    assert "brand-kit-workflow-readonly" not in workflow
+    assert "ARGO_WORKFLOW_TOKEN" not in workflow
     assert "brand-kit-release-tokens" not in workflow
     assert "ARGO_TOKEN" not in workflow
     assert "tools/prune_ci_failure_watch_reports.py" in workflow
@@ -554,3 +576,40 @@ def test_exit_handler_alert_contract_links_the_durable_report_without_credential
     assert "ARGO_TOKEN" not in notify_owner
     assert "ARGO_SUBMIT_TOKEN" not in notify_owner
     assert "secretKeyRef" not in notify_owner
+
+
+def test_main_without_a_mounted_service_account_reports_an_error(
+    tmp_path, monkeypatch, capsys
+):
+    report_path = tmp_path / "no-token-report.json"
+    monkeypatch.setattr(kubernetes_api, "DEFAULT_SERVICE_ACCOUNT_DIR", tmp_path / "missing")
+
+    assert brand_kit_ci_failure_watch.main(["--report", str(report_path)]) == 2
+
+    durable_report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert durable_report["status"] == "error"
+    assert "ServiceAccount token is not mounted" in durable_report["error"]
+    assert "ERROR  ServiceAccount token is not mounted" in capsys.readouterr().err
+
+
+def test_kubernetes_workflow_list_url_is_the_namespaced_custom_resource_collection():
+    assert brand_kit_ci_failure_watch.workflow_list_url(
+        "https://kubernetes.default.svc",
+        "argo-workflows",
+        "brand-kit-ci",
+        continue_token="next/page",
+    ) == (
+        "https://kubernetes.default.svc/apis/argoproj.io/v1alpha1/namespaces/"
+        "argo-workflows/workflows?labelSelector="
+        "workflows.argoproj.io%2Fworkflow-template%3Dbrand-kit-ci&limit=100"
+        "&continue=next%2Fpage"
+    )
+    for api_url in (
+        "http://kubernetes.default.svc",
+        "https://user:pass@kubernetes.default.svc",
+        "https://kubernetes.default.svc?x=1",
+    ):
+        with pytest.raises(release_publish.ReleaseError):
+            brand_kit_ci_failure_watch.workflow_list_url(
+                api_url, "argo-workflows", "brand-kit-ci"
+            )

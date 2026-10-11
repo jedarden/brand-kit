@@ -50,6 +50,16 @@ class ReleaseError(AuditError):
     """Raised when a published release cannot be resolved safely."""
 
 
+class NoEligibleRelease(ReleaseError):
+    """The release list was read and no stable release is old enough to audit.
+
+    This is the one release-discovery outcome that is not a failure for the
+    daily fallback: no release can have drifted when none is eligible. A
+    release that exists but is missing from the read-only mirror is still a
+    ``ReleaseError`` -- that is a real propagation fault.
+    """
+
+
 def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -300,7 +310,7 @@ def discover_release(
             continue
         candidates.append(record)
     if not candidates:
-        raise ReleaseError(
+        raise NoEligibleRelease(
             "no published stable release matches the configured tag pattern"
         )
     age = config["release"].get("minimum_age_hours", 0)
@@ -320,7 +330,7 @@ def discover_release(
                 eligible.append(record)
         candidates = eligible
         if not candidates:
-            raise ReleaseError(
+            raise NoEligibleRelease(
                 f"no published stable release is at least {age:g} hours old"
             )
     if mirror_repository is None:
@@ -833,16 +843,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-unverified-checkout", action="store_true")
     parser.add_argument("--mirror-repository")
     parser.add_argument("--print-release-tag", action="store_true")
+    parser.add_argument(
+        "--allow-no-release",
+        action="store_true",
+        help=(
+            "with --print-release-tag: when no stable release is old enough to "
+            "audit, print nothing, write a 'current' report with no checks to "
+            "--report, and exit 0 (the daily fallback has nothing to audit)"
+        ),
+    )
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
         if args.print_release_tag:
-            record = discover_release(
-                config,
-                token=os.environ.get("FORGEJO_TOKEN")
-                or os.environ.get("FORGEJO_API_TOKEN"),
-                mirror_repository=args.mirror_repository,
-            )
+            try:
+                record = discover_release(
+                    config,
+                    token=os.environ.get("FORGEJO_TOKEN")
+                    or os.environ.get("FORGEJO_API_TOKEN"),
+                    mirror_repository=args.mirror_repository,
+                )
+            except NoEligibleRelease as exc:
+                if not args.allow_no_release:
+                    raise
+                if args.report:
+                    report = _base_report(args.source_root, args.site or DEFAULT_SITE)
+                    report["status"] = "current"
+                    validate_report(report)
+                    args.report.write_text(
+                        json.dumps(report, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                print(f"NO RELEASE  nothing to audit: {exc}", file=sys.stderr)
+                return 0
             print(_release_tag(record))
             return 0
         report = run_audit(

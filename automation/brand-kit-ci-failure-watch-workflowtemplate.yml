@@ -68,7 +68,7 @@ spec:
             write_fallback_evidence \
               /tmp/brand-kit-ci-failure-report.json \
               /tmp/brand-kit-ci-attestations.json \
-              "watcher did not reach the Argo API"
+              "watcher did not reach the Kubernetes API"
             apt-get update
             apt-get install -y --no-install-recommends ca-certificates git
             git clone --filter=blob:none --no-tags --depth=1 --branch main \
@@ -120,12 +120,13 @@ spec:
             set -e
             printf '%s\n' "$WATCH_EXIT" > /tmp/brand-kit-ci-failure-watch-exit-code
             exit "$WATCH_EXIT"
+        # Workflow objects are read from the in-cluster Kubernetes API with
+        # this pod's own projected ServiceAccount token
+        # (/var/run/secrets/kubernetes.io/serviceaccount), authorized by the
+        # brand-kit-ci-failure-watch Role (workflows get/list) in
+        # declarative-config brand-kit-automation-rbac.yml. argo-server runs
+        # --auth-mode=sso only, so no Argo API token is used or provisioned.
         env:
-          - name: ARGO_WORKFLOW_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: brand-kit-workflow-readonly
-                key: token
           - name: S3_READER_ACCESS_KEY
             valueFrom:
               secretKeyRef:
