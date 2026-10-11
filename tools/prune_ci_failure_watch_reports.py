@@ -25,6 +25,13 @@ import urllib.parse
 import urllib.request
 from xml.etree import ElementTree
 
+# The failure-watch WorkflowTemplate runs this file as a script
+# (python3 /brand-kit/tools/prune_ci_failure_watch_reports.py) from outside
+# the checkout; without the repository root on sys.path the first scheduled
+# run died with "ModuleNotFoundError: No module named 'tools'".
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from tools import http_policy
 from tools import retention_holds
 
