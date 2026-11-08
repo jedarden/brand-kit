@@ -34,7 +34,8 @@ spec:
             # sideband packet" (reproduced 2026-10-10, partial and shallow).
             # The canonical side is still read from Forgejo below -- by
             # ls-remote and a ref fetch, which the checker does itself.
-            git clone --filter=blob:none --no-tags --depth=1 --branch main \
+            timeout --signal=TERM --kill-after=5s 120s \
+              git clone --filter=blob:none --no-tags --depth=1 --branch main \
               https://github.com/jedarden/brand-kit.git /brand-kit
             cd /brand-kit
             # This scheduled parity audit is read-only. Release publication

@@ -445,6 +445,89 @@ def test_execute_git_redacts_provider_credentials_from_failure(monkeypatch):
     assert "https://[REDACTED]@example.test/brand-kit.git" in str(error.value)
 
 
+def test_execute_git_applies_a_wall_clock_budget_to_git_operations(monkeypatch):
+    calls = []
+
+    def completed_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(check_mirror_health.subprocess, "run", completed_run)
+    for arguments in (
+        ["ls-remote", "--heads", "https://example.test/brand-kit.git"],
+        ["fetch", "--quiet", "https://example.test/brand-kit.git", "refs/heads/main"],
+        ["merge-base", "--is-ancestor", CANONICAL_MAIN, MIRROR_MAIN],
+    ):
+        check_mirror_health.execute_git(arguments)
+
+    assert [command[1] for command, _ in calls] == [
+        "ls-remote", "fetch", "merge-base"
+    ]
+    assert all(
+        options["timeout"] == check_mirror_health.GIT_OPERATION_TIMEOUT_SECONDS == 120
+        for _, options in calls
+    )
+
+
+def test_ls_remote_timeout_produces_indeterminate_report(monkeypatch, tmp_path):
+    report_path = tmp_path / "mirror-health.json"
+
+    def timed_out(command, **kwargs):
+        assert kwargs["timeout"] == 120
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(check_mirror_health.subprocess, "run", timed_out)
+    exit_code = check_mirror_health.main(
+        [
+            "--canonical-repository",
+            "https://user:secret@example.test/brand-kit.git",
+            "--mirror-repository",
+            "https://mirror.example.test/brand-kit.git",
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert report["status"] == "indeterminate"
+    assert report["summary"]["stale"] == 0
+    assert report["summary"]["indeterminate"] == 1
+    assert "timed out after 120 seconds" in report["error"]
+    assert "secret" not in report["error"]
+
+
+def test_ancestry_fetch_timeout_is_indeterminate_not_stale(monkeypatch):
+    def run(command, **kwargs):
+        assert kwargs["timeout"] == 120
+        arguments = command[1:]
+        if arguments[0] == "ls-remote":
+            if arguments[1] == "--heads":
+                commit = CANONICAL_MAIN if "forgejo" in arguments[2] else MIRROR_MAIN
+                return subprocess.CompletedProcess(
+                    command, 0, f"{commit}\trefs/heads/main\n", ""
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if arguments[0] == "init":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if arguments[0] == "fetch":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        pytest.fail(f"unexpected git operation: {arguments[0]}")
+
+    monkeypatch.setattr(check_mirror_health.subprocess, "run", run)
+    report = check_mirror_health.run_check(
+        "https://forgejo.example/brand-kit.git",
+        "https://github.example/brand-kit.git",
+        now=NOW,
+    )
+
+    assert report["status"] == "indeterminate"
+    assert report["summary"]["stale"] == 0
+    assert report["summary"]["indeterminate"] == 1
+    assert report["checks"][0]["status"] == "indeterminate"
+    assert "timed out after 120 seconds" in report["checks"][0]["reason"]
+
+
 def test_workflow_bootstraps_indeterminate_report_before_setup_failure():
     template = Path(
         "automation/brand-kit-mirror-health-workflowtemplate.yml"
@@ -454,6 +537,11 @@ def test_workflow_bootstraps_indeterminate_report_before_setup_failure():
     assert "printf '2\\n' > /tmp/brand-kit-mirror-health-exit-code" in template
     assert "default: \"2\"" in template
     assert 'exit "$CHECK_EXIT"' in template
+    timeout_position = template.index("timeout --signal=TERM --kill-after=5s 120s")
+    clone_position = template.index(
+        "git clone --filter=blob:none --no-tags --depth=1 --branch main"
+    )
+    assert 0 < clone_position - timeout_position < 100
     assert "artifactGC:\n              strategy: Never" in template
     assert 'when: "{{workflow.status}} != Succeeded"' in template
 

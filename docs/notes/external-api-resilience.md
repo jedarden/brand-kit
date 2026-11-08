@@ -1,9 +1,9 @@
 # External API timeout and retry contract
 
-The watcher, liveness check, release gate, consumer audit, and Garage retention
-jobs use bounded external requests. A request error is evidence that the check
-could not prove its claim; it is never converted into a current, fresh, or
-successful result.
+The failure watcher, liveness check, release gate, consumer audit, mirror-health,
+and Garage retention jobs use bounded external requests. A request error is
+evidence that the check could not prove its claim; it is never converted into
+a current, fresh, or successful result.
 
 ## Timeouts and retries
 
@@ -12,8 +12,10 @@ The timeout applies to each network attempt:
 | Endpoint | Per-attempt timeout | Read behavior | Mutation behavior |
 | --- | ---: | --- | --- |
 | Release publisher's Argo and Forgejo JSON APIs | 20 seconds | Up to three total attempts | One attempt |
+| Failure watcher's in-cluster Kubernetes API Workflow list | 20 seconds | Up to three total attempts per page | Not applicable; this is a read |
 | Consumer audit/sync Forgejo lookups, public profile, and media URLs | 15 seconds | Up to three total attempts | Not applicable; these are reads |
 | Garage S3 listing and artifact reads | 30 seconds | Up to three total attempts | S3 multi-delete is one attempt |
+| Mirror-health git clone, `ls-remote`, and ref fetch | 120 seconds per git operation | One attempt; no automatic retry | Not applicable; all remote operations are reads |
 
 Only `GET` and `HEAD` requests use the read retry policy. A connection, DNS,
 TLS, socket-timeout, or other transport error, plus HTTP `429` or `5xx`, may be
@@ -22,6 +24,27 @@ retried. The backoff is one second and then two seconds. A numeric
 has a finite attempt and delay budget; it cannot wait forever on a server or an
 unbounded rate-limit hint. Other HTTP errors, including `4xx` responses other
 than `429`, are terminal.
+
+The watcher applies that read policy to each Kubernetes Workflow-list `GET`.
+A retry repeats the same page URL and `metadata.continue` input; only a valid
+response advances the continuation token. The watcher captures its UTC cutoff
+once before listing and applies it only after every page completes. If a page
+exhausts retries, returns an expired continuation token, or cannot be validated,
+the list is incomplete and no partial workflow set becomes a `pass` or `fail`
+result. The WorkflowTemplate's 600-second active deadline is the outer limit
+across all pages.
+
+Mirror health runs its checker from a GitHub bootstrap clone bounded by a
+120-second shell timeout (with five seconds to kill after termination). The
+checker bounds each git subprocess, including Forgejo and GitHub `ls-remote`
+and `fetch`, to 120 seconds of wall-clock time. Forgejo reads use the
+`FORGEJO_TOKEN` credential helper; the credential is never placed in a URL.
+Git operations have no automatic retry. A confirmed `missing`, `stale`, or
+`divergent` ref requires completed remote reads and, where needed, a completed
+ancestry check. A timeout, connection or authentication failure, or incomplete
+fetch makes the check `indeterminate`, not `stale`; the workflow fails and
+retains an indeterminate report. Its 1,800-second active deadline also caps
+the total scheduled check.
 
 There is no automatic retry for `POST`, `PATCH`, or S3 multi-delete. Those
 operations can have committed an external mutation even when the response is
@@ -83,8 +106,8 @@ procedure is an operator gate; the client continues to make only one
 ## Fail-closed outcomes
 
 - Failure-watcher Kubernetes API reads and workflow-liveness Garage reads that
-  exhaust retries produce an error or `indeterminate` report. They cannot produce a false `pass`, `fresh`,
-  or successful liveness result.
+  exhaust retries produce an incomplete or `indeterminate` report. They cannot
+  produce a false `pass`, `fresh`, or successful liveness result.
 - Forgejo release reads that exhaust retries block publication or consumer
   synchronization. A missing release (`404`) is not a passing audit.
 - Garage listing, attestation, or retention reads that exhaust retries fail
@@ -94,6 +117,10 @@ procedure is an operator gate; the client continues to make only one
   check unavailable, making the consumer-drift report `indeterminate` and its
   exit code `2`. The legacy `consumer_sync.py` helper also exits non-zero for a
   live-fetch failure; only an explicit `--offline` request skips live checks.
+- Mirror-health git transport failures and timeouts produce an `indeterminate`
+  report. The checker exits `2`; the bootstrap clone's prewritten result
+  parameter is also `2` if setup fails. Only completed comparisons can
+  establish mirror drift.
 
 The Argo WorkflowTemplates retain an outer active deadline (600 seconds for
 the failure watcher and liveness watchdog, 1,800 seconds for consumer drift).
@@ -115,9 +142,11 @@ timeouts. `test_argo_workflow_deadlines.py` checks the manifest values, both
 annotations, this table, and the computed budget against the executable retry
 policy and consumer-drift polling loop.
 
-The executable policy is shared by `tools/release_publish.py`,
-`tools/consumer_drift.py`, `tools/consumer_sync.py`, and
+The executable HTTP policy is shared by `tools/release_publish.py`,
+`tools/kubernetes_api.py`, `tools/consumer_drift.py`, `tools/consumer_sync.py`, and
 `tools/prune_ci_failure_watch_reports.py`. The contract tests in
 `test_external_api_resilience.py` cover successful read retry, capped `429`,
 single-attempt mutation behavior, public endpoint timeouts, Garage read retry,
-and Garage delete non-retry.
+Garage delete non-retry, and Kubernetes list-page retry and failure bounds.
+`test_check_mirror_health.py` checks the git subprocess and bootstrap-clone
+timeouts and the indeterminate outcome on transport timeouts.

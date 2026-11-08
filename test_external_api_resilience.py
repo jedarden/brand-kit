@@ -7,8 +7,10 @@ import urllib.parse
 
 import pytest
 
+from tools import brand_kit_ci_failure_watch
 from tools import consumer_drift
 from tools import http_policy
+from tools import kubernetes_api
 from tools import prune_ci_failure_watch_reports
 from tools import retention_holds
 from tools import release_publish
@@ -98,6 +100,84 @@ def test_read_api_caps_retry_after_and_fails_closed_after_three_attempts(monkeyp
         http_policy.MAX_RETRY_DELAY_SECONDS,
         http_policy.MAX_RETRY_DELAY_SECONDS,
     ]
+
+
+def test_watcher_retries_the_same_kubernetes_page_with_a_bounded_timeout(monkeypatch):
+    seen = []
+    delays = []
+    now = datetime(2026, 9, 27, 13, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(kubernetes_api, "service_account_context", lambda directory: None)
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    def urlopen(request, timeout):
+        seen.append((request.full_url, timeout))
+        if len(seen) == 1:
+            return _Response(
+                json.dumps({"items": [], "metadata": {"continue": "page-2"}}).encode()
+            )
+        if len(seen) == 2:
+            raise _http_error(request.full_url, 503)
+        return _Response(json.dumps({"items": [], "metadata": {}}).encode())
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    report = brand_kit_ci_failure_watch.run_watch(
+        "projected-token",
+        now=now,
+        request=kubernetes_api.request_function(Path("/unused/serviceaccount")),
+    )
+
+    assert report["status"] == "pass"
+    assert report["pagination"]["pages_read"] == 2
+    assert report["cutoff"]["at"] == "2026-09-27T11:00:00Z"
+    assert seen[1][0] == seen[2][0]
+    assert "continue=page-2" in seen[1][0]
+    assert all(timeout == http_policy.KUBERNETES_TIMEOUT_SECONDS for _, timeout in seen)
+    assert delays == [http_policy.RETRY_BACKOFF_SECONDS]
+
+
+def test_watcher_exhausted_kubernetes_page_never_returns_a_partial_result(monkeypatch):
+    seen = []
+    delays = []
+    monkeypatch.setattr(kubernetes_api, "service_account_context", lambda directory: None)
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    def urlopen(request, timeout):
+        seen.append((request.full_url, timeout))
+        if len(seen) == 1:
+            return _Response(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "brand-kit-ci-failed",
+                                    "uid": "failed-uid",
+                                    "creationTimestamp": "2026-09-27T12:30:00Z",
+                                },
+                                "status": {"phase": "Failed", "finishedAt": "2026-09-27T12:45:00Z"},
+                            }
+                        ],
+                        "metadata": {"continue": "page-2"},
+                    }
+                ).encode()
+            )
+        raise _http_error(request.full_url, 503)
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    with pytest.raises(brand_kit_ci_failure_watch.WatchPaginationError) as error:
+        brand_kit_ci_failure_watch.run_watch(
+            "projected-token",
+            now=datetime(2026, 9, 27, 13, 0, tzinfo=timezone.utc),
+            request=kubernetes_api.request_function(Path("/unused/serviceaccount")),
+        )
+
+    assert error.value.code == "page_request_failed"
+    assert error.value.page == 2
+    assert error.value.pages_read == 1
+    assert len(seen) == 1 + http_policy.MAX_READ_ATTEMPTS
+    assert len({url for url, _ in seen[1:]}) == 1
+    assert all(timeout == http_policy.KUBERNETES_TIMEOUT_SECONDS for _, timeout in seen)
+    assert delays == [1.0, 2.0]
 
 
 def test_mutating_api_requests_are_single_attempt_even_for_5xx(monkeypatch):
@@ -350,3 +430,16 @@ def test_external_api_timeout_and_retry_contract_is_documented():
     assert "20 seconds" in note
     assert "15 seconds" in note
     assert "30 seconds" in note
+    assert (
+        f"| Failure watcher's in-cluster Kubernetes API Workflow list | "
+        f"{int(http_policy.KUBERNETES_TIMEOUT_SECONDS)} seconds | "
+        "Up to three total attempts per page |"
+    ) in note
+    assert "same page URL and `metadata.continue` input" in note
+    assert "UTC cutoff" in note
+    assert "no partial workflow set" in note
+    assert (
+        "| Mirror-health git clone, `ls-remote`, and ref fetch | "
+        "120 seconds per git operation | One attempt; no automatic retry |"
+    ) in note
+    assert "`indeterminate`, not `stale`" in note

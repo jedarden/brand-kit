@@ -29,6 +29,7 @@ MAIN_PARITY_SCHEMA = "brand-kit-main-parity/v1"
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REF_PREFIXES = {"branch": "refs/heads/", "tag": "refs/tags/"}
 MAIN_REF = "refs/heads/main"
+GIT_OPERATION_TIMEOUT_SECONDS = 120
 
 
 class MirrorHealthError(RuntimeError):
@@ -70,7 +71,13 @@ def execute_git(
             cwd=cwd,
             capture_output=True,
             text=True,
+            timeout=GIT_OPERATION_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as error:
+        raise MirrorHealthError(
+            f"git {_safe_command(arguments)} timed out after "
+            f"{GIT_OPERATION_TIMEOUT_SECONDS} seconds"
+        ) from error
     except OSError as error:
         raise MirrorHealthError(f"cannot run git {_safe_command(arguments)}: {error}") from error
     if check and result.returncode != 0:

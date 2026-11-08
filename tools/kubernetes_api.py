@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
+from tools import http_policy
 from tools import release_publish
 
 DEFAULT_API_URL = "https://kubernetes.default.svc"
@@ -104,4 +105,5 @@ def request_function(
     return functools.partial(
         release_publish.request_json,
         context=service_account_context(directory),
+        timeout=http_policy.KUBERNETES_TIMEOUT_SECONDS,
     )

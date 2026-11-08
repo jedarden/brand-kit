@@ -3,6 +3,7 @@ import ssl
 import pytest
 
 from tools import kubernetes_api
+from tools import http_policy
 from tools import release_publish
 
 
@@ -72,6 +73,7 @@ def test_request_function_pins_the_service_account_ca(tmp_path, monkeypatch):
         )
     assert contexts == [str(tmp_path / "ca.crt")]
     assert isinstance(seen["context"], ssl.SSLContext)
+    assert seen["timeout"] == http_policy.KUBERNETES_TIMEOUT_SECONDS
 
 
 def test_missing_service_account_ca_is_an_error(tmp_path):
