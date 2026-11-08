@@ -7,6 +7,10 @@ responses are conclusive; DNS, TLS, timeout, and connection errors are
 reported as indeterminate and exit with status 2 rather than looking like a
 passing check.
 
+Every source fetch is a read-only ``GET`` that follows the shared bounded
+read retry policy in ``tools/http_policy.py``: a per-attempt timeout with at
+most three attempts and capped backoff.  The check performs no mutations.
+
 Run: python3 tools/check_platform_requirements.py
 Reachability: python3 tools/check_platform_requirements.py --check-reachability
 """
@@ -22,15 +26,22 @@ import json
 from pathlib import Path
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
+from typing import Callable
 from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parent.parent
+if __package__ in (None, ""):
+    sys.path.insert(0, str(ROOT))
+
+from tools import http_policy
+
 MANIFEST_PATH = ROOT / "platform-assets.json"
 DEFAULT_MAX_AGE_DAYS = 180
-DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_TIMEOUT_SECONDS = http_policy.PUBLIC_TIMEOUT_SECONDS
 REQUIRED_FIELDS = {"platform", "source_url", "last_verified"}
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REACHABILITY_PASS = "pass"
@@ -276,14 +287,18 @@ def check_platform_requirement_sources(
     *,
     opener=None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    sleep: Callable[[float], None] | None = None,
 ) -> list[SourceCheck]:
     """Check reachability and compare successful responses with their content pins.
 
     A 2xx or 3xx response passes only when its normalized visible text matches
-    the reviewed SHA-256. The opener is injectable so tests stay offline.
+    the reviewed SHA-256. The opener is injectable so tests stay offline, as is
+    the retry sleep.
     """
-    if timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be positive")
+    try:
+        timeout_seconds = http_policy.validate_timeout(timeout_seconds)
+    except ValueError as error:
+        raise ValueError(f"timeout_seconds: {error}") from error
     requirements = manifest.get("platform_requirements")
     if not isinstance(requirements, list):
         return []
@@ -311,19 +326,41 @@ def check_platform_requirement_sources(
 
         for citation_url, expected_digest in citations.items():
             checks.append(_check_one_source(
-                platform, citation_url, expected_digest, opener, timeout_seconds
+                platform, citation_url, expected_digest, opener, timeout_seconds, sleep
             ))
     return checks
 
 
-def _check_one_source(platform, source_url, expected_digest, opener, timeout_seconds):
+def _check_one_source(platform, source_url, expected_digest, opener, timeout_seconds, sleep):
     request = urllib.request.Request(
         source_url,
         headers={"User-Agent": "brand-kit-platform-requirements/1"},
     )
+    sleeper = sleep or time.sleep
+    max_attempts = http_policy.max_attempts("GET")
     response = None
     try:
-        response = opener(request, timeout=timeout_seconds)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = opener(request, timeout=timeout_seconds)
+                break
+            except urllib.error.HTTPError as error:
+                if attempt < max_attempts and http_policy.retryable_error("GET", error):
+                    http_policy.sleep_before_retry(error, attempt, sleeper)
+                    error.close()
+                    continue
+                return SourceCheck(
+                    platform, source_url, REACHABILITY_HTTP_FAILURE, f"HTTP {error.code}"
+                )
+            except (urllib.error.URLError, OSError, TimeoutError) as error:
+                if attempt < max_attempts and http_policy.retryable_error("GET", error):
+                    http_policy.sleep_before_retry(error, attempt, sleeper)
+                    continue
+                return SourceCheck(
+                    platform, source_url, REACHABILITY_NETWORK_FAILURE,
+                    f"network error: {_safe_network_detail(error)}",
+                )
+
         getcode = getattr(response, "getcode", None)
         status = getcode() if callable(getcode) else getattr(response, "status", None)
         if not isinstance(status, int):

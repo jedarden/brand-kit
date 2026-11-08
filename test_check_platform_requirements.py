@@ -8,6 +8,7 @@ import urllib.error
 import pytest
 
 from tools import check_platform_requirements
+from tools import http_policy
 
 
 ROOT = Path(__file__).resolve().parent
@@ -208,18 +209,28 @@ def test_source_reachability_accepts_redirects_without_mutating_manifest():
     assert manifest == before
 
 
+def test_default_source_timeout_matches_the_shared_public_budget():
+    assert (
+        check_platform_requirements.DEFAULT_TIMEOUT_SECONDS
+        == http_policy.PUBLIC_TIMEOUT_SECONDS
+    )
+    assert http_policy.max_attempts("GET") == http_policy.MAX_READ_ATTEMPTS
+
+
 def test_source_reachability_distinguishes_http_failure_from_network_failure():
     manifest = _one_requirement_manifest()
 
     http_checks = check_platform_requirements.check_platform_requirement_sources(
         manifest,
         opener=lambda request, timeout: _Response(404),
+        sleep=lambda _seconds: None,
     )
     network_checks = check_platform_requirements.check_platform_requirement_sources(
         manifest,
         opener=lambda request, timeout: (_ for _ in ()).throw(
             urllib.error.URLError("DNS unavailable")
         ),
+        sleep=lambda _seconds: None,
     )
 
     assert http_checks[0].status == check_platform_requirements.REACHABILITY_HTTP_FAILURE
@@ -279,6 +290,8 @@ def test_main_returns_indeterminate_for_network_failure(monkeypatch, capsys):
         raise TimeoutError("simulated timeout")
 
     monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", offline)
+    # Retries now re-attempt each source; keep the test free of real sleeps.
+    monkeypatch.setattr(check_platform_requirements.time, "sleep", lambda _s: None)
 
     assert check_platform_requirements.main(
         ["--check-reachability", "--as-of", "2026-09-28"]
@@ -302,6 +315,7 @@ def test_main_reports_unreachable_source_and_preserves_manifest(
         raise urllib.error.URLError("DNS unavailable")
 
     monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", offline)
+    monkeypatch.setattr(check_platform_requirements.time, "sleep", lambda _s: None)
 
     assert check_platform_requirements.main(
         [

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 from datetime import datetime, timezone
@@ -8,10 +9,12 @@ import urllib.parse
 import pytest
 
 from tools import brand_kit_ci_failure_watch
+from tools import check_platform_requirements
 from tools import consumer_drift
 from tools import http_policy
 from tools import kubernetes_api
 from tools import prune_ci_failure_watch_reports
+from tools import release_token_probe
 from tools import retention_holds
 from tools import release_publish
 
@@ -213,6 +216,96 @@ def test_request_timeout_must_be_finite_and_positive():
             )
 
 
+def test_token_probe_reads_retry_with_the_publisher_api_budget(monkeypatch):
+    calls = []
+    responses = iter(
+        [
+            _http_error("https://forgejo.example/api/v1/user", 503),
+            _Response(json.dumps({"login": "release-bot"}).encode()),
+            _Response(b"[]"),
+        ]
+    )
+
+    def urlopen(request, timeout):
+        calls.append((request.method, timeout))
+        response = next(responses)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    release_token_probe.probe_forgejo(
+        "forgejo-secret",
+        api_url="https://forgejo.example/api/v1",
+        request=release_publish.request_json,
+    )
+
+    assert calls == [
+        ("GET", http_policy.API_TIMEOUT_SECONDS),
+        ("GET", http_policy.API_TIMEOUT_SECONDS),
+        ("GET", http_policy.API_TIMEOUT_SECONDS),
+    ]
+    assert delays == [http_policy.RETRY_BACKOFF_SECONDS]
+
+
+def test_token_probe_exhausted_read_fails_the_credential_and_is_capped(monkeypatch):
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append((request.method, timeout))
+        raise _http_error(request.full_url, 429, retry_after=999)
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    with pytest.raises(release_publish.HttpFailure) as error:
+        release_token_probe.probe_forgejo(
+            "forgejo-secret",
+            api_url="https://forgejo.example/api/v1",
+            request=release_publish.request_json,
+        )
+
+    assert error.value.status == 429
+    assert calls == [("GET", http_policy.API_TIMEOUT_SECONDS)] * http_policy.MAX_READ_ATTEMPTS
+    assert delays == [
+        http_policy.MAX_RETRY_DELAY_SECONDS,
+        http_policy.MAX_RETRY_DELAY_SECONDS,
+    ]
+
+
+def test_token_probe_dry_run_submission_is_a_single_attempt_without_a_workflow(
+    monkeypatch,
+):
+    requests = []
+
+    def urlopen(request, timeout):
+        requests.append((request, timeout))
+        raise _http_error(request.full_url, 503)
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    with pytest.raises(release_publish.HttpFailure) as error:
+        release_token_probe.probe_argo_submit(
+            "argo-submit-secret",
+            api_url="https://argo.example",
+            request=release_publish.request_json,
+        )
+
+    request, timeout = requests[0]
+    assert error.value.status == 503
+    assert len(requests) == 1
+    assert request.method == "POST"
+    assert timeout == http_policy.API_TIMEOUT_SECONDS
+    assert b'"serverDryRun": true' in request.data
+    assert delays == []
+
+
 def test_public_profile_reader_retries_transport_failure_with_public_timeout(monkeypatch):
     calls = []
     responses = iter([urllib.error.URLError("profile unavailable"), _Response(b"image")])
@@ -237,6 +330,137 @@ def test_public_profile_reader_retries_transport_failure_with_public_timeout(mon
         http_policy.PUBLIC_TIMEOUT_SECONDS,
         http_policy.PUBLIC_TIMEOUT_SECONDS,
     ]
+
+
+class _SourceResponse:
+    def __init__(self, status, body=b"<p>source text</p>"):
+        self.status = status
+        self.body = body
+        self.closed = False
+
+    def getcode(self):
+        return self.status
+
+    def read(self):
+        return self.body
+
+    def close(self):
+        self.closed = True
+
+
+def _platform_manifest():
+    digest = check_platform_requirements._source_content_digest(b"source text")
+    return {
+        "platform_requirements": [
+            {
+                "platform": "Example",
+                "source_url": "https://help.example.test/requirements",
+                "last_verified": "2026-09-28",
+                "source_content_sha256": digest,
+            }
+        ],
+        "requirement_evidence": [],
+    }
+
+
+def test_platform_source_reads_retry_transport_failure_with_public_timeout(
+    monkeypatch,
+):
+    calls = []
+    responses = iter(
+        [urllib.error.URLError("source unavailable"), _SourceResponse(200)]
+    )
+
+    def urlopen(request, timeout):
+        calls.append(timeout)
+        response = next(responses)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", urlopen)
+    delays = []
+
+    checks = check_platform_requirements.check_platform_requirement_sources(
+        _platform_manifest(), sleep=delays.append
+    )
+
+    assert [check.status for check in checks] == [
+        check_platform_requirements.REACHABILITY_PASS
+    ]
+    assert calls == [
+        http_policy.PUBLIC_TIMEOUT_SECONDS,
+        http_policy.PUBLIC_TIMEOUT_SECONDS,
+    ]
+    assert delays == [http_policy.RETRY_BACKOFF_SECONDS]
+
+
+def test_platform_source_retry_budget_is_capped_and_fails_closed(monkeypatch):
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append(timeout)
+        raise _http_error(request.full_url, 429, retry_after=999)
+
+    monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", urlopen)
+    delays = []
+
+    checks = check_platform_requirements.check_platform_requirement_sources(
+        _platform_manifest(), sleep=delays.append
+    )
+
+    assert [check.status for check in checks] == [
+        check_platform_requirements.REACHABILITY_HTTP_FAILURE
+    ]
+    assert len(calls) == http_policy.MAX_READ_ATTEMPTS
+    assert delays == [
+        http_policy.MAX_RETRY_DELAY_SECONDS,
+        http_policy.MAX_RETRY_DELAY_SECONDS,
+    ]
+
+
+def test_platform_source_transport_exhaustion_stays_indeterminate(monkeypatch):
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append(timeout)
+        raise urllib.error.URLError("DNS unavailable")
+
+    monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", urlopen)
+    delays = []
+
+    checks = check_platform_requirements.check_platform_requirement_sources(
+        _platform_manifest(), sleep=delays.append
+    )
+
+    assert [check.status for check in checks] == [
+        check_platform_requirements.REACHABILITY_NETWORK_FAILURE
+    ]
+    assert len(calls) == http_policy.MAX_READ_ATTEMPTS
+    assert delays == [
+        http_policy.RETRY_BACKOFF_SECONDS,
+        http_policy.RETRY_BACKOFF_SECONDS * 2,
+    ]
+
+
+def test_platform_source_terminal_4xx_is_never_retried(monkeypatch):
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append(timeout)
+        raise _http_error(request.full_url, 404)
+
+    monkeypatch.setattr(check_platform_requirements.urllib.request, "urlopen", urlopen)
+    delays = []
+
+    checks = check_platform_requirements.check_platform_requirement_sources(
+        _platform_manifest(), sleep=delays.append
+    )
+
+    assert checks[0].status == check_platform_requirements.REACHABILITY_HTTP_FAILURE
+    assert checks[0].detail == "HTTP 404"
+    assert calls == [http_policy.PUBLIC_TIMEOUT_SECONDS]
+    assert delays == []
 
 
 def test_garage_listing_retries_but_garage_delete_does_not(monkeypatch):
@@ -443,3 +667,22 @@ def test_external_api_timeout_and_retry_contract_is_documented():
         "120 seconds per git operation | One attempt; no automatic retry |"
     ) in note
     assert "`indeterminate`, not `stale`" in note
+    assert (
+        "| Release-token probe's Forgejo self-lookup, release list, and Argo "
+        f"workflow list | {int(http_policy.API_TIMEOUT_SECONDS)} seconds | "
+        "Up to three total attempts | Argo dry-run submission check is one attempt |"
+    ) in note
+    assert (
+        "| Platform-requirement source-health HTTPS fetches | "
+        f"{int(http_policy.PUBLIC_TIMEOUT_SECONDS)} seconds | "
+        "Up to three total attempts | Not applicable; these are reads |"
+    ) in note
+    prose = " ".join(note.split())
+    assert "`serverDryRun: true`" in prose
+    assert "creates no Workflow and is not a mutation" in prose
+    assert "it never retries an ambiguous dry-run submission" in prose
+    assert "The check performs no mutations" in prose
+    assert "`http_failure` and exits `1`" in prose
+    assert "`network_failure`, making the report `indeterminate` with exit code `2`" in prose
+    assert "tools/release_token_probe.py" in prose
+    assert "tools/check_platform_requirements.py" in prose
