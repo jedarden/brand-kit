@@ -81,8 +81,9 @@ The release handoff's consumer submitter (`tools/consumer_drift_submit.py`) is
 a local operator process with no workflow deadline; between its Forgejo reads
 and its Argo requests sits the bounded mirror-propagation gate, a git polling
 loop (300 seconds by default at 5-second intervals) that makes no HTTP
-request. The submitter reuses the publisher's bounded JSON client for every
-HTTP call. Its Forgejo release read and, when the record carries attachments,
+request. The submitter reuses the publisher's bounded JSON client for API
+requests and its bounded byte reader for release attachments. Its Forgejo
+release read and, when the record carries attachments,
 each attachment fetch happen before the mirror gate and follow the read retry
 policy at their table timeouts. After the gate passes, the reconciliation
 reads made with `ARGO_TOKEN` — the exact
@@ -171,8 +172,9 @@ order:
    `brand-kit-consumer-drift-<full release commit>` in namespace
    `argo-workflows`:
    `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/brand-kit-consumer-drift-<commit>`.
-   A `404` proves that one name is absent. Any other response or transport
-   failure is inconclusive.
+   A `404` proves that one name is absent. A successful response is checked
+   against the release identity; another error or transport failure is
+   inconclusive.
 2. If the exact name is absent, read the template-scoped workflow list with
    `labelSelector=workflows.argoproj.io%2Fworkflow-template%3Dbrand-kit-consumer-drift`
    and match a run by release tag or commit from its labels, parameters, or a

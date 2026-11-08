@@ -870,6 +870,45 @@ def test_submitter_exhausted_reconciliation_read_never_submits(monkeypatch):
     ]
 
 
+def test_submitter_exhausted_workflow_list_read_never_submits(monkeypatch):
+    _gate_submitter_git_steps(monkeypatch)
+    calls = []
+    responses = iter(
+        [
+            _Response(json.dumps(_published_release_record()).encode()),
+            _http_error(CONSUMER_ARGO_EXACT_URL, 404),
+        ]
+        + [
+            _http_error(CONSUMER_ARGO_LIST_URL, 429, retry_after=999)
+            for _ in range(http_policy.MAX_READ_ATTEMPTS)
+        ]
+    )
+    _submitter_urlopen(monkeypatch, calls, responses)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    with pytest.raises(
+        release_publish.ReleaseError, match="cannot inspect existing consumer-drift workflows"
+    ):
+        _run_consumer_submitter()
+
+    assert [request.get_full_url() for request, _ in calls] == [
+        CONSUMER_FORGEJO_RELEASE_URL,
+        CONSUMER_ARGO_EXACT_URL,
+    ] + [CONSUMER_ARGO_LIST_URL] * http_policy.MAX_READ_ATTEMPTS
+    assert all(
+        request.get_method() == "GET" and timeout == http_policy.API_TIMEOUT_SECONDS
+        for request, timeout in calls
+    )
+    assert all(
+        request.get_header("Authorization") == "Bearer argo-read-token"
+        for request, _ in calls[1:]
+    )
+    assert delays == [http_policy.MAX_RETRY_DELAY_SECONDS] * (
+        http_policy.MAX_READ_ATTEMPTS - 1
+    )
+
+
 def test_submitter_attachment_fetches_use_the_public_reader_budget(monkeypatch):
     names = release_publish.release_payload_names("v1.1.0")
     attachment_urls = {
