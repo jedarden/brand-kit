@@ -11,6 +11,7 @@ import pytest
 from tools import brand_kit_ci_failure_watch
 from tools import check_platform_requirements
 from tools import consumer_drift
+from tools import consumer_drift_submit
 from tools import http_policy
 from tools import kubernetes_api
 from tools import prune_ci_failure_watch_reports
@@ -686,3 +687,321 @@ def test_external_api_timeout_and_retry_contract_is_documented():
     assert "`network_failure`, making the report `indeterminate` with exit code `2`" in prose
     assert "tools/release_token_probe.py" in prose
     assert "tools/check_platform_requirements.py" in prose
+
+
+CONSUMER_SUBMITTER_COMMIT = "a" * 40
+CONSUMER_SUBMITTER_WORKFLOW = f"brand-kit-consumer-drift-{CONSUMER_SUBMITTER_COMMIT}"
+CONSUMER_FORGEJO_RELEASE_URL = (
+    "https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases/tags/v1.1.0"
+)
+CONSUMER_ARGO_BASE_URL = "https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows"
+CONSUMER_ARGO_LIST_URL = (
+    f"{CONSUMER_ARGO_BASE_URL}?labelSelector=workflows.argoproj.io%2Fworkflow-template%3D"
+    "brand-kit-consumer-drift&limit=1000"
+)
+CONSUMER_ARGO_EXACT_URL = f"{CONSUMER_ARGO_BASE_URL}/{CONSUMER_SUBMITTER_WORKFLOW}"
+
+
+def _published_release_record():
+    return {
+        "tag_name": "v1.1.0",
+        "draft": False,
+        "prerelease": False,
+        "target_commitish": CONSUMER_SUBMITTER_COMMIT,
+        "published_at": "2026-09-27T00:00:00Z",
+    }
+
+
+def _gate_submitter_git_steps(monkeypatch):
+    """Keep the submitter's local git gates out of the HTTP contract tests."""
+    monkeypatch.setattr(
+        release_publish,
+        "validate_remote_roles",
+        lambda *args, **kwargs: (
+            release_publish.DEFAULT_CANONICAL_REPOSITORY,
+            release_publish.DEFAULT_MIRROR_REPOSITORY,
+        ),
+    )
+    monkeypatch.setattr(release_publish, "wait_for_mirror", lambda *args, **kwargs: None)
+
+
+def _submitter_urlopen(monkeypatch, calls, responses):
+    def urlopen(request, timeout):
+        calls.append((request, timeout))
+        response = next(responses)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+
+
+def _run_consumer_submitter(**overrides):
+    arguments = {
+        "forgejo_token": "forgejo-submitter-token",
+        "argo_token": "argo-submit-token",
+        "argo_read_token": "argo-read-token",
+    }
+    arguments.update(overrides)
+    return consumer_drift_submit.submit_consumer_drift("v1.1.0", **arguments)
+
+
+def test_submitter_reads_retry_with_the_publisher_budget_and_posts_once(monkeypatch):
+    _gate_submitter_git_steps(monkeypatch)
+    calls = []
+    responses = iter(
+        [
+            _http_error(CONSUMER_FORGEJO_RELEASE_URL, 503),
+            _Response(json.dumps(_published_release_record()).encode()),
+            _http_error(CONSUMER_ARGO_EXACT_URL, 404),
+            _Response(json.dumps({"items": []}).encode()),
+            _Response(
+                json.dumps({"metadata": {"name": CONSUMER_SUBMITTER_WORKFLOW}}).encode()
+            ),
+        ]
+    )
+    _submitter_urlopen(monkeypatch, calls, responses)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    result = _run_consumer_submitter()
+
+    assert result["metadata"]["name"] == CONSUMER_SUBMITTER_WORKFLOW
+    assert [
+        (request.get_full_url(), request.get_method(), timeout, request.get_header("Authorization"))
+        for request, timeout in calls
+    ] == [
+        (
+            CONSUMER_FORGEJO_RELEASE_URL,
+            "GET",
+            http_policy.API_TIMEOUT_SECONDS,
+            "token forgejo-submitter-token",
+        ),
+        (
+            CONSUMER_FORGEJO_RELEASE_URL,
+            "GET",
+            http_policy.API_TIMEOUT_SECONDS,
+            "token forgejo-submitter-token",
+        ),
+        (
+            CONSUMER_ARGO_EXACT_URL,
+            "GET",
+            http_policy.API_TIMEOUT_SECONDS,
+            "Bearer argo-read-token",
+        ),
+        (
+            CONSUMER_ARGO_LIST_URL,
+            "GET",
+            http_policy.API_TIMEOUT_SECONDS,
+            "Bearer argo-read-token",
+        ),
+        (
+            CONSUMER_ARGO_BASE_URL,
+            "POST",
+            http_policy.API_TIMEOUT_SECONDS,
+            "Bearer argo-submit-token",
+        ),
+    ]
+    assert delays == [http_policy.RETRY_BACKOFF_SECONDS]
+    post = calls[-1][0]
+    assert json.loads(post.data)["workflow"]["metadata"]["name"] == (
+        CONSUMER_SUBMITTER_WORKFLOW
+    )
+
+
+def test_submitter_exhausted_release_read_blocks_the_argo_gate(monkeypatch):
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append((request.get_full_url(), request.get_method(), timeout))
+        raise _http_error(request.get_full_url(), 429, retry_after=999)
+
+    monkeypatch.setattr(release_publish.urllib.request, "urlopen", urlopen)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    with pytest.raises(
+        release_publish.ReleaseError, match="cannot read Forgejo release"
+    ):
+        _run_consumer_submitter()
+
+    assert calls == [
+        (CONSUMER_FORGEJO_RELEASE_URL, "GET", http_policy.API_TIMEOUT_SECONDS)
+    ] * http_policy.MAX_READ_ATTEMPTS
+    assert delays == [
+        http_policy.MAX_RETRY_DELAY_SECONDS,
+        http_policy.MAX_RETRY_DELAY_SECONDS,
+    ]
+
+
+def test_submitter_exhausted_reconciliation_read_never_submits(monkeypatch):
+    _gate_submitter_git_steps(monkeypatch)
+    calls = []
+    responses = iter(
+        [_Response(json.dumps(_published_release_record()).encode())]
+        + [
+            _http_error(CONSUMER_ARGO_EXACT_URL, 503)
+            for _ in range(http_policy.MAX_READ_ATTEMPTS)
+        ]
+    )
+    _submitter_urlopen(monkeypatch, calls, responses)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    with pytest.raises(
+        release_publish.ReleaseError, match="cannot inspect Argo workflow"
+    ):
+        _run_consumer_submitter()
+
+    assert [request.get_full_url() for request, _ in calls] == [
+        CONSUMER_FORGEJO_RELEASE_URL
+    ] + [CONSUMER_ARGO_EXACT_URL] * http_policy.MAX_READ_ATTEMPTS
+    assert all(
+        request.get_method() == "GET" and timeout == http_policy.API_TIMEOUT_SECONDS
+        for request, timeout in calls
+    )
+    assert all(
+        request.get_header("Authorization") == "Bearer argo-read-token"
+        for request, _ in calls[1:]
+    )
+    assert delays == [
+        http_policy.RETRY_BACKOFF_SECONDS,
+        http_policy.RETRY_BACKOFF_SECONDS * 2,
+    ]
+
+
+def test_submitter_attachment_fetches_use_the_public_reader_budget(monkeypatch):
+    names = release_publish.release_payload_names("v1.1.0")
+    attachment_urls = {
+        name: (
+            "https://git.ardenone.com/jedarden/brand-kit/releases/download/"
+            f"v1.1.0/{name}"
+        )
+        for name in names.values()
+    }
+    record = _published_release_record()
+    record["assets"] = [
+        {"name": name, "browser_download_url": url}
+        for name, url in attachment_urls.items()
+    ]
+    calls = []
+    responses = iter(
+        [
+            _Response(json.dumps(record).encode()),
+            _http_error(attachment_urls[names["manifest"]], 503),
+            _Response(b""),
+            _Response(b""),
+            _Response(b""),
+        ]
+    )
+    _submitter_urlopen(monkeypatch, calls, responses)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    with pytest.raises(
+        release_publish.ReleaseError, match="checksum attachment"
+    ):
+        _run_consumer_submitter()
+
+    assert [(request.get_full_url(), timeout) for request, timeout in calls[1:]] == [
+        (
+            attachment_urls[names["manifest"]],
+            http_policy.PUBLIC_TIMEOUT_SECONDS,
+        ),
+        (
+            attachment_urls[names["manifest"]],
+            http_policy.PUBLIC_TIMEOUT_SECONDS,
+        ),
+        (
+            attachment_urls[names["checksums"]],
+            http_policy.PUBLIC_TIMEOUT_SECONDS,
+        ),
+        (
+            attachment_urls[names["archive"]],
+            http_policy.PUBLIC_TIMEOUT_SECONDS,
+        ),
+    ]
+    assert delays == [http_policy.RETRY_BACKOFF_SECONDS]
+    assert all("argo-ci" not in request.get_full_url() for request, _ in calls)
+
+
+def test_submitter_post_is_single_attempt_and_reconciles_without_replay(monkeypatch):
+    _gate_submitter_git_steps(monkeypatch)
+    accepted = {
+        "metadata": {
+            "name": CONSUMER_SUBMITTER_WORKFLOW,
+            "labels": {
+                "workflows.argoproj.io/workflow-template": "brand-kit-consumer-drift",
+                "brand-kit.ardenone.com/release-tag": "v1.1.0",
+                "brand-kit.ardenone.com/release-commit": CONSUMER_SUBMITTER_COMMIT,
+            },
+        }
+    }
+    calls = []
+    responses = iter(
+        [
+            _Response(json.dumps(_published_release_record()).encode()),
+            _http_error(CONSUMER_ARGO_EXACT_URL, 404),
+            _Response(json.dumps({"items": []}).encode()),
+            _http_error(CONSUMER_ARGO_BASE_URL, 503),
+            _Response(json.dumps(accepted).encode()),
+        ]
+    )
+    _submitter_urlopen(monkeypatch, calls, responses)
+    delays = []
+    monkeypatch.setattr(release_publish.time, "sleep", delays.append)
+
+    result = _run_consumer_submitter()
+
+    assert result == accepted
+    assert [request.get_method() for request, _ in calls] == [
+        "GET",
+        "GET",
+        "GET",
+        "POST",
+        "GET",
+    ]
+    assert sum(request.get_method() == "POST" for request, _ in calls) == 1
+    assert all(timeout == http_policy.API_TIMEOUT_SECONDS for _, timeout in calls)
+    assert calls[-1][0].get_header("Authorization") == "Bearer argo-read-token"
+    assert calls[-2][0].get_header("Authorization") == "Bearer argo-submit-token"
+    # One POST attempt with no retry delay anywhere: a lost submission
+    # response is reconciled by reads, never replayed.
+    assert delays == []
+
+
+def test_ambiguous_argo_submission_recovery_is_documented():
+    note = Path("docs/notes/external-api-resilience.md").read_text(encoding="utf-8")
+    prose = " ".join(note.split())
+
+    assert (
+        "| Consumer submitter's Forgejo release read | 20 seconds | "
+        "Up to three total attempts | Not applicable; this is a read |"
+    ) in note
+    assert (
+        "| Consumer submitter's Forgejo release-attachment fetches | 15 seconds | "
+        "Up to three total attempts | Not applicable; these are reads |"
+    ) in note
+    assert (
+        "| Consumer submitter's read-only Argo reconciliation GETs | 20 seconds | "
+        "Up to three total attempts | Not applicable; these are reads |"
+    ) in note
+    assert (
+        "| Consumer submitter's Argo submission POST | 20 seconds | "
+        "One attempt; no automatic retry | One attempt |"
+    ) in note
+    assert "Recovering an ambiguous Argo submission" in prose
+    assert "brand-kit-consumer-drift-<full release commit>" in prose
+    assert (
+        "GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/"
+        "brand-kit-consumer-drift-<commit>" in prose
+    )
+    assert "A truncated list (`metadata.continue`)" in prose
+    assert "without a second `POST`" in prose
+    assert "never re-sends it" in prose
+    assert "the Argo state is confirmed absent" in prose
+    assert "A failed submit command is never evidence that nothing was submitted" in prose
+    assert "Record the observation" in prose
+    assert "follow the same read policy at the 20-second timeout" in prose
+    assert "one attempt with no automatic retry, because it creates a Workflow" in prose
+    assert "tools/consumer_drift_submit.py" in prose
