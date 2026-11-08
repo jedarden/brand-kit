@@ -1187,3 +1187,107 @@ def test_documentation_names_every_credential_boundary():
         "`resourceName: brand-kit-ci`",
     ):
         assert value in document
+
+
+def test_workload_rotation_and_revocation_contract_is_documented():
+    separation = (ROOT / "docs" / "notes" / "argo-credential-separation.md").read_text(
+        encoding="utf-8"
+    )
+    provisioning = (ROOT / "docs" / "notes" / "release-token-provisioning.md").read_text(
+        encoding="utf-8"
+    )
+
+    for value in (
+        "## Workload rotation, revocation, and compromise response",
+        "needle-ci-artifact-reader-v2-s3-credentials",
+        "needle-ci-artifact-publisher-v2-s3-credentials",
+        "ACCESS_KEY_ID",
+        "SECRET_ACCESS_KEY",
+        "rs-manager/iad-ci/forgejo/repo-readonly",
+        "property `token`",
+        "SecretSynced=True",
+        "Ready=True",
+        "existing OpenBao record",
+        "existing pods",
+        "in-flight",
+        "scheduled CronWorkflows remain",
+        "Do not\n   suspend, delete, or edit the CronWorkflow",
+        "brand-kit-ci-failure-watch",
+        "brand-kit-workflow-liveness",
+        "brand-kit-consumer-drift",
+        "not an OpenBao/ESO credential",
+        "projected tokens are short-lived and kubelet-managed",
+    ):
+        assert value in separation
+
+    for value in (
+        "## Workload credential rotation",
+        "same-scope replacement",
+        "existing authoritative OpenBao path",
+        "Ready=True`/`SecretSynced=True",
+        "consumer-drift and mirror-health",
+        "do not widen scope or fall back to an operator release token",
+        "not rotated by OpenBao or ESO",
+    ):
+        assert value in provisioning
+
+
+@pytest.mark.parametrize(
+    ("cron_filename", "template_filename", "template_name", "service_account"),
+    [
+        (
+            "brand-kit-ci-failure-watch-cronworkflow.yml",
+            "brand-kit-ci-failure-watch-workflowtemplate.yml",
+            "brand-kit-ci-failure-watch",
+            "brand-kit-ci-failure-watch",
+        ),
+        (
+            "brand-kit-workflow-liveness-cronworkflow.yml",
+            "brand-kit-workflow-liveness-workflowtemplate.yml",
+            "brand-kit-workflow-liveness",
+            "brand-kit-workflow-liveness",
+        ),
+        (
+            "brand-kit-consumer-drift-cronworkflow.yml",
+            "brand-kit-consumer-drift-workflowtemplate.yml",
+            "brand-kit-consumer-drift",
+            "brand-kit-consumer-drift",
+        ),
+        (
+            "brand-kit-mirror-health-cronworkflow.yml",
+            "brand-kit-mirror-health-workflowtemplate.yml",
+            "brand-kit-mirror-health",
+            "argo-workflow",
+        ),
+    ],
+)
+def test_secret_rotation_keeps_scheduled_workflows_enabled_and_on_the_same_template(
+    cron_filename, template_filename, template_name, service_account
+):
+    cron = _manifest(cron_filename)
+    template = _manifest(template_filename)
+
+    assert cron["metadata"]["namespace"] == WORKFLOW_NAMESPACE
+    assert cron["spec"].get("suspend") is not True
+    assert cron["spec"]["concurrencyPolicy"] == "Forbid"
+    assert cron["spec"]["workflowSpec"]["workflowTemplateRef"] == {
+        "name": template_name
+    }
+    assert template["metadata"]["namespace"] == WORKFLOW_NAMESPACE
+    assert template["spec"]["serviceAccountName"] == service_account
+
+
+def test_shared_forgejo_rotation_keeps_both_scheduled_consumers_on_one_secret():
+    consumer = _manifest("brand-kit-consumer-drift-workflowtemplate.yml")
+    mirror = _manifest("brand-kit-mirror-health-workflowtemplate.yml")
+
+    consumer_env = _env_by_name(_container_env(consumer, "audit"))
+    mirror_env = _env_by_name(_container_env(mirror, "check"))
+    assert consumer_env["FORGEJO_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "brand-kit-consumer-drift",
+        "key": "token",
+    }
+    assert mirror_env["FORGEJO_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "brand-kit-consumer-drift",
+        "key": "token",
+    }

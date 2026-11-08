@@ -33,6 +33,11 @@ ServiceAccount, and liveness reads durable Garage reports (the former
 [Argo credential separation](argo-credential-separation.md) role map for the
 exact namespace, service account, ExternalSecret, and API paths.
 
+The scheduled workloads have a separate credential lifecycle. Their Garage
+and Forgejo values must never be copied into the three operator paths above;
+their rotation and compromise procedure is in
+[Argo credential separation — workload rotation](argo-credential-separation.md#workload-rotation-revocation-and-compromise-response).
+
 ## Injection
 
 Load credentials from OpenBao directly into shell variables immediately before
@@ -113,6 +118,41 @@ repair the OpenBao/provider entry, and retry. Do not delete the OpenBao path or
 revoke the old credential first. Workload `ExternalSecret` refresh is separate
 from this operator flow; a consumer-audit rotation must wait for its
 `SecretSynced=True` status before treating a new workflow run as covered.
+
+## Workload credential rotation
+
+This section is the operator-facing checklist for the scheduled workload
+credentials, not a second set of release-token paths:
+
+| Workload credential | Provider/OpenBao source | ESO target or identity | Rotation owner |
+| --- | --- | --- | --- |
+| Garage reader | `ardenone-cluster/garage-operator/needle-ci-artifact-reader-v2-s3-credentials`, fields `ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` | Secret `needle-ci-artifact-reader`, keys `access-key` and `secret-key` in `argo-workflows` | Garage/cluster operator |
+| Garage publisher | `ardenone-cluster/garage-operator/needle-ci-artifact-publisher-v2-s3-credentials`, fields `ACCESS_KEY_ID` and `SECRET_ACCESS_KEY` | Secret `needle-ci-artifact-publisher`, keys `access-key` and `secret-key` in `argo-workflows` | Garage/cluster operator |
+| Shared Forgejo reader | `rs-manager/iad-ci/forgejo/repo-readonly`, property `token` | `brand-kit-consumer-drift` in `argo-workflows`; the same source also projects `forgejo-repo-readonly` in `forgejo` | Forgejo administrator plus OpenBao/ESO owner |
+| Brand-kit ServiceAccounts | No OpenBao path; projected Kubernetes tokens for `brand-kit-ci-failure-watch`, `brand-kit-workflow-liveness`, and `brand-kit-consumer-drift` | Namespace Roles/RoleBindings in `argo-workflows` | Kubernetes/GitOps owner |
+
+For a Garage or Forgejo rotation, create a same-scope replacement, write it to
+the existing authoritative OpenBao path (through stdin or an `@file`, never an
+argument), and wait for the existing `ExternalSecret` to report
+`Ready=True`/`SecretSynced=True` and the expected target keys to be present.
+Run a fresh read/upload check, then revoke the old provider credential after
+the overlap window. Existing pods can retain the old value until they exit;
+revoking it early can fail an in-flight run, but it does not require stopping,
+suspending, deleting, or editing the scheduled CronWorkflow. The next pod
+uses the refreshed Secret.
+
+For a compromise, revoke the old Garage key or Forgejo token immediately,
+accepting that active runs may fail, then provision the replacement at the
+same path and wait for ESO before retrying. The Forgejo token is shared by
+consumer-drift and mirror-health, so verify both workloads. If the replacement
+does not sync or fails its check, keep the schedule enabled but treat runs as
+failed/blocked; do not widen scope or fall back to an operator release token.
+
+The ServiceAccounts are not rotated by OpenBao or ESO. Kubernetes kubelet
+rotates projected tokens automatically. Full revocation requires a
+declarative-config RoleBinding/ServiceAccount change and can prevent new
+scheduled pods until the matching WorkflowTemplate and RBAC are reconciled;
+that availability impact is different from an in-place Secret rotation.
 
 ## Scheduled validity probe
 
