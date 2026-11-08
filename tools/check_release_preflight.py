@@ -10,7 +10,11 @@ workflow. Documentation, metadata, and operational changes may remain under
 
 The check is intentionally local and read-only. It classifies committed Git
 paths and validates the release inputs in the candidate tree; it does not call
-Forgejo, create tags, or publish anything.
+Forgejo, create tags, or publish anything. When the diff carries new
+``source/logo.svg`` content, the CLI additionally runs the transparent-logo
+sync review trigger (:mod:`tools.check_transparent_logo_sync`) and fails until
+the hand-maintained transparent master is updated or changed in the same diff
+as the deliberate transparent-variant decision.
 
 Typical use, from the repository root::
 
@@ -33,6 +37,12 @@ from typing import Iterable, Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parent.parent
+# Support both `python3 tools/check_release_preflight.py` and imports as
+# tools.check_release_preflight: the transparent-logo sync gate imports the
+# sync tool as `tools.check_transparent_logo_sync`, and that import needs the
+# repository root on sys.path when this file runs as a script.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 VERSION_PATH = Path("VERSION")
 CHANGELOG_PATH = Path("CHANGELOG.md")
 PUBLICATION_WORKFLOW_PATH = Path("docs/notes/release-publication.md")
@@ -507,6 +517,48 @@ def check_preflight(
     return PreflightReport(classification, version, heading, workflow, required_bump)
 
 
+def transparent_logo_sync_gate(
+    root: Path,
+    base: str,
+    head: str = "HEAD",
+    *,
+    resvg: str | None = None,
+) -> tuple[tuple[str, ...], bool]:
+    """Run the transparent-logo sync review trigger for the classified diff.
+
+    ``source/logo.svg`` and ``source/logo-transparent.svg`` are independently
+    hand-maintained: the transparent master is never generated from the opaque
+    one (docs/notes/asset-toolchain.md).  Without this gate an opaque redesign
+    can ship while the transparent master silently keeps the old artwork — the
+    transparent sidecar integrity pin and the regeneration diff both still
+    pass because nothing compares the two designs.
+
+    When the diff carries new ``source/logo.svg`` content, the gate renders
+    both candidate masters with the pinned ``resvg`` and fails until the
+    rendered designs agree or ``source/logo-transparent.svg`` is changed in
+    the same diff, which is the reviewable record of the deliberate
+    transparent-variant decision.  An unavailable renderer also fails the
+    gate: a triggered design change cannot ship without the comparison
+    actually running.  The gate never generates or rewrites either SVG.
+
+    Returns the report lines and whether the gate failed.  The import is
+    local because ``tools/check_transparent_logo_sync.py`` imports this
+    module for its diff helpers.
+    """
+
+    from tools.check_transparent_logo_sync import (
+        TransparentLogoSyncError,
+        check_transparent_logo_sync,
+        format_report,
+    )
+
+    try:
+        report = check_transparent_logo_sync(root, base, head, resvg=resvg)
+    except TransparentLogoSyncError as error:
+        return (f"FAIL transparent-logo-sync: {error}",), True
+    return tuple(format_report(report).splitlines()), report.failed
+
+
 def _format_paths(label: str, paths: Sequence[str]) -> str:
     if not paths:
         return f"{label}=none"
@@ -585,7 +637,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PASS publication-workflow={report.publication_workflow}")
     else:
         print("PASS no release metadata required; Unreleased is permitted")
-    return 0
+
+    sync_lines, sync_failed = transparent_logo_sync_gate(root, args.base, args.head)
+    for line in sync_lines:
+        print(line)
+    return 1 if sync_failed else 0
 
 
 if __name__ == "__main__":

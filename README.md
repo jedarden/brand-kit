@@ -269,8 +269,12 @@ same commands must leave `git diff --exit-code` empty.
 
 Because the transparent SVG is hand-maintained, a green regeneration diff does
 not prove that it still represents an intentional variant of a changed opaque
-logo. Before releasing a diff that changes `source/logo.svg`, run the
-review-trigger check against the last published commit:
+logo. The release preflight (`tools/check_release_preflight.py`) therefore runs
+the review-trigger check (`tools/check_transparent_logo_sync.py`) automatically
+against the last published commit whenever `source/logo.svg` carries new
+content, so an opaque redesign cannot pass the preflight until the transparent
+variant decision is made. To inspect a diff directly, run the same check
+against the last published commit:
 
 ```bash
 .venv/bin/python tools/check_transparent_logo_sync.py --base v1.0.0
@@ -278,10 +282,11 @@ review-trigger check against the last published commit:
 
 The check renders both candidate masters with the pinned `resvg` and compares
 their artwork. It does nothing for diffs without changed or removed
-`source/logo.svg` content; an in-sync redesign passes; and a divergence fails until
-`source/logo-transparent.svg` is also changed in the same diff. That paired
-change is the deliberate, reviewable decision about the transparent variant.
-The check reports the difference and never generates or rewrites either SVG.
+`source/logo.svg` content; an in-sync redesign passes; and a divergence fails
+the preflight until `source/logo-transparent.svg` is also changed in the same
+diff. That paired change is the deliberate, reviewable decision about the
+transparent variant. The check reports the difference and never generates or
+rewrites either SVG.
 
 `source/logo.png` is an input to the normal build only for
 `logo/logo-original.png`. If a PNG-only change is meant to update that original

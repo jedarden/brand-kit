@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import subprocess
 import sys
 
@@ -10,6 +11,18 @@ from tools import check_release_preflight
 ROOT = Path(__file__).resolve().parent
 WORKFLOW = check_release_preflight.PUBLICATION_WORKFLOW_PATH
 TOOL = ROOT / "tools" / "check_release_preflight.py"
+
+# Renderable SVG placeholders in the resvg-stub protocol (see
+# _install_resvg_stub): the stub renders ``data-fill`` as a solid color, and
+# ``data-alpha`` marks the transparent master so it renders RGBA.
+OPAQUE_FILL_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" '
+    'data-fill="200,10,10"></svg>'
+)
+TRANSPARENT_FILL_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" '
+    'data-fill="200,10,10" data-alpha="255"></svg>'
+)
 
 
 def _release_tree(tmp_path: Path, *, version: str = "v1.1.0") -> Path:
@@ -47,16 +60,64 @@ def _git(repo: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _install_resvg_stub(tmp_path: Path) -> Path:
+    """An executable named ``resvg`` rendering solid ``data-fill`` colors
+    (same stub protocol as the transparent-logo sync suite), installed in a
+    hidden bin directory so ``shutil.which("resvg")`` finds it without the
+    pinned binary."""
+
+    bin_dir = tmp_path / ".resvg-bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "resvg"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "arguments = sys.argv[1:]\n"
+        "width = int(arguments[arguments.index('--width') + 1])\n"
+        "height = int(arguments[arguments.index('--height') + 1])\n"
+        "source = Path(arguments[-2]).read_text()\n"
+        "if 'data-fill' not in source:\n"
+        "    Image.new('RGBA', (width, height), (0, 0, 0, 0)).save(arguments[-1])\n"
+        "    raise SystemExit(0)\n"
+        "fill = source.split('data-fill=\"')[1].split('\"')[0]\n"
+        "red, green, blue = (int(value) for value in fill.split(','))\n"
+        "if 'data-alpha' in source:\n"
+        "    Image.new('RGBA', (width, height), (red, green, blue, 255)).save(arguments[-1])\n"
+        "else:\n"
+        "    Image.new('RGB', (width, height), (red, green, blue)).save(arguments[-1])\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def _stub_resvg_env(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    stub = _install_resvg_stub(tmp_path)
+    return stub, dict(os.environ, PATH=f"{stub.parent}{os.pathsep}{os.environ['PATH']}")
+
+
 def _git_release_candidate(
     tmp_path: Path,
     *,
     base_tag: str = "published-release-2026-09-27",
     base_version: str = "v7.4.2",
     candidate_version: str = "v7.5.0",
+    base_opaque_fill: str = "200,10,10",
+    base_transparent_fill: str = "10,10,200",
+    candidate_opaque_fill: str | None = None,
+    candidate_transparent_fill: str | None = None,
 ) -> tuple[Path, str]:
     tree = _release_tree(tmp_path, version=base_version)
     (tree / "source").mkdir()
-    (tree / "source/logo.svg").write_text("baseline\n", encoding="utf-8")
+    (tree / "source/logo.svg").write_text(
+        OPAQUE_FILL_SVG.replace("200,10,10", base_opaque_fill), encoding="utf-8"
+    )
+    (tree / "source/logo-transparent.svg").write_text(
+        TRANSPARENT_FILL_SVG.replace("200,10,10", base_transparent_fill),
+        encoding="utf-8",
+    )
 
     _git(tree, "init", "-q")
     _git(tree, "config", "user.email", "test@example.com")
@@ -66,18 +127,35 @@ def _git_release_candidate(
     _git(tree, "tag", base_tag)
 
     _release_tree(tree, version=candidate_version)
-    (tree / "source/logo.svg").write_text("candidate\n", encoding="utf-8")
-    _git(tree, "add", "VERSION", "CHANGELOG.md", "source/logo.svg")
+    (tree / "source/logo.svg").write_text(
+        OPAQUE_FILL_SVG.replace(
+            "200,10,10", candidate_opaque_fill or base_transparent_fill
+        ),
+        encoding="utf-8",
+    )
+    staged = ["VERSION", "CHANGELOG.md", "source/logo.svg"]
+    if candidate_transparent_fill is not None:
+        (tree / "source/logo-transparent.svg").write_text(
+            TRANSPARENT_FILL_SVG.replace(
+                "200,10,10", candidate_transparent_fill
+            ),
+            encoding="utf-8",
+        )
+        staged.append("source/logo-transparent.svg")
+    _git(tree, "add", *staged)
     _git(tree, "commit", "-qm", "candidate release")
     return tree, base_tag
 
 
-def _run_cli(tree: Path, base: str) -> subprocess.CompletedProcess[str]:
+def _run_cli(
+    tree: Path, base: str, *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(TOOL), "--root", str(tree), "--base", base],
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -455,17 +533,20 @@ def test_changed_paths_includes_both_sides_of_a_rename(tmp_path):
 
 def test_cli_accepts_an_arbitrary_published_tag_and_is_safe_to_rerun(tmp_path):
     tree, base_tag = _git_release_candidate(tmp_path)
+    _, env = _stub_resvg_env(tmp_path)
     before_head = _git(tree, "rev-parse", "HEAD").stdout.strip()
     before_tags = _git(tree, "tag", "--list").stdout
     before_status = _git(tree, "status", "--short").stdout
 
-    first = _run_cli(tree, base_tag)
-    second = _run_cli(tree, base_tag)
+    first = _run_cli(tree, base_tag, env=env)
+    second = _run_cli(tree, base_tag, env=env)
 
     for result in (first, second):
         assert result.returncode == 0, result.stderr
         assert "PASS release-preflight: release-required" in result.stdout
         assert "PASS publication-workflow=" in result.stdout
+        assert "TRIGGER transparent-logo-sync" in result.stdout
+        assert "PASS transparent-logo-sync: in-sync" in result.stdout
     assert _git(tree, "rev-parse", "HEAD").stdout.strip() == before_head
     assert _git(tree, "tag", "--list").stdout == before_tags
     assert _git(tree, "status", "--short").stdout == before_status
@@ -473,11 +554,14 @@ def test_cli_accepts_an_arbitrary_published_tag_and_is_safe_to_rerun(tmp_path):
 
 def test_cli_does_not_contact_forgejo_create_tags_or_publish(tmp_path, monkeypatch, capsys):
     tree, base_tag = _git_release_candidate(tmp_path)
+    stub, _ = _stub_resvg_env(tmp_path)
     real_run = check_release_preflight.subprocess.run
     commands = []
 
     def run_without_side_effects(command, *args, **kwargs):
         commands.append(tuple(command))
+        if Path(command[0]).name == "resvg":
+            return real_run(command, *args, **kwargs)
         assert command[0] == "git"
         assert command[1] in {"diff", "show"}
         assert "push" not in command
@@ -486,6 +570,7 @@ def test_cli_does_not_contact_forgejo_create_tags_or_publish(tmp_path, monkeypat
         return real_run(command, *args, **kwargs)
 
     monkeypatch.setattr(check_release_preflight.subprocess, "run", run_without_side_effects)
+    monkeypatch.setenv("PATH", f"{stub.parent}{os.pathsep}{os.environ['PATH']}")
 
     assert check_release_preflight.main(
         ["--root", str(tree), "--base", base_tag]
@@ -493,5 +578,90 @@ def test_cli_does_not_contact_forgejo_create_tags_or_publish(tmp_path, monkeypat
     output = capsys.readouterr()
 
     assert commands
+    assert any(Path(command[0]).name == "resvg" for command in commands)
     assert "Forgejo" not in output.err
     assert "published" not in output.err
+
+
+def test_cli_fails_when_the_opaque_redesign_diverges_without_a_decision(tmp_path):
+    tree, base_tag = _git_release_candidate(tmp_path, candidate_opaque_fill="0,0,255")
+    _, env = _stub_resvg_env(tmp_path)
+
+    result = _run_cli(tree, base_tag, env=env)
+
+    assert result.returncode == 1
+    assert "PASS release-preflight: release-required" in result.stdout
+    assert "TRIGGER transparent-logo-sync" in result.stdout
+    assert "FAIL transparent-logo-sync" in result.stdout
+    assert "diverges from the rendered opaque" in result.stdout
+    assert "source/logo-transparent.svg" in result.stdout
+
+
+def test_cli_accepts_a_same_diff_transparent_change_as_the_decision(tmp_path):
+    tree, base_tag = _git_release_candidate(
+        tmp_path,
+        candidate_opaque_fill="0,0,255",
+        candidate_transparent_fill="200,10,10",
+    )
+    _, env = _stub_resvg_env(tmp_path)
+
+    result = _run_cli(tree, base_tag, env=env)
+
+    assert result.returncode == 0, result.stdout
+    assert "REVIEW transparent-logo-sync: divergence acknowledged" in result.stdout
+
+
+def test_transparent_logo_sync_gate_passes_through_not_triggered_diffs(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("# repo\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-qm", "baseline")
+    _git(tmp_path, "tag", "base")
+    (tmp_path / "README.md").write_text("# changed\n", encoding="utf-8")
+    _git(tmp_path, "commit", "-qam", "unrelated change")
+
+    lines, failed = check_release_preflight.transparent_logo_sync_gate(
+        tmp_path, "base", resvg=str(tmp_path / "unused")
+    )
+
+    assert failed is False
+    assert any(
+        line.startswith("PASS transparent-logo-sync: not-triggered") for line in lines
+    )
+
+
+def test_transparent_logo_sync_gate_reports_in_sync_with_stub_renderer(tmp_path):
+    tree, base_tag = _git_release_candidate(tmp_path)
+    stub = _install_resvg_stub(tmp_path)
+
+    lines, failed = check_release_preflight.transparent_logo_sync_gate(
+        tree, base_tag, resvg=str(stub)
+    )
+
+    assert failed is False
+    assert any("in-sync" in line for line in lines)
+
+
+def test_transparent_logo_sync_gate_fails_on_divergence(tmp_path):
+    tree, base_tag = _git_release_candidate(tmp_path, candidate_opaque_fill="0,0,255")
+    stub = _install_resvg_stub(tmp_path)
+
+    lines, failed = check_release_preflight.transparent_logo_sync_gate(
+        tree, base_tag, resvg=str(stub)
+    )
+
+    assert failed is True
+    assert any("diverges from the rendered opaque" in line for line in lines)
+
+
+def test_transparent_logo_sync_gate_fails_closed_without_a_renderer(tmp_path):
+    tree, base_tag = _git_release_candidate(tmp_path)
+
+    lines, failed = check_release_preflight.transparent_logo_sync_gate(
+        tree, base_tag, resvg=str(tmp_path / "missing-resvg")
+    )
+
+    assert failed is True
+    assert any("resvg is not available" in line for line in lines)

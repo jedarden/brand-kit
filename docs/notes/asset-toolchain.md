@@ -486,7 +486,10 @@ pinned `resvg`, then compares the opaque artwork with the transparent artwork
 composited over the documented background layers. A matching render passes.
 A divergent render fails unless `source/logo-transparent.svg` is also changed
 in the same diff, which records the deliberate decision to keep or update the
-transparent variant and produces a `REVIEW` report. The tool never writes an
+transparent variant and produces a `REVIEW` report. The release preflight
+(`tools/check_release_preflight.py`) runs this check automatically for every
+release candidate, so an opaque redesign cannot pass preflight without the
+transparent-variant decision. The tool never writes an
 SVG or regenerates transparent assets; after an intentional transparent-master
 update, run the normal build, refresh its checksum, and inspect the generated
 diff.

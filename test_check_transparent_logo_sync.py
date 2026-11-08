@@ -377,6 +377,21 @@ def test_release_docs_define_the_manual_sync_review_path():
         assert "never" in document and "generat" in document
 
 
+def test_release_docs_tie_the_sync_review_to_the_release_preflight():
+    # The preflight is the enforcement point: a triggered opaque redesign must
+    # fail there until the transparent-variant decision is recorded, so the
+    # release docs must tie the check to the preflight rather than leave it as
+    # an optional second command.
+    for relative in (
+        "README.md",
+        "docs/notes/asset-toolchain.md",
+        "docs/notes/release-publication.md",
+        "docs/plan/plan.md",
+    ):
+        document = (ROOT / relative).read_text(encoding="utf-8")
+        assert "check_release_preflight.py" in document
+
+
 # ---- committed masters (real pinned resvg when available) -------------------
 
 

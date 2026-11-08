@@ -350,14 +350,17 @@ derives it automatically.
    trace gives vtracer a temporary output path; the authoritative SVG is not
    replaced unless that process exits successfully, after which the new digest
    is written.
-7. Every release candidate runs
-   `.venv/bin/python tools/check_transparent_logo_sync.py --base <last-published-ref>`.
-   The check fires only when `source/logo.svg` carries new content, renders the
-   two candidate masters with the pinned `resvg`, and compares the opaque
-   artwork with the transparent artwork over the documented background layers.
-   A divergence fails unless `source/logo-transparent.svg` is changed in the
-   same diff, which is the deliberate review/update decision for the
-   hand-maintained transparent variant. The check never generates either SVG.
+7. Every release candidate runs the release preflight
+   (`tools/check_release_preflight.py --base <last-published-ref>`), which
+   includes the transparent-logo sync review trigger
+   (`.venv/bin/python tools/check_transparent_logo_sync.py --base <last-published-ref>`
+   runs the same trigger directly). The trigger fires only when `source/logo.svg`
+   carries new content, renders the two candidate masters with the pinned
+   `resvg`, and compares the opaque artwork with the transparent artwork over
+   the documented background layers. A divergence fails the preflight unless
+   `source/logo-transparent.svg` is changed in the same diff, which is the
+   deliberate review/update decision for the hand-maintained transparent
+   variant. The check never generates either SVG.
 
 ### Consequences
 
