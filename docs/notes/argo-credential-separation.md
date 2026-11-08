@@ -10,7 +10,7 @@ is not the credential injected into the scheduled watcher workloads.
 | --- | --- | --- | --- | --- |
 | Failure watcher workload | No Argo credential. The pod's own projected ServiceAccount token (`/var/run/secrets/kubernetes.io/serviceaccount/token`, verified against the `ca.crt` beside it) authorizes it to the in-cluster Kubernetes API. Garage report access uses Secrets `needle-ci-artifact-reader` / `needle-ci-artifact-publisher`. | `brand-kit-ci-failure-watch` | None for Argo (`tools/kubernetes_api.py` reads the mounted token file) | `GET https://kubernetes.default.svc/apis/argoproj.io/v1alpha1/namespaces/argo-workflows/workflows?labelSelector=workflows.argoproj.io/workflow-template=brand-kit-ci&limit=100` (plus `continue` pages). Reports link each failed run as `https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<name>` for a human with an SSO session; the watcher never calls argo-server. No `POST`, `PUT`, `PATCH`, or `DELETE`. |
 | Liveness workload | No Argo or Kubernetes API credential. Secret `needle-ci-artifact-reader` (Garage read-only) via `S3_READER_ACCESS_KEY` / `S3_READER_SECRET_KEY`; `needle-ci-artifact-publisher` only for Argo's own report upload. | `brand-kit-workflow-liveness` | `S3_READER_*` from Secret `needle-ci-artifact-reader` | Garage `ListObjectsV2` on each target's `failures/<target>/<version>/` prefix and `GET` of the newest `report.json` objects in the freshness window. No `POST`, `PUT`, `PATCH`, or `DELETE`. |
-| Consumer audit workload | ExternalSecret `brand-kit-consumer-drift` in `argo-workflows`, targeting Secret `brand-kit-consumer-drift` in `argo-workflows`. Its source is `rs-manager/iad-ci/forgejo/repo-readonly`, property `token`. | `brand-kit-consumer-drift` | `FORGEJO_TOKEN` from Secret key `token` | `GET https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases?limit=1` for release metadata. The audit has no Argo credential and no write-capable Git operation. |
+| Consumer audit workload | ExternalSecret `brand-kit-consumer-drift` in `argo-workflows`, targeting Secret `brand-kit-consumer-drift` in `argo-workflows`. Its source is `rs-manager/iad-ci/forgejo/repo-readonly`, property `token`. | `brand-kit-consumer-drift` | `FORGEJO_TOKEN` from Secret key `token`, read only by the detector's Forgejo API client — never by git: the workload configures no `credential.helper` and no other `GIT_*` environment, so its checkout legs have no credential source at all | `GET https://git.ardenone.com/api/v1/repos/jedarden/brand-kit/releases?limit=1` for release metadata, plus the checkout legs: anonymous `git clone`/`ls-remote`/`fetch` of the **read-only GitHub mirror** and a local `checkout --detach` (`brand-kit-repository`/`site-repository` default to `https://github.com/jedarden/brand-kit.git` and `https://github.com/jedarden/jedarden.com.git`; the daily CronWorkflow sets the same values and the release-triggered submitter passes no repository override), which provision the `/brand-kit` detector checkout, the `--source-root /release` tag checkout, and the `/jedarden.com` site checkout. No git operation authenticates or names git.ardenone.com; the audit has no Argo credential and no write-capable Git operation. |
 | Mirror-health workload | Secret `brand-kit-consumer-drift` in `argo-workflows` (the same read-only `rs-manager/iad-ci/forgejo/repo-readonly` repo token as the consumer audit; no new credential). Added 2026-10-10 because git.ardenone.com requires sign-in for every git read. | `argo-workflow` | `FORGEJO_TOKEN` from Secret key `token`, offered to git only through a `credential.https://git.ardenone.com.helper` so it never reaches GitHub, a URL, or argv | `git clone`/`ls-remote`/`fetch` of `https://git.ardenone.com/jedarden/brand-kit.git`. No Argo credential, no push, no Forgejo API write. |
 | Release publisher operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_TOKEN` from OpenBao path `secret/rs-manager/brand-kit/release/argo-read` for the local release process. | Not applicable (local operator process) | `ARGO_TOKEN` | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<brand-kit-ci-run>` for the read-only release attestation and the consumer submitter's duplicate reconciliation reads. |
 | Consumer submitter operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_TOKEN` and `ARGO_SUBMIT_TOKEN` from their separate OpenBao paths `secret/rs-manager/brand-kit/release/argo-read` and `secret/rs-manager/brand-kit/release/argo-submit`. | Not applicable (local operator process) | `ARGO_TOKEN` for reconciliation reads; `ARGO_SUBMIT_TOKEN` for the one submission POST | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<name>` and the template-scoped list use `ARGO_TOKEN`; the single `POST https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows` uses `ARGO_SUBMIT_TOKEN` to submit only `brand-kit-consumer-drift`. It must not delete, suspend, update, or administer workflows. |
@@ -161,6 +161,30 @@ argv, on disk, or at any host other than git.ardenone.com (GitHub included),
 and its git surface stays within `clone`/`ls-remote`/`fetch` plus the
 checker's local-only `init`/`rev-parse`/`merge-base` scratch operations --
 never a push and never a Forgejo API call.
+
+The consumer audit provisions its `--source-root` checkout without any git
+credential. Every checkout leg — the `/brand-kit` detector clone, the
+`ls-remote` mirror-visibility gate, the `/release` clone plus `--depth=1`
+`fetch` of the exact selected tag, the local `checkout --detach` that pins
+it, and the `/jedarden.com` site clone — is anonymous git against the
+read-only GitHub mirror only: the WorkflowTemplate defaults, the daily
+CronWorkflow, and the release-triggered submitter (which passes only
+`release-tag`/`release-commit`, never a repository override) all resolve
+`brand-kit-repository` and `site-repository` to
+`https://github.com/jedarden/brand-kit.git` and
+`https://github.com/jedarden/jedarden.com.git`, and the detector's own
+mirror-visibility `ls-remote` reads the same configured mirror. git.ardenone.com
+requires sign-in for every git read, which is precisely why the audit holds
+no git credential: `FORGEJO_TOKEN` authorizes only the detector's releases
+`GET`, and it must stay off GitHub, out of URLs, and out of argv — no
+`credential.helper` of any scope, no `GIT_CONFIG_*` environment entry, no
+token embedded in a remote URL, and no reference in the audit script. The
+boundary fails closed: with no credential source configured, repointing
+these remotes at canonical Forgejo would fail every run as an anonymous
+authentication error (`could not read Username`) instead of silently arming
+git with the API token. Reading canonical Forgejo over git is mirror-health's
+job, and that workload — alone — carries the host-scoped
+`credential.https://git.ardenone.com.helper` for it.
 
 The brand-kit CI submitter carries that same boundary onto the `brand-kit-ci`
 template: `tools/brand_kit_ci_submit.py` requires `ARGO_SUBMIT_TOKEN` and

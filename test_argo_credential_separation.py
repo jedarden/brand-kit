@@ -417,10 +417,262 @@ def test_consumer_audit_forgejo_contract_rejects_unexpected_method_or_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# Mirror-health workload: the same read-only Forgejo repo token, but it must
-# reach git only through the host-scoped credential helper and its git surface
-# is limited to the documented read-only subcommands (no push, no Forgejo API).
+# Consumer audit checkout legs: the --source-root checkout is provisioned by
+# ANONYMOUS git against the read-only GitHub mirror -- no git credential at
+# all. FORGEJO_TOKEN is API-only, so unlike mirror-health this workload must
+# configure no credential source for git whatsoever (any GIT_CONFIG_* entry
+# would arm git with the token and offer it to GitHub, its actual remote host).
 # ---------------------------------------------------------------------------
+
+CONSUMER_AUDIT_TEMPLATE = "brand-kit-consumer-drift-workflowtemplate.yml"
+CONSUMER_AUDIT_CRONWORKFLOW = "brand-kit-consumer-drift-cronworkflow.yml"
+CONSUMER_AUDIT_MIRROR_REPOSITORY = "https://github.com/jedarden/brand-kit.git"
+CONSUMER_AUDIT_SITE_REPOSITORY = "https://github.com/jedarden/jedarden.com.git"
+# clone provisions /brand-kit, /release and /jedarden.com; ls-remote is the
+# mirror-visibility gate (in the script and in the detector's own discovery);
+# fetch brings the exact selected tag into /release; checkout is the local
+# --detach that pins /release at that tag. Nothing else may run.
+CONSUMER_AUDIT_READ_ONLY_GIT_SUBCOMMANDS = {"clone", "ls-remote", "fetch", "checkout"}
+CONSUMER_AUDIT_GIT_HOSTS = {"github.com"}
+CONSUMER_AUDIT_FORGEJO_HELPER = (
+    '!f() { test "$1" = get && echo "username=x-token" '
+    '&& echo "password=$FORGEJO_TOKEN"; }; f'
+)
+
+
+def _consumer_audit_audit_container():
+    manifest = _manifest(CONSUMER_AUDIT_TEMPLATE)
+    audit = next(
+        template
+        for template in manifest["spec"]["templates"]
+        if template["name"] == "audit"
+    )
+    return manifest, audit["container"]
+
+
+def _consumer_audit_repository_parameters():
+    """Repository parameters as both trigger paths resolve them.
+
+    The WorkflowTemplate defaults, the daily CronWorkflow's explicit values,
+    and the release-triggered submitter (which passes only release-tag and
+    release-commit) must all agree on the anonymous read-only mirror remotes.
+    """
+    workflow_template, _ = _consumer_audit_audit_container()
+    template_parameters = {
+        parameter["name"]: parameter["value"]
+        for parameter in workflow_template["spec"]["arguments"]["parameters"]
+    }
+    cron_parameters = {
+        parameter["name"]: parameter["value"]
+        for parameter in _manifest(CONSUMER_AUDIT_CRONWORKFLOW)["spec"]["workflowSpec"][
+            "arguments"
+        ]["parameters"]
+    }
+    submitted = consumer_drift_submit.workflow_payload("v1.1.0", "a" * 40)
+    submitted_parameters = [
+        parameter["name"]
+        for parameter in submitted["workflow"]["spec"]["arguments"]["parameters"]
+    ]
+    assert submitted_parameters == ["release-tag", "release-commit"]
+    return [template_parameters, cron_parameters]
+
+
+def _assert_consumer_audit_git_is_credentialless(env):
+    """The audit's git legs are anonymous; the token is API-only.
+
+    Mirror-health must read Forgejo over git and therefore scopes a helper to
+    that one host. The consumer audit reads git only from the public GitHub
+    mirror, so arming git with ``FORGEJO_TOKEN`` -- a ``credential.helper`` of
+    any scope or any other ``GIT_*`` environment entry -- would offer the
+    Forgejo API token to GitHub, its actual remote host. The workload must
+    configure no git credential source at all.
+    """
+    git_environment = [name for name in env if name.startswith("GIT_")]
+    assert git_environment == [], (
+        "the consumer audit must not configure git through its environment: "
+        f"{git_environment}"
+    )
+    forgejo = env.get("FORGEJO_TOKEN", {})
+    assert "value" not in forgejo
+    assert forgejo.get("valueFrom", {}).get("secretKeyRef") == {
+        "name": "brand-kit-consumer-drift",
+        "key": "token",
+    }
+
+
+def test_consumer_audit_git_legs_are_credentialless_and_its_token_is_api_only():
+    manifest, container = _consumer_audit_audit_container()
+    assert manifest["metadata"]["namespace"] == WORKFLOW_NAMESPACE
+    assert manifest["spec"]["serviceAccountName"] == WORKLOAD_SERVICE_ACCOUNTS[
+        CONSUMER_AUDIT_TEMPLATE
+    ]
+    _assert_consumer_audit_git_is_credentialless(_env_by_name(container["env"]))
+
+    # The shell never references the token, so no git argv can carry it; only
+    # the detector reads it (from the environment) for the releases GET, and
+    # the audit script never names the Forgejo host git would need a
+    # credential for.
+    script = container["args"][0]
+    assert "FORGEJO_TOKEN" not in script
+    assert "credential.helper" not in script
+    assert "git.ardenone.com" not in script
+
+
+def _mutated_consumer_audit_env(mutator):
+    _, container = _consumer_audit_audit_container()
+    env = _env_by_name(container["env"])
+    mutator(env)
+    return env
+
+
+def _helper_config(key):
+    return {
+        "GIT_CONFIG_COUNT": {"name": "GIT_CONFIG_COUNT", "value": "1"},
+        "GIT_CONFIG_KEY_0": {"name": "GIT_CONFIG_KEY_0", "value": key},
+        "GIT_CONFIG_VALUE_0": {"name": "GIT_CONFIG_VALUE_0", "value": CONSUMER_AUDIT_FORGEJO_HELPER},
+    }
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        # Any helper would arm git with the API token. A global one offers it
+        # to every host; a GitHub-scoped one offers it to this workload's
+        # actual remote host; a Forgejo-scoped one imports mirror-health's
+        # pattern into a workload whose remotes must stay anonymous.
+        pytest.param(
+            lambda env: env.update(_helper_config("credential.helper")),
+            id="global-credential-helper",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                _helper_config("credential.https://github.com.helper")
+            ),
+            id="github-scoped-helper",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                _helper_config("credential.https://git.ardenone.com.helper")
+            ),
+            id="forgejo-scoped-helper",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {"GIT_TERMINAL_PROMPT": {"name": "GIT_TERMINAL_PROMPT", "value": "0"}}
+            ),
+            id="any-git-environment-entry",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {"FORGEJO_TOKEN": {"name": "FORGEJO_TOKEN", "value": "literal-token"}}
+            ),
+            id="literal-token-instead-of-secret-ref",
+        ),
+        pytest.param(
+            lambda env: env["FORGEJO_TOKEN"]["valueFrom"]["secretKeyRef"].update(
+                {"name": "forgejo-webhook-token"}
+            ),
+            id="write-capable-token-secret",
+        ),
+    ],
+)
+def test_consumer_audit_credential_env_rejects_armed_git_or_wrong_secret_source(
+    mutator,
+):
+    with pytest.raises(AssertionError):
+        _assert_consumer_audit_git_is_credentialless(
+            _mutated_consumer_audit_env(mutator)
+        )
+
+
+def _assert_consumer_audit_git_call(arguments):
+    """Enforce the anonymous, mirror-only read-only git surface for one call.
+
+    Subcommands stay within clone/ls-remote/fetch plus the local checkout
+    that pins /release at the selected tag; any URL argument must be https,
+    carry no embedded credential, and name only the read-only GitHub mirror
+    -- never git.ardenone.com, whose git reads require the sign-in this
+    workload deliberately does not hold.
+    """
+    assert arguments[0] in CONSUMER_AUDIT_READ_ONLY_GIT_SUBCOMMANDS, arguments
+    for argument in arguments[1:]:
+        if "://" in argument:
+            parsed = urlsplit(argument)
+            assert parsed.scheme == "https"
+            assert parsed.username is None
+            assert parsed.password is None
+            assert parsed.hostname in CONSUMER_AUDIT_GIT_HOSTS
+
+
+def test_consumer_audit_script_provisions_source_root_by_anonymous_mirror_clone():
+    _, container = _consumer_audit_audit_container()
+    script = container["args"][0]
+    code = "\n".join(
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    # `git -C <path> <verb>` and plain `git <verb>` are the only shapes the
+    # script uses; every verb must stay in the read-only allowlist.
+    git_call_pattern = r"\bgit(?:[ \t]+-C[ \t]+\S+)?[ \t]+([a-z][a-z-]+)"
+    git_verbs = {
+        verb
+        for line in code.splitlines()
+        if re.search(git_call_pattern, line)
+        for verb in re.findall(git_call_pattern, line)
+    }
+    assert git_verbs == CONSUMER_AUDIT_READ_ONLY_GIT_SUBCOMMANDS
+
+    # Every remote on a git line is one of the two workflow parameters --
+    # never a literal URL -- so the audited hosts are exactly the parameter
+    # values both trigger paths resolve.
+    git_remote_arguments = {
+        token
+        for line in code.splitlines()
+        if re.search(git_call_pattern, line)
+        for token in re.findall(r'"([^"]*)"', line)
+        if "://" in token or token.startswith("{{workflow.parameters.")
+    }
+    assert git_remote_arguments == {
+        "{{workflow.parameters.brand-kit-repository}}",
+        "{{workflow.parameters.site-repository}}",
+    }
+    for parameters in _consumer_audit_repository_parameters():
+        assert parameters["brand-kit-repository"] == CONSUMER_AUDIT_MIRROR_REPOSITORY
+        assert parameters["site-repository"] == CONSUMER_AUDIT_SITE_REPOSITORY
+        for repository in (
+            parameters["brand-kit-repository"],
+            parameters["site-repository"],
+        ):
+            parsed = urlsplit(repository)
+            assert parsed.scheme == "https"
+            assert parsed.username is None
+            assert parsed.password is None
+            assert parsed.hostname in CONSUMER_AUDIT_GIT_HOSTS
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["push", CONSUMER_AUDIT_MIRROR_REPOSITORY, "main"],
+        [
+            "ls-remote",
+            "https://x-token:secret@github.com/jedarden/brand-kit.git",
+        ],
+        [
+            "fetch",
+            "--depth=1",
+            "https://git.ardenone.com/jedarden/brand-kit.git",
+            "refs/tags/v1.0.0:refs/tags/v1.0.0",
+        ],
+        ["clone", "http://github.com/jedarden/brand-kit.git", "/release"],
+        ["config", "credential.helper", "store --file=/tmp/creds"],
+        ["pull", CONSUMER_AUDIT_MIRROR_REPOSITORY, "main"],
+    ],
+)
+def test_consumer_audit_git_contract_rejects_out_of_allowlist_calls(arguments):
+    with pytest.raises(AssertionError):
+        _assert_consumer_audit_git_call(arguments)
+
 
 MIRROR_HEALTH_TEMPLATE = "brand-kit-mirror-health-workflowtemplate.yml"
 MIRROR_HEALTH_CANONICAL_REPOSITORY = "https://git.ardenone.com/jedarden/brand-kit.git"
