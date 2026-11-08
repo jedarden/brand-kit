@@ -285,12 +285,12 @@ def test_forgejo_release_check_fails_closed_for_draft_or_missing_record(
     monkeypatch.setattr(
         consumer_sync,
         "fetch",
-        lambda url: b'{"tag_name":"v1.0.0","draft":true}',
+        lambda url, headers=None: b'{"tag_name":"v1.0.0","draft":true}',
     )
     assert consumer_sync.check_forgejo_release("v1.0.0") is False
     assert "not published" in capsys.readouterr().out
 
-    def missing_fetch(url):
+    def missing_fetch(url, headers=None):
         raise urllib.error.HTTPError(url, 404, "not found", {}, None)
 
     monkeypatch.setattr(consumer_sync, "fetch", missing_fetch)
