@@ -276,7 +276,7 @@ def _load_manifest(name):
 @pytest.mark.parametrize(
     ("workflow_name", "schedule"),
     (
-        ("brand-kit-ci-failure-watch", "*/15 * * * *"),
+        ("brand-kit-ci-failure-watch", "*/5 * * * *"),
         ("brand-kit-consumer-drift", "17 6 * * *"),
         ("brand-kit-mirror-health", "17 */6 * * *"),
         ("brand-kit-platform-requirements", "27 6 * * *"),

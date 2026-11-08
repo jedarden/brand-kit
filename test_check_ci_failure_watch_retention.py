@@ -12,11 +12,17 @@ RETENTION_ANNOTATION = (
     "brand-kit.ardenone.com/argo-failure-retention-seconds"
 )
 LOOKBACK_ANNOTATION = "brand-kit.ardenone.com/failure-watch-lookback-minutes"
+FAILED_LIMIT_ANNOTATION = "brand-kit.ardenone.com/argo-failed-workflow-limit"
+ERRORED_LIMIT_ANNOTATION = "brand-kit.ardenone.com/argo-errored-workflow-limit"
+CRON_MANIFEST = ROOT / "automation/brand-kit-ci-failure-watch-cronworkflow.yml"
 
 
-def _write_argo_config(tmp_path, retention, *, values_object=False):
+def _write_argo_config(
+    tmp_path, retention, *, failed_limit=20, errored_limit=10, values_object=False
+):
     values = {
         "controller": {
+            "retentionPolicy": {"failed": failed_limit, "errored": errored_limit},
             "workflowDefaults": {
                 "spec": {"ttlStrategy": {"secondsAfterFailure": retention}}
             }
@@ -35,6 +41,8 @@ def _write_manifest(
     tmp_path,
     *,
     retention=None,
+    failed_limit=None,
+    errored_limit=None,
     lookback=None,
     command_lookback=None,
     remove_annotations=(),
@@ -43,6 +51,10 @@ def _write_manifest(
     annotations = document["metadata"]["annotations"]
     if retention is not None:
         annotations[RETENTION_ANNOTATION] = str(retention)
+    if failed_limit is not None:
+        annotations[FAILED_LIMIT_ANNOTATION] = str(failed_limit)
+    if errored_limit is not None:
+        annotations[ERRORED_LIMIT_ANNOTATION] = str(errored_limit)
     if lookback is not None:
         annotations[LOOKBACK_ANNOTATION] = str(lookback)
     for name in remove_annotations:
@@ -57,12 +69,20 @@ def _write_manifest(
     return path
 
 
+def _write_cron_manifest(tmp_path, schedule):
+    document = yaml.safe_load(CRON_MANIFEST.read_text(encoding="utf-8"))
+    document["spec"]["schedules"] = [schedule]
+    path = tmp_path / "cronworkflow.yml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return path
+
+
 def test_current_failure_watch_configuration_covers_argo_retention():
     assert check_ci_failure_watch_retention.check_configuration(MANIFEST) == []
 
 
 def test_checker_accepts_valid_external_argo_retention(tmp_path):
-    argo_config = _write_argo_config(tmp_path, 7200)
+    argo_config = _write_argo_config(tmp_path, 1800)
 
     assert (
         check_ci_failure_watch_retention.check_configuration(
@@ -114,13 +134,97 @@ def test_checker_rejects_drifted_retention_annotation(tmp_path):
 
 
 def test_check_compares_the_external_argo_controller_retention(tmp_path):
-    argo_config = _write_argo_config(tmp_path, 3600)
+    argo_config = _write_argo_config(tmp_path, 7201)
 
     errors = check_ci_failure_watch_retention.check_configuration(
         MANIFEST, argo_config=argo_config
     )
 
-    assert any("declarative-config Argo failure retention differs" in error for error in errors)
+    assert any("declarative-config Argo failure retention exceeds" in error for error in errors)
+
+
+def test_checker_rejects_ttl_that_expires_before_the_next_nominal_scan(tmp_path):
+    argo_config = _write_argo_config(tmp_path, 300)
+
+    errors = check_ci_failure_watch_retention.check_configuration(
+        MANIFEST, argo_config=argo_config
+    )
+
+    assert any("watcher cadence is unsafe for TTL" in error for error in errors)
+
+
+def test_checker_rejects_count_cap_drift_from_the_controller(tmp_path):
+    argo_config = _write_argo_config(tmp_path, 7200, failed_limit=12)
+
+    errors = check_ci_failure_watch_retention.check_configuration(
+        MANIFEST, argo_config=argo_config
+    )
+
+    assert any("Argo failed Workflow limit differs" in error for error in errors)
+
+
+def test_checker_rejects_count_cap_drift_from_watcher_contract(tmp_path):
+    manifest = _write_manifest(tmp_path, failed_limit=12)
+
+    errors = check_ci_failure_watch_retention.check_configuration(manifest)
+
+    assert any("failed Workflow limit annotation does not match" in error for error in errors)
+
+
+def test_checker_rejects_errored_cap_drift_from_the_controller(tmp_path):
+    argo_config = _write_argo_config(tmp_path, 7200, errored_limit=9)
+
+    errors = check_ci_failure_watch_retention.check_configuration(
+        MANIFEST, argo_config=argo_config
+    )
+
+    assert any("Argo errored Workflow limit differs" in error for error in errors)
+
+
+def test_checker_rejects_errored_cap_drift_from_watcher_contract(tmp_path):
+    manifest = _write_manifest(tmp_path, errored_limit=9)
+
+    errors = check_ci_failure_watch_retention.check_configuration(manifest)
+
+    assert any("errored Workflow limit annotation does not match" in error for error in errors)
+
+
+@pytest.mark.parametrize("schedule", ("*/15 * * * *", "*/20 * * * *"))
+def test_checker_rejects_cadence_exposing_failures_to_count_eviction(tmp_path, schedule):
+    cron_manifest = _write_cron_manifest(tmp_path, schedule)
+
+    errors = check_ci_failure_watch_retention.check_configuration(
+        MANIFEST, cron_manifest=cron_manifest
+    )
+
+    assert any("watcher cadence is unsafe" in error for error in errors)
+    assert any("cap 20" in error for error in errors)
+
+
+def test_checker_accepts_cadence_below_count_cap_threshold(tmp_path):
+    cron_manifest = _write_cron_manifest(tmp_path, "*/5 * * * *")
+
+    assert check_ci_failure_watch_retention.check_configuration(
+        MANIFEST, cron_manifest=cron_manifest
+    ) == []
+
+
+def test_count_cap_arithmetic_rejects_the_projected_boundary():
+    check_ci_failure_watch_retention._validate_count_coverage(9, 5)
+
+    with pytest.raises(ValueError, match="8 >= cap 8"):
+        check_ci_failure_watch_retention._validate_count_coverage(8, 5)
+
+
+@pytest.mark.parametrize("schedule", ("0 * * * *", "*/7 * * * *", "bad"))
+def test_checker_rejects_unbounded_or_unsupported_cadence(tmp_path, schedule):
+    cron_manifest = _write_cron_manifest(tmp_path, schedule)
+
+    errors = check_ci_failure_watch_retention.check_configuration(
+        MANIFEST, cron_manifest=cron_manifest
+    )
+
+    assert any("watcher cadence" in error or "watcher schedule" in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -133,12 +237,32 @@ def test_check_compares_the_external_argo_controller_retention(tmp_path):
             "annotation 'brand-kit.ardenone.com/argo-failure-retention-seconds'",
         ),
         (
+            lambda tmp_path: _write_manifest(
+                tmp_path, remove_annotations=(FAILED_LIMIT_ANNOTATION,)
+            ),
+            "annotation 'brand-kit.ardenone.com/argo-failed-workflow-limit'",
+        ),
+        (
+            lambda tmp_path: _write_manifest(
+                tmp_path, remove_annotations=(ERRORED_LIMIT_ANNOTATION,)
+            ),
+            "annotation 'brand-kit.ardenone.com/argo-errored-workflow-limit'",
+        ),
+        (
             lambda tmp_path: _write_manifest(tmp_path, lookback="not-an-integer"),
             "annotation 'brand-kit.ardenone.com/failure-watch-lookback-minutes'",
         ),
         (
             lambda tmp_path: _write_manifest(tmp_path, retention="not-an-integer"),
             "annotation 'brand-kit.ardenone.com/argo-failure-retention-seconds'",
+        ),
+        (
+            lambda tmp_path: _write_manifest(tmp_path, failed_limit="not-an-integer"),
+            "annotation 'brand-kit.ardenone.com/argo-failed-workflow-limit'",
+        ),
+        (
+            lambda tmp_path: _write_manifest(tmp_path, errored_limit="not-an-integer"),
+            "annotation 'brand-kit.ardenone.com/argo-errored-workflow-limit'",
         ),
     ],
 )
@@ -185,4 +309,19 @@ def test_checker_rejects_argo_configuration_without_retention(tmp_path):
         MANIFEST, argo_config=argo_config
     )
 
-    assert any("does not declare controller failure retention" in error for error in errors)
+    assert any("does not declare controller failure TTL and failed/errored Workflow limits" in error for error in errors)
+
+
+def test_checker_rejects_argo_configuration_without_count_cap(tmp_path):
+    argo_config = _write_argo_config(tmp_path, 7200)
+    document = yaml.safe_load(argo_config.read_text(encoding="utf-8"))
+    values = yaml.safe_load(document["spec"]["source"]["helm"]["values"])
+    del values["controller"]["retentionPolicy"]
+    document["spec"]["source"]["helm"]["values"] = yaml.safe_dump(values)
+    argo_config.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    errors = check_ci_failure_watch_retention.check_configuration(
+        MANIFEST, argo_config=argo_config
+    )
+
+    assert any("does not declare controller failure TTL and failed/errored Workflow limits" in error for error in errors)

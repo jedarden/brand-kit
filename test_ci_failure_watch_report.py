@@ -59,6 +59,15 @@ def test_versioned_report_fixtures_satisfy_json_schema_and_runtime_contract(
     assert ci_failure_watch_report.validate_report(report) is report
 
 
+def test_older_v1_report_without_count_cap_metadata_remains_readable(report_validator):
+    report = _fixture("pass-report.json")
+    del report["cutoff"]["argo_failed_workflow_limit"]
+    del report["cutoff"]["argo_errored_workflow_limit"]
+
+    assert list(report_validator.iter_errors(report)) == []
+    assert ci_failure_watch_report.validate_report(report) is report
+
+
 def test_durable_attestation_fixture_satisfies_both_contracts(attestations_validator):
     document = _fixture("attestations.json")
     assert list(attestations_validator.iter_errors(document)) == []
@@ -108,6 +117,8 @@ def test_report_schema_requires_attestation_linkage_and_window_metadata(
         lambda report: report["cutoff"].pop("at"),
         lambda report: report["cutoff"].update(lookback_minutes=119),
         lambda report: report["cutoff"].update(argo_failure_retention_seconds=7199),
+        lambda report: report["cutoff"].update(argo_failed_workflow_limit=19),
+        lambda report: report["cutoff"].update(argo_errored_workflow_limit=9),
         lambda report: report["cutoff"].update(at="2026-09-27T11:00:00+00:00"),
         lambda report: report.update(observed_at="2026-09-27T13:00:00+00:00"),
     ),
@@ -149,6 +160,8 @@ def test_watcher_accepts_an_attestation_at_the_inclusive_cutoff(report_validator
         "at": "2026-09-27T11:00:00Z",
         "lookback_minutes": 120,
         "argo_failure_retention_seconds": 7200,
+        "argo_failed_workflow_limit": 20,
+        "argo_errored_workflow_limit": 10,
     }
     assert len(report["attestations"]) == 1
     assert list(report_validator.iter_errors(report)) == []

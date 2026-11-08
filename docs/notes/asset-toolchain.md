@@ -16,16 +16,18 @@ The ordered commands and required Argo log evidence are documented under
 
 The gate has an application-owned companion check in
 `automation/brand-kit-ci-failure-watch-workflowtemplate.yml`, scheduled by
-`automation/brand-kit-ci-failure-watch-cronworkflow.yml`. Every 15 minutes it
+`automation/brand-kit-ci-failure-watch-cronworkflow.yml`. Every 5 minutes it
 lists `brand-kit-ci` Workflow objects from the in-cluster Kubernetes API
 (`https://kubernetes.default.svc/apis/argoproj.io/v1alpha1/namespaces/argo-workflows/workflows`)
 and retains `Failed`/`Error` runs from the preceding two hours. The lookback is
 intentional: it must cover how long iad-ci's Argo controller retains failed
 Workflows (`controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure`
 in `declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml`).
-The watcher's contract assumes 7200 seconds; the controller currently uses
-1800 seconds plus a 20-failed-Workflow retention cap, which the two-hour
-lookback more than covers. The watcher runs as dedicated service account
+The watcher's time contract covers controller TTLs up to 7200 seconds; the
+controller currently uses 1800 seconds. It also keeps at most 20 `Failed`
+Workflows and 10 `Error` Workflows across the entire iad-ci namespace,
+independent of age. A two-hour lookback cannot recover a Workflow already
+evicted by either count cap. The watcher runs as dedicated service account
 `brand-kit-ci-failure-watch` and authenticates with that pod's own projected
 token -- argo-server runs `--auth-mode=sso` only, so there is no Argo API token
 for it, and it is never the release operator's `ARGO_TOKEN` from
@@ -34,20 +36,37 @@ the executor's `workflowtaskresults` `create`/`patch`), and the watcher makes
 only the Workflow list `GET`. See
 [`argo-credential-separation.md`](argo-credential-separation.md) for the full
 role map and the submit/mutation boundary.
-The watcher contract requires its lookback to cover that full retention window,
-and retains the exact boundary (`cutoff` is inclusive), so a short-lived failed
-run is still detected before its Workflow is reaped. The deployed
-WorkflowTemplate records both values as annotations. Check the repository
-copy, and optionally the external controller configuration, with:
+The watcher contract requires its lookback to cover the configured time window
+and retains the exact boundary (`cutoff` is inclusive). Its five-minute schedule
+is checked against the global Failed and Error Workflow count caps. The
+controller recorded 45 needle-ci failures in a busy hour on 2026-09-22; the
+checker uses twice that observed rate (90/hour) as a stress input. It is not
+an upper bound on all iad-ci failures. At five minutes the check projects
+`ceil(90 × 5 / 60) = 8` new failures, below the caps of 20 and 10. At the old
+15-minute cadence it projects 23, which fails the check. The deployed
+WorkflowTemplate records the TTL ceiling, count caps, and lookback as
+annotations. Check the repository copy, and optionally the external controller
+configuration, with:
 
 ```bash
 python3 tools/check_ci_failure_watch_retention.py \
-  --argo-config ../src/declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml
+  --argo-config ../declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml
 ```
 
-The check fails if the command, annotations, watcher contract, or external
-Argo retention drift apart; the watcher also fails closed at runtime rather
-than running with a shorter unsafe lookback.
+The check fails if the command, annotations, CronWorkflow cadence, watcher
+contract, or external Argo retention drift apart; the watcher also fails closed
+at runtime for a shorter unsafe lookback.
+
+This is a planning check, not a guarantee of complete historical coverage. If
+20 newer `Failed` Workflows or 10 newer `Error` Workflows finish globally
+between successful list snapshots, the oldest newly failed or errored run can
+be evicted before observation. On the nominal schedule, the residual miss
+window for a failure is at most five minutes from the last successful snapshot
+to the next one; a burst can consume the entire
+cap within that window. Delayed, skipped, or failed watcher runs extend the
+window, with no finite worst-case bound until a successful scan. The report's
+`complete` field means its Kubernetes list snapshot was fully paginated; it
+does not certify that Argo retained every failure since the previous scan.
 
 The list is a complete Kubernetes-style snapshot, not a single page. The
 watcher requests at most 100 records per page, follows every non-empty
@@ -69,8 +88,10 @@ the separate durable envelope is defined by
 [`ci-attestations.schema.json`](../../ci-attestations.schema.json). Both are
 strict v1 JSON contracts with no unknown fields. Reports always identify the
 schema and watcher Workflow UID, use UTC `Z` timestamps, record `observed_at`
-and an inclusive cutoff with the configured lookback and Argo retention, and
-include the report's attestation-object URL. A failure row carries its Argo
+and an inclusive cutoff with the configured lookback and TTL ceiling. New
+reports also record the Failed and Error count caps; older v1 reports without
+those fields remain readable. Reports include the attestation-object URL. A
+failure row carries its Argo
 Workflow URL when the name is valid. `pass` and `fail` are complete snapshots;
 `error` means inspection did not start; `incomplete` records a stable
 pagination error code and page number. `pages_read` counts pages whose
@@ -177,11 +198,11 @@ each Argo inspection, the watcher runs
 `tools/prune_ci_failure_watch_reports.py` with the Garage reader credential to
 list only this report prefix and the publisher credential to delete only
 `report.json` objects older than **30 days**. The pass runs on the same
-15-minute schedule, so cleanup can lag the 30-day boundary by one schedule
+5-minute schedule, so cleanup can lag the 30-day boundary by one schedule
 interval. It does not touch the separate CI attestation prefix.
 
 An owner can realistically fetch the report URL in an alert for at least 30
-days after the report upload (normally up to about 30 days and 15 minutes).
+days after the report upload (normally up to about 30 days and 5 minutes).
 After that window the URL may return `404`; an older alert is stale evidence,
 not a guarantee that its durable report still exists. Preserve any report
 needed for a longer investigation outside this rolling prefix before the
@@ -277,7 +298,7 @@ targets below and in this documentation.
 
 | WorkflowTemplate | CronWorkflow expression (UTC) | Maximum success age |
 | --- | --- | --- |
-| `brand-kit-ci-failure-watch` | `*/15 * * * *` | 60 minutes |
+| `brand-kit-ci-failure-watch` | `*/5 * * * *` | 60 minutes |
 | `brand-kit-consumer-drift` | `17 6 * * *` | 48 hours |
 | `brand-kit-mirror-health` | `17 */6 * * *` | 12 hours |
 | `brand-kit-platform-requirements` | `27 6 * * *` | 48 hours |

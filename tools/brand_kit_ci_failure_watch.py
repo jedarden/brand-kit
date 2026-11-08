@@ -36,11 +36,13 @@ DEFAULT_KUBERNETES_API_URL = kubernetes_api.DEFAULT_API_URL
 DEFAULT_ARGO_API_URL = release_publish.DEFAULT_ARGO_API_URL
 DEFAULT_ARGO_NAMESPACE = release_publish.DEFAULT_ARGO_NAMESPACE
 DEFAULT_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
-# This mirrors controller.workflowDefaults.spec.ttlStrategy.secondsAfterFailure
-# in declarative-config/k8s/iad-ci/argo-workflows/argo-workflows-application.yml.
-# Keep the watcher at least this wide: a shorter window can silently miss a
-# failed brand-kit-ci Workflow after Argo has reaped it.
+# This is the maximum controller.workflowDefaults.spec.ttlStrategy.
+# secondsAfterFailure covered by the watcher; the current iad-ci setting is
+# 1800 seconds. Keep the watcher at least this wide to retain the declared
+# observation window, while the cadence check separately handles count caps.
 ARGO_FAILURE_RETENTION_SECONDS = ci_failure_watch_report.ARGO_FAILURE_RETENTION_SECONDS
+ARGO_FAILED_WORKFLOW_LIMIT = ci_failure_watch_report.ARGO_FAILED_WORKFLOW_LIMIT
+ARGO_ERRORED_WORKFLOW_LIMIT = ci_failure_watch_report.ARGO_ERRORED_WORKFLOW_LIMIT
 DEFAULT_LOOKBACK_MINUTES = math.ceil(ARGO_FAILURE_RETENTION_SECONDS / 60)
 DEFAULT_LIST_LIMIT = 100
 MAX_LIST_PAGES = 10_000
@@ -466,6 +468,8 @@ def run_watch(
             "at": cutoff.isoformat().replace("+00:00", "Z"),
             "lookback_minutes": lookback_minutes,
             "argo_failure_retention_seconds": ARGO_FAILURE_RETENTION_SECONDS,
+            "argo_failed_workflow_limit": ARGO_FAILED_WORKFLOW_LIMIT,
+            "argo_errored_workflow_limit": ARGO_ERRORED_WORKFLOW_LIMIT,
         },
         "workflow_template": workflow_template,
         "watcher_workflow_uid": None,
@@ -662,6 +666,8 @@ def _cutoff_metadata(current: datetime, lookback_minutes: Any) -> dict[str, Any]
         "at": cutoff.isoformat().replace("+00:00", "Z"),
         "lookback_minutes": lookback_minutes,
         "argo_failure_retention_seconds": ARGO_FAILURE_RETENTION_SECONDS,
+        "argo_failed_workflow_limit": ARGO_FAILED_WORKFLOW_LIMIT,
+        "argo_errored_workflow_limit": ARGO_ERRORED_WORKFLOW_LIMIT,
     }
 
 

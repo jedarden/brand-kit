@@ -151,7 +151,7 @@ attachment blocks synchronization.
 ```
 
 If the named Workflow has already been reaped, add the durable attestation
-object captured by the 15-minute watcher:
+object captured by the 5-minute watcher:
 
 ```bash
 .venv/bin/python tools/release_publish.py \

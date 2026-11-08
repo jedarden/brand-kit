@@ -7,10 +7,13 @@ metadata:
     workflows.argoproj.io/description: "Read-only owner alert and durable evidence archive for brand-kit-ci runs"
     brand-kit.ardenone.com/active-deadline-seconds: "600"
     brand-kit.ardenone.com/minimum-deadline-budget-seconds: "100"
-    # These values mirror declarative-config's controller.workflowDefaults
-    # secondsAfterFailure and the command below. Run
+    # The TTL value is the covered upper bound (current controller TTL is
+    # 1800s); count caps mirror retentionPolicy, and lookback mirrors the
+    # command below. Run
     # tools/check_ci_failure_watch_retention.py to detect drift before deploy.
     brand-kit.ardenone.com/argo-failure-retention-seconds: "7200"
+    brand-kit.ardenone.com/argo-failed-workflow-limit: "20"
+    brand-kit.ardenone.com/argo-errored-workflow-limit: "10"
     brand-kit.ardenone.com/failure-watch-lookback-minutes: "120"
 spec:
   entrypoint: watch

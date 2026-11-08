@@ -10,7 +10,7 @@ AUTOMATION = Path(__file__).resolve().parent / "automation"
 CRONWORKFLOW_CONTRACTS = (
     (
         "brand-kit-ci-failure-watch",
-        "*/15 * * * *",
+        "*/5 * * * *",
         (),
     ),
     (
@@ -129,7 +129,7 @@ def test_liveness_documentation_lists_every_enforced_target():
         assert documented_targets[target["name"]] == (schedules, max_age)
 
 
-def test_failure_watch_runs_every_15_minutes_as_documented():
+def test_failure_watch_runs_every_5_minutes_as_documented():
     cron = _load_manifest(
         AUTOMATION / "brand-kit-ci-failure-watch-cronworkflow.yml"
     )
@@ -137,5 +137,5 @@ def test_failure_watch_runs_every_15_minutes_as_documented():
         AUTOMATION.parent / "docs/notes/asset-toolchain.md"
     ).read_text(encoding="utf-8")
 
-    assert cron["spec"]["schedules"] == ["*/15 * * * *"]
-    assert "Every 15 minutes it" in documentation
+    assert cron["spec"]["schedules"] == ["*/5 * * * *"]
+    assert "Every 5 minutes it" in documentation

@@ -394,14 +394,16 @@ attestation.
 
 The application-owned `brand-kit-ci-failure-watch` companion in
 `automation/` lists `brand-kit-ci` Workflow objects from the in-cluster
-Kubernetes API every 15 minutes and reports `Failed` or `Error` runs from the
-preceding two hours. That lookback covers the watcher's 7,200-second retention
-contract and more than covers the cluster's current 1,800-second
-`secondsAfterFailure`, so the gate failure is reported before Argo reaps its
-record. The retention/lookback
+Kubernetes API every 5 minutes and reports `Failed` or `Error` runs from the
+preceding two hours. That lookback covers the watcher's 7,200-second TTL ceiling
+and more than covers the cluster's current 1,800-second
+`secondsAfterFailure` on the nominal schedule. The retention/lookback
 contract is encoded in the WorkflowTemplate annotations and checked by
 `python3 tools/check_ci_failure_watch_retention.py`; the watcher also rejects
-an unsafe shorter runtime window. The watcher authenticates with its own pod's
+an unsafe shorter runtime window. Argo's global 20-Failed and 10-Error
+Workflow caps can still evict a run in a burst before the next scan; the
+cadence check uses a documented planning rate, not a guarantee. The watcher
+authenticates with its own pod's
 projected ServiceAccount token (`brand-kit-ci-failure-watch`, granted only
 `workflows` `get`/`list` plus the executor's `workflowtaskresults` write in
 namespace `argo-workflows`); argo-server accepts only SSO sessions, so no Argo

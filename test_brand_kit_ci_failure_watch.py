@@ -287,6 +287,8 @@ def test_main_writes_a_durable_attestation_index(tmp_path, monkeypatch, service_
                 "at": "2026-09-27T11:00:00Z",
                 "lookback_minutes": 120,
                 "argo_failure_retention_seconds": 7200,
+                "argo_failed_workflow_limit": 20,
+                "argo_errored_workflow_limit": 10,
             },
             "workflow_template": "brand-kit-ci",
             "watcher_workflow_uid": None,
@@ -529,6 +531,8 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "--retention-days 30" in workflow
     assert "--release-evidence-root /brand-kit/release-evidence/v1" in workflow
     assert 'brand-kit.ardenone.com/argo-failure-retention-seconds: "7200"' in workflow
+    assert 'brand-kit.ardenone.com/argo-failed-workflow-limit: "20"' in workflow
+    assert 'brand-kit.ardenone.com/argo-errored-workflow-limit: "10"' in workflow
     assert 'brand-kit.ardenone.com/failure-watch-lookback-minutes: "120"' in workflow
     assert "name: needle-ci-artifact-reader" in workflow
     assert "name: needle-ci-artifact-publisher" in workflow
@@ -544,7 +548,7 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert '"alertname": "BrandKitCIRegressionGate"' in workflow
     assert '"owner": "jedarden"' in workflow
     assert '"follow_up": "regression-gate"' in workflow
-    assert '    - "*/15 * * * *"' in cron
+    assert '    - "*/5 * * * *"' in cron
     assert "name: brand-kit-ci-failure-watch" in cron
     assert "BrandKitCIRegressionGate" in readme
     assert "brand-kit-ci-failure-watch" in readme
@@ -555,7 +559,7 @@ def test_workflow_contract_and_documentation_define_owner_routing():
     assert "traefik-iad-ci:8001" in note
     assert "argo-ci.ardenone.com" in note
     assert "30 days" in note
-    assert "15-minute schedule" in note
+    assert "5-minute schedule" in note
     assert "may return `404`" in note
 
 

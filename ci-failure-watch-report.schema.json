@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://brand-kit.ardenone.com/schemas/ci-failure-watch-report-v1.json",
   "title": "Brand Kit CI failure-watch report v1",
-  "description": "A complete owner-facing snapshot or an explicitly incomplete/error result from the scheduled Argo watcher.",
+  "description": "An owner-facing snapshot of Workflows still retained by Argo, or an explicitly incomplete/error result. Complete means all list pages were inspected, not that count or TTL retention preserved every historical failure.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +22,7 @@
   "properties": {
     "schema": { "const": "brand-kit-ci-failure-watch/v1" },
     "status": { "enum": ["pass", "fail", "error", "incomplete"] },
-    "complete": { "type": "boolean" },
+    "complete": { "type": "boolean", "description": "Whether every page of the current retained-Workflow list was inspected." },
     "observed_at": { "$ref": "#/$defs/utcTimestamp" },
     "cutoff": {
       "anyOf": [
@@ -78,7 +78,9 @@
       "properties": {
         "at": { "$ref": "#/$defs/utcTimestamp" },
         "lookback_minutes": { "type": "integer", "minimum": 120, "maximum": 1440 },
-        "argo_failure_retention_seconds": { "const": 7200 }
+        "argo_failure_retention_seconds": { "const": 7200 },
+        "argo_failed_workflow_limit": { "const": 20, "description": "Present on reports produced after the count-cap contract was added; omitted by older v1 reports." },
+        "argo_errored_workflow_limit": { "const": 10, "description": "Present on reports produced after the count-cap contract was added; omitted by older v1 reports." }
       }
     },
     "pagination": {

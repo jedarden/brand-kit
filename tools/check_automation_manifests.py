@@ -49,7 +49,7 @@ APPLICATION_PATH = "automation"
 APPLICATION_INCLUDE = "{*.yaml,*.yml}"
 
 EXPECTED_SCHEDULES = {
-    "brand-kit-ci-failure-watch": ["*/15 * * * *"],
+    "brand-kit-ci-failure-watch": ["*/5 * * * *"],
     "brand-kit-consumer-drift": ["17 6 * * *"],
     "brand-kit-mirror-health": ["17 */6 * * *"],
     "brand-kit-platform-requirements": ["27 6 * * *"],

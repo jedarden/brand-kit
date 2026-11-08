@@ -13,6 +13,8 @@ from tools import release_publish
 REPORT_SCHEMA = "brand-kit-ci-failure-watch/v1"
 ATTESTATION_SCHEMA = release_publish.CI_ATTESTATION_SCHEMA
 ARGO_FAILURE_RETENTION_SECONDS = 7200
+ARGO_FAILED_WORKFLOW_LIMIT = 20
+ARGO_ERRORED_WORKFLOW_LIMIT = 10
 REPORT_STATUSES = frozenset({"pass", "fail", "error", "incomplete"})
 PAGINATION_STATUSES = frozenset({"complete", "incomplete", "not_started"})
 PAGINATION_ERROR_CODES = frozenset(
@@ -122,11 +124,14 @@ def _cutoff(value: Any, observed_at: datetime) -> None:
     if value is None:
         return
     cutoff = _object(value, "cutoff")
-    _exact_keys(
-        cutoff,
-        "cutoff",
-        {"at", "lookback_minutes", "argo_failure_retention_seconds"},
-    )
+    # Older v1 reports predate the count cap field. New reports carry it, but
+    # archived reports remain readable under the same schema version.
+    required = {"at", "lookback_minutes", "argo_failure_retention_seconds"}
+    if "argo_failed_workflow_limit" in cutoff:
+        required.add("argo_failed_workflow_limit")
+    if "argo_errored_workflow_limit" in cutoff:
+        required.add("argo_errored_workflow_limit")
+    _exact_keys(cutoff, "cutoff", required)
     cutoff_at = _timestamp(cutoff["at"], "cutoff.at")
     lookback = cutoff["lookback_minutes"]
     if isinstance(lookback, bool) or not isinstance(lookback, int) or not 1 <= lookback <= 1440:
@@ -135,6 +140,20 @@ def _cutoff(value: Any, observed_at: datetime) -> None:
     if retention != ARGO_FAILURE_RETENTION_SECONDS:
         raise ReportContractError(
             "cutoff.argo_failure_retention_seconds does not match the watcher contract"
+        )
+    if "argo_failed_workflow_limit" in cutoff and (
+        cutoff["argo_failed_workflow_limit"] != ARGO_FAILED_WORKFLOW_LIMIT
+        or isinstance(cutoff["argo_failed_workflow_limit"], bool)
+    ):
+        raise ReportContractError(
+            "cutoff.argo_failed_workflow_limit does not match the watcher contract"
+        )
+    if "argo_errored_workflow_limit" in cutoff and (
+        cutoff["argo_errored_workflow_limit"] != ARGO_ERRORED_WORKFLOW_LIMIT
+        or isinstance(cutoff["argo_errored_workflow_limit"], bool)
+    ):
+        raise ReportContractError(
+            "cutoff.argo_errored_workflow_limit does not match the watcher contract"
         )
     if lookback * 60 < retention:
         raise ReportContractError("cutoff.lookback_minutes must cover Argo failure retention")
