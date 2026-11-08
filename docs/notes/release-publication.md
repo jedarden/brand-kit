@@ -25,16 +25,23 @@ last published tag:
 
 ```bash
 python3 tools/check_release_preflight.py --base v1.0.0
+.venv/bin/python tools/check_transparent_logo_sync.py --base v1.0.0
 ```
 
-The check classifies the complete diff, including every file under `source/`
+The first check classifies the complete diff, including every file under `source/`
 and the generated `avatars/`, `banners/`, `favicon/`, and `logo/` inventories
 plus `palette.json` and `platform-assets.json`. A source or derived-asset diff
 must update `VERSION`, add one non-empty dated changelog section matching that
 version, and retain the Forgejo publication workflow. Documentation-only and
 metadata-only diffs pass while their work remains under `Unreleased`. The
 preflight is read-only: it does not contact Forgejo, create a tag, or publish
-a release.
+a release. The second command is the opaque-to-transparent design review
+trigger: it only renders when `source/logo.svg` carries new content in the
+or is removed from the candidate diff. A divergent render fails while the transparent master is
+unchanged; if a transparent variant is intentionally kept or updated, change
+`source/logo-transparent.svg` in the same diff and retain the emitted `REVIEW`
+report as the operator decision. It never auto-generates the hand-maintained
+transparent master.
 
 ## Prepare the release version
 

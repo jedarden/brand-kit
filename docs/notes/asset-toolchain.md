@@ -468,6 +468,29 @@ that SVG with `resvg`; `source/logo.png` is never a raster fallback.
 `source/logo-transparent.svg` is a separate, hand-maintained authoritative
 source for the transparent logo outputs.
 
+### Opaque-to-transparent design review trigger
+
+The transparent master is intentionally not generated from the opaque master,
+so its checksum and the normal regeneration diff cannot detect a stale design.
+For a release candidate, run this check against the last published commit:
+
+```bash
+.venv/bin/python tools/check_transparent_logo_sync.py --base v1.0.0
+```
+
+The check first inspects the Git diff. It is a no-op when
+`source/logo.svg` carries no changed or removed content. When that path changes,
+it renders
+the candidate `source/logo.svg` and `source/logo-transparent.svg` with the
+pinned `resvg`, then compares the opaque artwork with the transparent artwork
+composited over the documented background layers. A matching render passes.
+A divergent render fails unless `source/logo-transparent.svg` is also changed
+in the same diff, which records the deliberate decision to keep or update the
+transparent variant and produces a `REVIEW` report. The tool never writes an
+SVG or regenerates transparent assets; after an intentional transparent-master
+update, run the normal build, refresh its checksum, and inspect the generated
+diff.
+
 `source/logo.png` has two narrower roles: it is preserved provenance and is
 copied byte-for-byte to `logo/logo-original.png`; it may also be the input to
 an explicit `tools/trace_logo.py` run that replaces `source/logo.svg`. The trace
