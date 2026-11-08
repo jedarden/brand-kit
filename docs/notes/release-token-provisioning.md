@@ -1,9 +1,9 @@
 # Release-token provisioning
 
-This is the credential contract for the two release commands in this
-repository. Token values live only in the credential store and the short-lived
-process environment; they are never repository data, workflow parameters, URL
-userinfo, command arguments, or log output.
+This is the credential contract for the release and CI-trigger commands in
+this repository. Token values live only in the credential store and the
+short-lived process environment; they are never repository data, workflow
+parameters, URL userinfo, command arguments, or log output.
 
 ## Credential registry
 
@@ -15,7 +15,7 @@ property name `token`:
 | --- | --- | --- |
 | `FORGEJO_TOKEN` | `secret/rs-manager/brand-kit/release/forgejo` | The Forgejo API for `jedarden/brand-kit`: read the release/tag record and create or publish that repository's release. No organization, administration, mirror-push, or unrelated-repository permission. |
 | `ARGO_TOKEN` | `secret/rs-manager/brand-kit/release/argo-read` | Read-only `GET` attestation/reconciliation of named workflows and the template-scoped workflow list in namespace `argo-workflows`. No workflow submission, mutation, deletion, or access to another namespace. |
-| `ARGO_SUBMIT_TOKEN` | `secret/rs-manager/brand-kit/release/argo-submit` | Submit the `brand-kit-consumer-drift` WorkflowTemplate in namespace `argo-workflows`. It is not a substitute for `ARGO_TOKEN` and must not have workflow delete, suspend, or administrative permission. |
+| `ARGO_SUBMIT_TOKEN` | `secret/rs-manager/brand-kit/release/argo-submit` | Submit-only authorization for the two documented submission templates in namespace `argo-workflows`: `tools/brand_kit_ci_submit.py` posts only `brand-kit-ci` (the CI trigger for one exact commit), and `tools/consumer_drift_submit.py` posts only `brand-kit-consumer-drift`. Each submitter consumes the same credential for its own template and nothing else. It is not a substitute for `ARGO_TOKEN`, performs no read, and must not have workflow delete, suspend, update, or administrative permission or access to another namespace. |
 
 These are provisioning paths, not values to copy into this repository. If a
 path is absent or its policy is broader than the table, stop and have the
@@ -53,6 +53,9 @@ load_release_token ARGO_TOKEN \
 # The consumer handoff additionally loads the separate submit credential:
 # load_release_token ARGO_SUBMIT_TOKEN \
 #   secret/rs-manager/brand-kit/release/argo-submit
+# The brand-kit-ci trigger loads the same submit credential before its one POST:
+# load_release_token ARGO_SUBMIT_TOKEN \
+#   secret/rs-manager/brand-kit/release/argo-submit
 ```
 
 Use only the variables required by the command:
@@ -66,6 +69,11 @@ Use only the variables required by the command:
   read-only `ARGO_TOKEN` to reconcile an existing same-release or same-commit
   workflow, and sends `ARGO_SUBMIT_TOKEN` only as an HTTP Bearer header for the
   single Argo submission attempt.
+- `tools/brand_kit_ci_submit.py` requires `ARGO_SUBMIT_TOKEN` only. The token
+  is sent only as the HTTP Bearer header of the single `brand-kit-ci`
+  submission `POST`; the submitter performs no read, list, or reconciliation
+  call with it, because the attestation and duplicate reads belong to
+  `tools/release_publish.py` under `ARGO_TOKEN`.
 
 There are deliberately no token CLI options. `FORGEJO_API_TOKEN` and
 `ARGO_API_TOKEN` are not accepted aliases for these release operations, and
@@ -129,9 +137,11 @@ pass/fail status, and sanitized provider errors in a durable report. It checks:
   list endpoint used by the publisher.
 - `ARGO_TOKEN`: a read-only list request for the `brand-kit-ci` workflow runs
   in namespace `argo-workflows`.
-- `ARGO_SUBMIT_TOKEN`: the exact `brand-kit-consumer-drift` WorkflowTemplate
-  submit endpoint with Argo's `serverDryRun` flag. Argo validates the token's
-  submit authorization and the template without creating a Workflow.
+- `ARGO_SUBMIT_TOKEN`: the exact submit endpoints of both documented
+  submission templates, `brand-kit-ci` and `brand-kit-consumer-drift`, each
+  with Argo's `serverDryRun` flag. Argo validates the token's submit
+  authorization and each template without creating a Workflow; a token scoped
+  to only one of the two submissions fails the probe.
 
 Forgejo does not expose a non-mutating authorization check for the release
 creation verb, so the probe intentionally never attempts a release write. The

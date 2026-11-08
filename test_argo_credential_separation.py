@@ -7,6 +7,7 @@ import yaml
 
 from tools import (
     brand_kit_ci_failure_watch,
+    brand_kit_ci_submit,
     brand_kit_workflow_liveness,
     consumer_drift,
     consumer_drift_submit,
@@ -407,6 +408,209 @@ def test_consumer_audit_forgejo_contract_rejects_unexpected_method_or_endpoint(
         )
 
 
+ARGO_SUBMIT_URL = "https://argo.example/api/v1/workflows/argo-workflows/submit"
+CI_SUBMIT_TOKEN = "argo-submit-test-token"
+CI_COMMIT = "c" * 40
+
+
+def _submitted_ci_workflow():
+    return {
+        "metadata": {
+            "name": "brand-kit-ci-abc123",
+            "labels": {
+                "workflows.argoproj.io/workflow-template": "brand-kit-ci",
+            },
+        },
+        "spec": {
+            "arguments": {
+                "parameters": [
+                    {"name": "repo", "value": "jedarden/brand-kit"},
+                    {"name": "branch", "value": "main"},
+                    {"name": "revision", "value": CI_COMMIT},
+                ]
+            }
+        },
+    }
+
+
+def _assert_ci_submitter_argo_request(
+    method, url, payload, token, kwargs, *, api_url, expected_token, commit
+):
+    """Enforce the documented single brand-kit-ci submission POST boundary."""
+    assert method == "POST"
+
+    expected_origin = urlsplit(api_url)
+    parsed = urlsplit(url)
+    assert (parsed.scheme, parsed.netloc) == (
+        expected_origin.scheme,
+        expected_origin.netloc,
+    )
+    assert parsed.username is None
+    assert parsed.password is None
+    assert not parsed.fragment
+    assert not parsed.query
+    assert parsed.path == "/api/v1/workflows/argo-workflows/submit"
+
+    assert payload == brand_kit_ci_submit.workflow_payload(commit)
+    assert payload["resourceKind"] == "WorkflowTemplate"
+    assert payload["resourceName"] == "brand-kit-ci"
+    assert payload["namespace"] == "argo-workflows"
+    # Only the scheduled probe dry-runs; the real trigger posts for effect.
+    assert "serverDryRun" not in payload["submitOptions"]
+    revision = [
+        parameter
+        for parameter in payload["submitOptions"]["parameters"]
+        if parameter.startswith("revision=")
+    ]
+    assert revision == [f"revision={commit}"]
+
+    # The submission POST carries exactly the submit credential, as a Bearer
+    # header, to the Argo API -- never the read token or a Forgejo-style scheme.
+    assert token == expected_token
+    assert kwargs == {
+        "authorization_scheme": "Bearer",
+        "service": "Argo API",
+    }
+
+
+def test_ci_submitter_issues_only_the_documented_brand_kit_ci_submit_post():
+    calls = []
+
+    def request(method, url, payload=None, token=None, **kwargs):
+        calls.append((method, url, payload, token, kwargs))
+        return _submitted_ci_workflow()
+
+    submitted = brand_kit_ci_submit.submit_brand_kit_ci(
+        CI_COMMIT,
+        argo_api_url="https://argo.example",
+        argo_token=CI_SUBMIT_TOKEN,
+        request=request,
+    )
+
+    assert submitted["metadata"]["name"] == "brand-kit-ci-abc123"
+    assert len(calls) == 1
+    method, url, payload, token, kwargs = calls[0]
+    _assert_ci_submitter_argo_request(
+        method,
+        url,
+        payload,
+        token,
+        kwargs,
+        api_url="https://argo.example",
+        expected_token=CI_SUBMIT_TOKEN,
+        commit=CI_COMMIT,
+    )
+
+
+CI_SUBMIT_PAYLOAD = brand_kit_ci_submit.workflow_payload(CI_COMMIT)
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "payload"),
+    [
+        ("GET", ARGO_SUBMIT_URL, CI_SUBMIT_PAYLOAD),
+        ("PATCH", ARGO_SUBMIT_URL, CI_SUBMIT_PAYLOAD),
+        ("PUT", ARGO_SUBMIT_URL, CI_SUBMIT_PAYLOAD),
+        ("DELETE", ARGO_SUBMIT_URL, CI_SUBMIT_PAYLOAD),
+        (
+            "POST",
+            "https://argo.example/api/v1/workflows/other-namespace/submit",
+            CI_SUBMIT_PAYLOAD,
+        ),
+        (
+            "POST",
+            "https://argo.example/api/v1/workflows/argo-workflows/brand-kit-ci-abc123",
+            CI_SUBMIT_PAYLOAD,
+        ),
+        (
+            "POST",
+            "https://argo.example/api/v1/workflows/argo-workflows/cronworkflows/submit",
+            CI_SUBMIT_PAYLOAD,
+        ),
+        (
+            "POST",
+            "https://kubernetes.example/api/v1/workflows/argo-workflows/submit",
+            CI_SUBMIT_PAYLOAD,
+        ),
+        (
+            "POST",
+            ARGO_SUBMIT_URL,
+            dict(CI_SUBMIT_PAYLOAD, resourceName="brand-kit-consumer-drift"),
+        ),
+        (
+            "POST",
+            ARGO_SUBMIT_URL,
+            dict(
+                CI_SUBMIT_PAYLOAD,
+                submitOptions=dict(
+                    CI_SUBMIT_PAYLOAD["submitOptions"], serverDryRun=True
+                ),
+            ),
+        ),
+        (
+            "POST",
+            ARGO_SUBMIT_URL,
+            {
+                "namespace": "argo-workflows",
+                "resourceKind": "WorkflowTemplate",
+                "resourceName": "brand-kit-ci",
+                "submitOptions": {
+                    "parameters": [
+                        "repo=jedarden/brand-kit",
+                        "branch=main",
+                    ]
+                },
+            },
+        ),
+    ],
+)
+def test_ci_submitter_contract_rejects_unexpected_method_or_endpoint(method, url, payload):
+    with pytest.raises(AssertionError):
+        _assert_ci_submitter_argo_request(
+            method,
+            url,
+            payload,
+            CI_SUBMIT_TOKEN,
+            {
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+            },
+            api_url="https://argo.example",
+            expected_token=CI_SUBMIT_TOKEN,
+            commit=CI_COMMIT,
+        )
+
+
+@pytest.mark.parametrize(
+    ("token", "kwargs"),
+    [
+        (CI_SUBMIT_TOKEN, {"authorization_scheme": "token", "service": "Argo API"}),
+        ("argo-read-secret", {"authorization_scheme": "Bearer", "service": "Argo API"}),
+        (CI_SUBMIT_TOKEN, {}),
+        (
+            CI_SUBMIT_TOKEN,
+            {
+                "authorization_scheme": "Bearer",
+                "service": "Argo API",
+                "server": "https://argo.example",
+            },
+        ),
+    ],
+)
+def test_ci_submitter_contract_rejects_unexpected_authorization(token, kwargs):
+    with pytest.raises(AssertionError):
+        _assert_ci_submitter_argo_request(
+            "POST",
+            ARGO_SUBMIT_URL,
+            CI_SUBMIT_PAYLOAD,
+            token,
+            kwargs,
+            api_url="https://argo.example",
+            expected_token=CI_SUBMIT_TOKEN,
+            commit=CI_COMMIT,
+        )
+
+
 def test_workload_token_cannot_be_promoted_to_a_submit_credential(monkeypatch):
     monkeypatch.setenv("FORGEJO_TOKEN", "forgejo-readonly")
     monkeypatch.setenv("ARGO_WORKFLOW_TOKEN", "workload-readonly")
@@ -446,5 +650,10 @@ def test_documentation_names_every_credential_boundary():
         "secret/rs-manager/brand-kit/release/argo-submit",
         "rs-manager/iad-ci/forgejo/repo-readonly",
         "No `POST`, `PUT`, `PATCH`, or `DELETE`",
+        "Brand-kit CI submitter operator",
+        "tools/brand_kit_ci_submit.py",
+        "`POST https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/submit`",
+        "submitting only `brand-kit-ci`",
+        "`resourceName: brand-kit-ci`",
     ):
         assert value in document

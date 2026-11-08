@@ -54,7 +54,7 @@ def test_probe_checks_each_credential_without_exposing_values():
             {"credential": "ARGO_SUBMIT_TOKEN", "status": "pass"},
         ],
     }
-    assert [call["method"] for call in calls] == ["GET", "GET", "GET", "POST"]
+    assert [call["method"] for call in calls] == ["GET", "GET", "GET", "POST", "POST"]
     assert calls[0]["url"] == "https://forgejo.example/api/v1/user"
     assert calls[1]["url"].endswith("/repos/jedarden/brand-kit/releases?limit=1")
     assert calls[0]["token"] == "forgejo-secret"
@@ -70,8 +70,21 @@ def test_probe_checks_each_credential_without_exposing_values():
     assert calls[3]["authorization_scheme"] == "Bearer"
     assert calls[3]["payload"]["namespace"] == "argo-workflows"
     assert calls[3]["payload"]["resourceKind"] == "WorkflowTemplate"
-    assert calls[3]["payload"]["resourceName"] == "brand-kit-consumer-drift"
+    assert calls[3]["payload"]["resourceName"] == "brand-kit-ci"
     assert calls[3]["payload"]["submitOptions"]["serverDryRun"] is True
+    assert calls[3]["payload"]["submitOptions"]["parameters"] == [
+        "repo=jedarden/brand-kit",
+        "branch=main",
+        f"revision={'0' * 40}",
+    ]
+    assert calls[4]["url"] == "https://argo.example/api/v1/workflows/argo-workflows/submit"
+    assert calls[4]["token"] == "argo-submit-secret"
+    assert calls[4]["authorization_scheme"] == "Bearer"
+    assert calls[4]["payload"]["namespace"] == "argo-workflows"
+    assert calls[4]["payload"]["resourceKind"] == "WorkflowTemplate"
+    assert calls[4]["payload"]["resourceName"] == "brand-kit-consumer-drift"
+    assert calls[4]["payload"]["submitOptions"]["serverDryRun"] is True
+    assert calls[4]["payload"]["submitOptions"]["parameters"] == ["release-tag=token-probe"]
     assert {call["token"] for call in calls} == {
         "forgejo-secret",
         "argo-read-secret",
@@ -108,7 +121,7 @@ def test_probe_records_missing_credentials_and_continues():
         "status": "fail",
         "error": "ARGO_TOKEN is required; provide it through the environment",
     }
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 @pytest.mark.parametrize("missing", ("FORGEJO_TOKEN", "ARGO_TOKEN", "ARGO_SUBMIT_TOKEN"))
@@ -186,6 +199,42 @@ def test_probe_distinguishes_expired_and_insufficiently_scoped_tokens(
     assert failed["status"] == "fail"
     assert f"HTTP {status}" in failed["error"]
     assert detail in failed["error"]
+    serialized = json.dumps(report)
+    assert all(token not in serialized for token in tokens.values())
+
+
+@pytest.mark.parametrize("denied_template", ("brand-kit-ci", "brand-kit-consumer-drift"))
+def test_submit_probe_names_the_dry_run_leg_it_cannot_authorize(denied_template):
+    tokens = {
+        "FORGEJO_TOKEN": "forgejo-secret",
+        "ARGO_TOKEN": "argo-read-secret",
+        "ARGO_SUBMIT_TOKEN": "argo-submit-secret",
+    }
+
+    def request(method, url, payload=None, token=None, **kwargs):
+        if payload and payload.get("resourceName") == denied_template:
+            raise release_publish.HttpFailure(
+                403,
+                f"submit authorization denied: {token}",
+                service="Argo API",
+            )
+        if url.endswith("/user"):
+            return {"login": "release-bot"}
+        if "/releases?limit=1" in url:
+            return []
+        if "labelSelector=" in url:
+            return {"items": []}
+        return {"metadata": {"name": "dry-run-only"}}
+
+    report = release_token_probe.run_probe(**_probe_tokens(tokens), request=request)
+    failed = next(
+        check for check in report["checks"] if check["credential"] == "ARGO_SUBMIT_TOKEN"
+    )
+
+    assert report["status"] == "fail"
+    assert failed["status"] == "fail"
+    assert f"{denied_template} submit dry-run failed" in failed["error"]
+    assert "HTTP 403" in failed["error"]
     serialized = json.dumps(report)
     assert all(token not in serialized for token in tokens.values())
 
@@ -304,6 +353,8 @@ def test_token_documentation_covers_probe_and_rotation_follow_up():
     assert "## Scheduled validity probe" in document
     assert "tools/release_token_probe.py" in document
     assert "serverDryRun" in document
+    assert "`brand-kit-ci` and `brand-kit-consumer-drift`" in document
+    assert "tools/brand_kit_ci_submit.py" in document
     assert "brand-kit-release-token-probe-cronworkflow.yml" in document
     assert "brand-kit-release-tokens" in document
     assert "BrandKitConsumerDrift" in document

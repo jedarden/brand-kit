@@ -1344,6 +1344,10 @@ def test_release_token_documentation_defines_secure_provisioning_contract():
     assert "secret/rs-manager/brand-kit/release/argo-read" in document
     assert "secret/rs-manager/brand-kit/release/argo-submit" in document
     assert "minimum scope" in document
+    assert "tools/brand_kit_ci_submit.py" in document
+    assert "posts only `brand-kit-ci`" in document
+    assert "posts only `brand-kit-consumer-drift`" in document
+    assert "workflow delete, suspend, update, or administrative permission" in document
     assert "Rotation order" in document
     assert "401`/`403" in document
     assert "argv" in document

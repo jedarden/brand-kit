@@ -3,7 +3,8 @@
 
 Every provider request in this module is read-only, except for the Argo
 WorkflowTemplate submission check, which uses Argo's server-side dry-run flag.
-That request exercises the same submit authorization as the consumer handoff
+Those requests exercise the same submit authorization as the brand-kit-ci
+trigger and the consumer handoff -- both documented submission templates --
 without creating a Workflow.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ import os
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 if __package__ in (None, ""):
@@ -28,6 +29,11 @@ DEFAULT_ARGO_API_URL = release_publish.DEFAULT_ARGO_API_URL
 DEFAULT_ARGO_NAMESPACE = release_publish.DEFAULT_ARGO_NAMESPACE
 DEFAULT_CI_WORKFLOW_TEMPLATE = release_publish.DEFAULT_ARGO_WORKFLOW_TEMPLATE
 DEFAULT_CONSUMER_WORKFLOW_TEMPLATE = "brand-kit-consumer-drift"
+DEFAULT_SUBMIT_PARAMETERS = ("release-tag=token-probe",)
+# Syntactically valid placeholder for the CI trigger's revision parameter. The
+# serverDryRun flag makes Argo validate authorization and the template without
+# creating or running a Workflow, so the value is never checked out.
+PROBE_CI_REVISION = "0" * 40
 REPORT_SCHEMA = "brand-kit-release-token-probe/v1"
 
 
@@ -121,9 +127,10 @@ def probe_argo_submit(
     api_url: str = DEFAULT_ARGO_API_URL,
     namespace: str = DEFAULT_ARGO_NAMESPACE,
     workflow_template: str = DEFAULT_CONSUMER_WORKFLOW_TEMPLATE,
+    parameters: Sequence[str] = DEFAULT_SUBMIT_PARAMETERS,
     request: Callable[..., Any] = release_publish.request_json,
 ) -> None:
-    """Check consumer submission authorization using Argo server dry-run."""
+    """Check one template's submission authorization using Argo server dry-run."""
     token = release_publish.require_token(token, "ARGO_SUBMIT_TOKEN")
     if not isinstance(workflow_template, str) or not release_publish.WORKFLOW_NAME_PATTERN.fullmatch(
         workflow_template
@@ -139,7 +146,7 @@ def probe_argo_submit(
             "resourceKind": "WorkflowTemplate",
             "resourceName": workflow_template,
             "submitOptions": {
-                "parameters": ["release-tag=token-probe"],
+                "parameters": list(parameters),
                 "serverDryRun": True,
             },
         },
@@ -152,6 +159,48 @@ def probe_argo_submit(
         raise release_publish.ReleaseError(
             "Argo WorkflowTemplate dry-run returned an inconclusive response"
         )
+
+
+def probe_argo_submit_legs(
+    token: str | None,
+    *,
+    api_url: str = DEFAULT_ARGO_API_URL,
+    namespace: str = DEFAULT_ARGO_NAMESPACE,
+    repository: str = DEFAULT_REPOSITORY,
+    ci_workflow_template: str = DEFAULT_CI_WORKFLOW_TEMPLATE,
+    consumer_workflow_template: str = DEFAULT_CONSUMER_WORKFLOW_TEMPLATE,
+    request: Callable[..., Any] = release_publish.request_json,
+) -> None:
+    """Check submit authorization for both documented submission templates.
+
+    The CI leg mirrors the payload `tools/brand_kit_ci_submit.py` posts and the
+    consumer leg mirrors `tools/consumer_drift_submit.py`; a token authorized
+    for only one of the two fails here instead of at the first real trigger.
+    """
+    # Fail the missing-credential case before any leg so its error stays the
+    # plain sentinel, and label every per-template provider failure with its leg.
+    token = release_publish.require_token(token, "ARGO_SUBMIT_TOKEN")
+    legs = (
+        (
+            ci_workflow_template,
+            (f"repo={repository}", "branch=main", f"revision={PROBE_CI_REVISION}"),
+        ),
+        (consumer_workflow_template, DEFAULT_SUBMIT_PARAMETERS),
+    )
+    for workflow_template, parameters in legs:
+        try:
+            probe_argo_submit(
+                token,
+                api_url=api_url,
+                namespace=namespace,
+                workflow_template=workflow_template,
+                parameters=parameters,
+                request=request,
+            )
+        except release_publish.ReleaseError as error:
+            raise release_publish.ReleaseError(
+                f"{workflow_template} submit dry-run failed: {error}"
+            ) from error
 
 
 def run_probe(
@@ -190,11 +239,13 @@ def run_probe(
         ),
         (
             "ARGO_SUBMIT_TOKEN",
-            lambda: probe_argo_submit(
+            lambda: probe_argo_submit_legs(
                 argo_submit_token,
                 api_url=argo_api_url,
                 namespace=argo_namespace,
-                workflow_template=consumer_workflow_template,
+                repository=repository,
+                ci_workflow_template=ci_workflow_template,
+                consumer_workflow_template=consumer_workflow_template,
                 request=request,
             ),
         ),
@@ -251,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ci-workflow-template",
         default=DEFAULT_CI_WORKFLOW_TEMPLATE,
-        help=f"CI workflow template used by ARGO_TOKEN (default: {DEFAULT_CI_WORKFLOW_TEMPLATE})",
+        help=f"CI workflow template read by ARGO_TOKEN and dry-run submitted by ARGO_SUBMIT_TOKEN (default: {DEFAULT_CI_WORKFLOW_TEMPLATE})",
     )
     parser.add_argument(
         "--consumer-workflow-template",

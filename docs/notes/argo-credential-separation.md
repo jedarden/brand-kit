@@ -14,6 +14,7 @@ is not the credential injected into the scheduled watcher workloads.
 | Mirror-health workload | Secret `brand-kit-consumer-drift` in `argo-workflows` (the same read-only `rs-manager/iad-ci/forgejo/repo-readonly` repo token as the consumer audit; no new credential). Added 2026-10-10 because git.ardenone.com requires sign-in for every git read. | `argo-workflow` | `FORGEJO_TOKEN` from Secret key `token`, offered to git only through a `credential.https://git.ardenone.com.helper` so it never reaches GitHub, a URL, or argv | `git clone`/`ls-remote`/`fetch` of `https://git.ardenone.com/jedarden/brand-kit.git`. No Argo credential, no push, no Forgejo API write. |
 | Release publisher operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_TOKEN` from OpenBao path `secret/rs-manager/brand-kit/release/argo-read` for the local release process. | Not applicable (local operator process) | `ARGO_TOKEN` | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<brand-kit-ci-run>` for the read-only release attestation and the consumer submitter's duplicate reconciliation reads. |
 | Consumer submitter operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_TOKEN` and `ARGO_SUBMIT_TOKEN` from their separate OpenBao paths `secret/rs-manager/brand-kit/release/argo-read` and `secret/rs-manager/brand-kit/release/argo-submit`. | Not applicable (local operator process) | `ARGO_TOKEN` for reconciliation reads; `ARGO_SUBMIT_TOKEN` for the one submission POST | `GET https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/<name>` and the template-scoped list use `ARGO_TOKEN`; the single `POST https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows` uses `ARGO_SUBMIT_TOKEN` to submit only `brand-kit-consumer-drift`. It must not delete, suspend, update, or administer workflows. |
+| Brand-kit CI submitter operator | No Kubernetes Secret or workload mount. The operator loads `ARGO_SUBMIT_TOKEN` from the same OpenBao path `secret/rs-manager/brand-kit/release/argo-submit` as the consumer submitter (one shared submit credential, added 2026-11-08 for this role, brandkit-719c8408) with [`tools/load_release_tokens.sh`](../../tools/load_release_tokens.sh), then runs `tools/brand_kit_ci_submit.py` from the repository checkout. | Not applicable (local operator process) | `ARGO_SUBMIT_TOKEN` for the one submission POST | `POST https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/submit` with `resourceKind: WorkflowTemplate` and `resourceName: brand-kit-ci`, submitting only `brand-kit-ci` for one exact full commit. The submit credential issues no read, list, or reconciliation request — attestation and reconciliation `GET`s belong to the release publisher's `ARGO_TOKEN` — and it must not delete, suspend, resume, update, terminate, or administer workflows, submit any other template, or reach another namespace. |
 
 ### Why the watchers carry no Argo token (2026-10-11, brandkit-cbbcc260)
 
@@ -85,6 +86,18 @@ manifests must use their dedicated ServiceAccounts and must not mention
 allow-listed artifact-store Secrets; it must not mention either operator Argo
 token. The release tools separately require the named operator variable, so an
 operator read token cannot be silently promoted to a submit token.
+
+The brand-kit CI submitter carries that same boundary onto the `brand-kit-ci`
+template: `tools/brand_kit_ci_submit.py` requires `ARGO_SUBMIT_TOKEN` and
+sends it only as the Bearer header of the single
+`POST https://argo-ci.ardenone.com/api/v1/workflows/argo-workflows/submit`
+for `resourceName: brand-kit-ci`. It never reads, lists, deletes, suspends,
+or administers anything with that credential; attestation and reconciliation
+reads stay with the publisher's `ARGO_TOKEN`. The scheduled release-token
+probe validates both documented submission legs (`brand-kit-ci` and
+`brand-kit-consumer-drift`) with Argo's `serverDryRun`, so a submit token
+scoped to only one of the two templates fails the probe before the next
+release or CI trigger needs it.
 
 Run the focused contract tests with:
 

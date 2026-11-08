@@ -65,7 +65,11 @@ use the patch rule and this same ordering.
 
    This passes the full SHA as the WorkflowTemplate's `revision` parameter;
    the template must check out that revision detached, not resolve `main`
-   again when the pod starts. Record the returned workflow name and wait for
+   again when the pod starts. The submitter authenticates with
+   `ARGO_SUBMIT_TOKEN` loaded from OpenBao per
+   [`release-token-provisioning.md`](release-token-provisioning.md); it issues
+   exactly one submission `POST` and no other Argo call. Record the returned
+   workflow name and wait for
    its `Succeeded` phase, including the asset verifier, full pytest suite,
    regeneration, and no-drift checks. Confirm that the structured `commit`
    output equals `$COMMIT`. The publisher performs a read-only `GET` against
@@ -84,8 +88,10 @@ use the patch rule and this same ordering.
    to either remote as part of the gate.
 5. Provision the three release credentials according to
    [`release-token-provisioning.md`](release-token-provisioning.md). The
-   publisher requires `FORGEJO_TOKEN` and `ARGO_TOKEN`; the consumer handoff
-   requires `FORGEJO_TOKEN`, `ARGO_TOKEN`, and `ARGO_SUBMIT_TOKEN`. Load them
+   publisher requires `FORGEJO_TOKEN` and `ARGO_TOKEN`; the step-3
+   `brand-kit-ci` trigger and the consumer handoff each require
+   `ARGO_SUBMIT_TOKEN`, and the consumer handoff additionally requires
+   `FORGEJO_TOKEN` and `ARGO_TOKEN`. Load them
    from OpenBao into the short-lived process environment only. Never put a
    token in the repository, a workflow parameter, a URL, or a command-line
    argument.
