@@ -87,6 +87,14 @@ allow-listed artifact-store Secrets; it must not mention either operator Argo
 token. The release tools separately require the named operator variable, so an
 operator read token cannot be silently promoted to a submit token.
 
+The mirror-health workload carries the same read-only Forgejo repo token, but
+it reaches git only through the `credential.https://git.ardenone.com.helper`
+environment config: the token must never surface in a remote URL, in process
+argv, on disk, or at any host other than git.ardenone.com (GitHub included),
+and its git surface stays within `clone`/`ls-remote`/`fetch` plus the
+checker's local-only `init`/`rev-parse`/`merge-base` scratch operations --
+never a push and never a Forgejo API call.
+
 The brand-kit CI submitter carries that same boundary onto the `brand-kit-ci`
 template: `tools/brand_kit_ci_submit.py` requires `ARGO_SUBMIT_TOKEN` and
 sends it only as the Bearer header of the single

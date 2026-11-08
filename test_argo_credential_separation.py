@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -9,6 +12,7 @@ from tools import (
     brand_kit_ci_failure_watch,
     brand_kit_ci_submit,
     brand_kit_workflow_liveness,
+    check_mirror_health,
     consumer_drift,
     consumer_drift_submit,
     prune_ci_failure_watch_reports,
@@ -71,6 +75,10 @@ def test_each_workload_references_only_its_namespaced_secret_allow_list():
         "brand-kit-consumer-drift-workflowtemplate.yml": {
             "brand-kit-consumer-drift",
             "needle-ci-artifact-reader",
+            "needle-ci-artifact-publisher",
+        },
+        "brand-kit-mirror-health-workflowtemplate.yml": {
+            "brand-kit-consumer-drift",
             "needle-ci-artifact-publisher",
         },
     }
@@ -408,6 +416,527 @@ def test_consumer_audit_forgejo_contract_rejects_unexpected_method_or_endpoint(
         )
 
 
+# ---------------------------------------------------------------------------
+# Mirror-health workload: the same read-only Forgejo repo token, but it must
+# reach git only through the host-scoped credential helper and its git surface
+# is limited to the documented read-only subcommands (no push, no Forgejo API).
+# ---------------------------------------------------------------------------
+
+MIRROR_HEALTH_TEMPLATE = "brand-kit-mirror-health-workflowtemplate.yml"
+MIRROR_HEALTH_CANONICAL_REPOSITORY = "https://git.ardenone.com/jedarden/brand-kit.git"
+MIRROR_HEALTH_MIRROR_REPOSITORY = "https://github.com/jedarden/brand-kit.git"
+MIRROR_HEALTH_FORGEJO_CREDENTIAL_KEY = "credential.https://git.ardenone.com.helper"
+MIRROR_HEALTH_FORGEJO_HELPER = (
+    '!f() { test "$1" = get && echo "username=x-token" '
+    '&& echo "password=$FORGEJO_TOKEN"; }; f'
+)
+# clone/ls-remote/fetch are the documented read-only git surface; init,
+# rev-parse and merge-base are the checker's local-only scratch operations.
+MIRROR_HEALTH_READ_ONLY_GIT_SUBCOMMANDS = {
+    "clone",
+    "ls-remote",
+    "fetch",
+    "init",
+    "rev-parse",
+    "merge-base",
+}
+MIRROR_HEALTH_GIT_HOSTS = {"git.ardenone.com", "github.com"}
+MIRROR_HEALTH_ENV_NAMES = {
+    "GIT_TERMINAL_PROMPT",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "FORGEJO_TOKEN",
+}
+
+
+def _mirror_health_check_container():
+    manifest = _manifest(MIRROR_HEALTH_TEMPLATE)
+    check = next(
+        template
+        for template in manifest["spec"]["templates"]
+        if template["name"] == "check"
+    )
+    return manifest, check["container"]
+
+
+def _mirror_health_env(container):
+    return _env_by_name(container["env"])
+
+
+def _assert_mirror_health_credential_env(env):
+    """The Forgejo token may reach git only through the host-scoped helper.
+
+    A global ``credential.helper`` (or any second config entry) would offer the
+    token to every host git touches, GitHub included; a literal value would put
+    it in the manifest and in ``kubectl get`` output; terminal prompting would
+    give a failed helper a second chance to move the token.
+    """
+    assert set(env) == MIRROR_HEALTH_ENV_NAMES
+    assert env["GIT_TERMINAL_PROMPT"]["value"] == "0"
+    assert env["GIT_CONFIG_COUNT"]["value"] == "1"
+    assert env["GIT_CONFIG_KEY_0"]["value"] == MIRROR_HEALTH_FORGEJO_CREDENTIAL_KEY
+    assert env["GIT_CONFIG_VALUE_0"]["value"] == MIRROR_HEALTH_FORGEJO_HELPER
+    secret_ref = env["FORGEJO_TOKEN"].get("valueFrom", {}).get("secretKeyRef")
+    assert secret_ref == {"name": "brand-kit-consumer-drift", "key": "token"}
+
+
+def test_mirror_health_offers_its_forgejo_token_only_through_the_scoped_helper():
+    manifest, container = _mirror_health_check_container()
+    assert manifest["metadata"]["namespace"] == WORKFLOW_NAMESPACE
+    assert manifest["spec"]["serviceAccountName"] == "argo-workflow"
+    _assert_mirror_health_credential_env(_mirror_health_env(container))
+
+    # The executed script never references the token env; the helper value is
+    # its only consumer, and the Forgejo API (/api/v1) is never mentioned.
+    script = container["args"][0]
+    assert "FORGEJO_TOKEN" not in script
+    assert "api/v1" not in (ROOT / "automation" / MIRROR_HEALTH_TEMPLATE).read_text(
+        encoding="utf-8"
+    )
+
+
+def _mutated_mirror_health_env(mutator):
+    _, container = _mirror_health_check_container()
+    env = _mirror_health_env(container)
+    mutator(env)
+    return env
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        # A global helper would hand the token to every host, GitHub included.
+        pytest.param(
+            lambda env: env.update(
+                {
+                    "GIT_CONFIG_KEY_0": {
+                        "name": "GIT_CONFIG_KEY_0",
+                        "value": "credential.helper",
+                    }
+                }
+            ),
+            id="global-credential-helper",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {
+                    "GIT_CONFIG_KEY_0": {
+                        "name": "GIT_CONFIG_KEY_0",
+                        "value": "credential.https://github.com.helper",
+                    }
+                }
+            ),
+            id="github-scoped-helper",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {
+                    "GIT_CONFIG_KEY_0": {
+                        "name": "GIT_CONFIG_KEY_0",
+                        "value": "credential.http://git.ardenone.com.helper",
+                    }
+                }
+            ),
+            id="cleartext-http-scope",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {
+                    "GIT_CONFIG_COUNT": {"name": "GIT_CONFIG_COUNT", "value": "2"},
+                    "GIT_CONFIG_KEY_1": {
+                        "name": "GIT_CONFIG_KEY_1",
+                        "value": "credential.https://github.com.helper",
+                    },
+                    "GIT_CONFIG_VALUE_1": {
+                        "name": "GIT_CONFIG_VALUE_1",
+                        "value": MIRROR_HEALTH_FORGEJO_HELPER,
+                    },
+                }
+            ),
+            id="second-config-entry-for-github",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {"FORGEJO_TOKEN": {"name": "FORGEJO_TOKEN", "value": "literal-token"}}
+            ),
+            id="literal-token-instead-of-secret-ref",
+        ),
+        pytest.param(
+            lambda env: env["FORGEJO_TOKEN"]["valueFrom"]["secretKeyRef"].update(
+                {"name": "forgejo-webhook-token"}
+            ),
+            id="write-capable-token-secret",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {"GIT_TERMINAL_PROMPT": {"name": "GIT_TERMINAL_PROMPT", "value": "1"}}
+            ),
+            id="terminal-prompting-enabled",
+        ),
+        pytest.param(
+            lambda env: env.pop("GIT_TERMINAL_PROMPT"),
+            id="missing-prompt-guard",
+        ),
+        pytest.param(
+            lambda env: env.update(
+                {
+                    "GIT_CONFIG_VALUE_0": {
+                        "name": "GIT_CONFIG_VALUE_0",
+                        "value": (
+                            '!f() { echo "username=x-token"; '
+                            'echo "password=$FORGEJO_TOKEN"; }; f'
+                        ),
+                    }
+                }
+            ),
+            id="helper-answers-every-action",
+        ),
+    ],
+)
+def test_mirror_health_credential_env_rejects_helper_scope_or_source_changes(
+    mutator,
+):
+    with pytest.raises(AssertionError):
+        _assert_mirror_health_credential_env(_mutated_mirror_health_env(mutator))
+
+
+def _git_credential_fill(tmp_path, token, url):
+    """Run git's credential layer with the workload's helper and nothing else.
+
+    Returns plain (returncode, stdout, stderr) scalars so a failing assertion
+    can never repr a CompletedProcess carrying a host credential. Every env
+    var that could answer prompts or inject config on this developer box
+    (GIT_ASKPASS, SSH_ASKPASS, ambient GIT_CONFIG_* entries) is stripped from
+    the child environment, and the -c resets drop any file-configured helper.
+    """
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("GIT_CONFIG_", "VSCODE_GIT"))
+        and key not in {"GIT_ASKPASS", "SSH_ASKPASS", "GIT_USERNAME", "GIT_PASSWORD"}
+    }
+    environment.update(
+        {
+            "HOME": str(tmp_path),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "FORGEJO_TOKEN": token,
+        }
+    )
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.https://github.com.helper=",
+            "-c",
+            f"{MIRROR_HEALTH_FORGEJO_CREDENTIAL_KEY}={MIRROR_HEALTH_FORGEJO_HELPER}",
+            "credential",
+            "fill",
+        ],
+        input=f"url={url}\n",
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+def test_git_delivers_the_helper_credential_only_to_git_ardenone_com(tmp_path):
+    token = "mirror-health-readonly-token"
+
+    forgejo_code, forgejo_out, forgejo_err = _git_credential_fill(
+        tmp_path, token, MIRROR_HEALTH_CANONICAL_REPOSITORY
+    )
+
+    assert forgejo_code == 0
+    attributes = dict(
+        line.split("=", 1) for line in forgejo_out.splitlines() if "=" in line
+    )
+    assert attributes["username"] == "x-token"
+    assert attributes["password"] == token
+    assert token not in forgejo_err
+
+    # No credential is offered to GitHub or to a host-shaped lookalike: the
+    # scoped helper does not match, prompting is disabled, and git fails
+    # rather than leaking. These are asserted on booleans only, never on the
+    # raw streams, so a regression cannot print a real host credential here.
+    for url in (
+        MIRROR_HEALTH_MIRROR_REPOSITORY,
+        "https://git.ardenone.com.evil.test/jedarden/brand-kit.git",
+    ):
+        refused_code, refused_out, refused_err = _git_credential_fill(
+            tmp_path, token, url
+        )
+        assert refused_code != 0, f"a credential source answered for {url}"
+        assert not any(
+            line.startswith("password=") for line in refused_out.splitlines()
+        ), f"a credential was offered for {url}"
+        assert token not in refused_out
+        assert token not in refused_err
+
+
+def test_the_helper_answers_only_get_and_never_persists_or_logs_the_token(
+    tmp_path, monkeypatch
+):
+    token = "mirror-health-readonly-token"
+    monkeypatch.setenv("FORGEJO_TOKEN", token)
+
+    # git runs a bang-prefixed helper as `sh -c '<script> "$@"' <script>
+    # <action>`; replicate that invocation exactly.
+    helper_script = MIRROR_HEALTH_FORGEJO_HELPER[1:] + ' "$@"'
+
+    def run_helper(action):
+        return subprocess.run(
+            ["bash", "-c", helper_script, "git-credential-helper", action],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+
+    get = run_helper("get")
+    assert get.returncode == 0
+    assert get.stdout == f"username=x-token\npassword={token}\n"
+    assert get.stderr == ""
+    assert token not in " ".join(
+        ["bash", "-c", helper_script, "git-credential-helper", "get"]
+    )
+
+    for action in ("store", "erase"):
+        result = run_helper(action)
+        # The function's `test "$1" = get && ...` chain exits 1 for these
+        # actions, which git tolerates for store/erase. What matters: they
+        # produce no output and persist nothing.
+        assert result.stdout == ""
+        assert result.stderr == ""
+        assert token not in result.stdout
+
+    assert list(tmp_path.iterdir()) == []  # nothing was ever written to disk
+
+
+def test_mirror_health_script_clones_anonymously_and_reads_forgejo_over_plain_git():
+    _, container = _mirror_health_check_container()
+    script = container["args"][0]
+    code = "\n".join(
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    git_verbs = {
+        verb
+        for line in code.splitlines()
+        for verb in re.findall(r"\bgit[ \t]+([a-z][a-z-]+)", line)
+    }
+    assert git_verbs == {"clone"}  # its own code, anonymously from GitHub
+
+    urls = [urlsplit(url) for url in re.findall(r"https?://\S+", code)]
+    assert {(url.hostname, url.path) for url in urls} == {
+        ("github.com", "/jedarden/brand-kit.git"),
+        ("git.ardenone.com", "/jedarden/brand-kit.git"),
+    }
+    assert all(url.username is None and url.password is None for url in urls)
+
+
+def _assert_mirror_health_git_call(arguments, cwd, *, check):
+    """Enforce the documented read-only git surface for one checker git call.
+
+    Subcommands stay within clone/ls-remote/fetch plus the checker's
+    local-only init/rev-parse/merge-base scratch operations; URLs carry no
+    embedded credential and name only the two documented hosts; anything
+    touching a working tree runs inside the disposable bare repository, never
+    the workflow's own checkout.
+    """
+    assert arguments[0] in MIRROR_HEALTH_READ_ONLY_GIT_SUBCOMMANDS, arguments
+    for argument in arguments[1:]:
+        if "://" in argument:
+            parsed = urlsplit(argument)
+            assert parsed.scheme == "https"
+            assert parsed.username is None
+            assert parsed.password is None
+            assert parsed.hostname in MIRROR_HEALTH_GIT_HOSTS
+    if cwd is not None:
+        assert cwd.name == "objects.git"
+        assert cwd.parent.name.startswith("brand-kit-mirror-health-")
+    if arguments[0] == "merge-base":
+        assert check is False  # its status is data, not a failure
+    else:
+        assert check is True  # every other call fails closed
+
+
+def _recording_mirror_health_git(calls):
+    """Fake executor serving a stale branch and a missing tag on the mirror."""
+    fetched = {}
+
+    def execute(arguments, cwd, check):
+        calls.append((arguments, cwd, check))
+        if arguments[:2] == ["ls-remote", "--heads"]:
+            commit = (
+                MIRROR_HEALTH_CANONICAL_MAIN
+                if arguments[2] == MIRROR_HEALTH_CANONICAL_REPOSITORY
+                else MIRROR_HEALTH_MIRROR_MAIN
+            )
+            return subprocess.CompletedProcess(
+                arguments, 0, f"{commit}\trefs/heads/main\n", ""
+            )
+        if arguments[:2] == ["ls-remote", "--tags"]:
+            output = (
+                f"{MIRROR_HEALTH_CANONICAL_TAG}\trefs/tags/v1.0.0\n"
+                if arguments[2] == MIRROR_HEALTH_CANONICAL_REPOSITORY
+                else ""
+            )
+            return subprocess.CompletedProcess(arguments, 0, output, "")
+        if arguments[:1] == ["init"]:
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:1] == ["fetch"]:
+            local_ref = arguments[-1].rsplit(":", 1)[1]
+            label = local_ref.split("/")[2]
+            fetched[local_ref] = (
+                MIRROR_HEALTH_CANONICAL_MAIN
+                if label == "canonical"
+                else MIRROR_HEALTH_MIRROR_MAIN
+            )
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[:1] == ["rev-parse"]:
+            local_ref = arguments[1][: -len("^{commit}")]
+            return subprocess.CompletedProcess(
+                arguments, 0, fetched[local_ref] + "\n", ""
+            )
+        if arguments[:2] == ["merge-base", "--is-ancestor"]:
+            older, newer = arguments[2], arguments[3]
+            behind = (older, newer) == (
+                MIRROR_HEALTH_MIRROR_MAIN,
+                MIRROR_HEALTH_CANONICAL_MAIN,
+            )
+            return subprocess.CompletedProcess(arguments, 0 if behind else 1, "", "")
+        raise AssertionError(f"unexpected git call: {arguments}")
+
+    return execute
+
+
+MIRROR_HEALTH_CANONICAL_MAIN = "a" * 40
+MIRROR_HEALTH_MIRROR_MAIN = "b" * 40
+MIRROR_HEALTH_CANONICAL_TAG = "c" * 40
+
+
+def test_mirror_health_checker_git_surface_stays_within_the_read_only_allowlist(
+    monkeypatch,
+):
+    token = "mirror-health-readonly-token"
+    monkeypatch.setenv("FORGEJO_TOKEN", token)
+    calls = []
+
+    report = check_mirror_health.run_check(
+        MIRROR_HEALTH_CANONICAL_REPOSITORY,
+        MIRROR_HEALTH_MIRROR_REPOSITORY,
+        execute=_recording_mirror_health_git(calls),
+    )
+
+    assert report["status"] == "unhealthy"
+    assert {(entry["kind"], entry["status"]) for entry in report["checks"]} == {
+        ("branch", "stale"),
+        ("tag", "missing"),
+    }
+    executed = {arguments[0] for arguments, _, _ in calls}
+    assert executed <= MIRROR_HEALTH_READ_ONLY_GIT_SUBCOMMANDS
+    for arguments, cwd, check in calls:
+        _assert_mirror_health_git_call(arguments, cwd, check=check)
+        assert token not in " ".join(arguments)
+
+    ls_remote_remotes = {
+        arguments[2] for arguments, _, _ in calls if arguments[:1] == ["ls-remote"]
+    }
+    assert ls_remote_remotes == {
+        MIRROR_HEALTH_CANONICAL_REPOSITORY,
+        MIRROR_HEALTH_MIRROR_REPOSITORY,
+    }
+    fetched_remotes = {
+        arguments[3] for arguments, _, _ in calls if arguments[:1] == ["fetch"]
+    }
+    assert fetched_remotes == {
+        MIRROR_HEALTH_CANONICAL_REPOSITORY,
+        MIRROR_HEALTH_MIRROR_REPOSITORY,
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "cwd", "check"),
+    [
+        (
+            ["push", MIRROR_HEALTH_MIRROR_REPOSITORY, "main"],
+            None,
+            True,
+        ),
+        (
+            [
+                "ls-remote",
+                "--heads",
+                "https://x-token:secret@git.ardenone.com/jedarden/brand-kit.git",
+            ],
+            None,
+            True,
+        ),
+        (
+            [
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "https://gitlab.example/jedarden/brand-kit.git",
+                "refs/heads/main:refs/brand-kit-mirror-health/canonical/x",
+            ],
+            Path("/tmp/brand-kit-mirror-health-abc/objects.git"),
+            True,
+        ),
+        (
+            ["rev-parse", "refs/brand-kit-mirror-health/canonical/x^{commit}"],
+            Path("/brand-kit"),
+            True,
+        ),
+        (
+            ["merge-base", "--is-ancestor", "a" * 40, "b" * 40],
+            None,
+            True,
+        ),
+        (
+            ["config", "credential.helper", "store"],
+            None,
+            True,
+        ),
+        (
+            [
+                "clone",
+                "--filter=blob:none",
+                "http://git.ardenone.com/jedarden/brand-kit.git",
+                "/tmp/scratch",
+            ],
+            None,
+            True,
+        ),
+    ],
+)
+def test_mirror_health_git_contract_rejects_out_of_allowlist_calls(
+    arguments, cwd, check
+):
+    with pytest.raises(AssertionError):
+        _assert_mirror_health_git_call(arguments, cwd, check=check)
+
+
+def test_mirror_health_checker_has_no_http_client_so_forgejo_stays_git_only():
+    source = Path(check_mirror_health.__file__).read_text(encoding="utf-8")
+    for needle in ("urllib", "http.client", "requests", "api/v1"):
+        assert needle not in source
+    assert (
+        check_mirror_health.DEFAULT_CANONICAL_REPOSITORY
+        == MIRROR_HEALTH_CANONICAL_REPOSITORY
+    )
+    assert (
+        check_mirror_health.DEFAULT_MIRROR_REPOSITORY
+        == MIRROR_HEALTH_MIRROR_REPOSITORY
+    )
+
+
 ARGO_SUBMIT_URL = "https://argo.example/api/v1/workflows/argo-workflows/submit"
 CI_SUBMIT_TOKEN = "argo-submit-test-token"
 CI_COMMIT = "c" * 40
@@ -649,6 +1178,7 @@ def test_documentation_names_every_credential_boundary():
         "secret/rs-manager/brand-kit/release/argo-read",
         "secret/rs-manager/brand-kit/release/argo-submit",
         "rs-manager/iad-ci/forgejo/repo-readonly",
+        "credential.https://git.ardenone.com.helper",
         "No `POST`, `PUT`, `PATCH`, or `DELETE`",
         "Brand-kit CI submitter operator",
         "tools/brand_kit_ci_submit.py",
